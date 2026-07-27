@@ -1,0 +1,15 @@
+[package]
+name = "dystil-engine"
+version = { workspace = true }
+authors = { workspace = true }
+description = "Periodic orchestration for Dystil work-insights sync."
+repository = { workspace = true }
+license-file = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+async-trait = { workspace = true }
+dystil-sync = { path = "../dystil-sync" }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+tracing = { workspace = true }

@@ -1,0 +1,47 @@
+[package]
+name = "dystil-redact"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[features]
+default = []
+# Baseline: ONNX runtime via CPU EP. Pulls ort (downloads ort binaries on
+# first build), ndarray, and HF fast-tokenizers.
+onnx-cpu      = ["dep:ort", "dep:ndarray", "dep:tokenizers", "dep:reqwest", "ort/download-binaries"]
+# Mac: delegates to CPU EP intentionally — the text model uses dynamic
+# sequence lengths that the ANE compiler rejects ("E5RT: unbounded dimension").
+# CoreML is preserved as a forward-compat alias so `onnx-coreml` builds.
+onnx-coreml   = ["onnx-cpu"]
+# Windows: DirectML EP (any DX12-capable GPU, no CUDA toolkit).
+onnx-directml = ["onnx-cpu", "ort/directml"]
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+once_cell.workspace = true
+regex.workspace = true
+reqwest = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dependencies.ort]
+workspace = true
+features = ["ndarray", "std"]
+optional = true
+
+[dependencies.ndarray]
+workspace = true
+optional = true
+
+[dependencies.tokenizers]
+workspace = true
+default-features = false
+features = ["onig"]
+optional = true

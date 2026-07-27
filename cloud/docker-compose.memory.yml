@@ -1,0 +1,81 @@
+# Optional memory services overlay.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.memory.yml \
+#     --env-file .env.docker up --build
+#
+# Requires the sibling memory repository at ../../memory.
+
+services:
+  dystil-api:
+    environment:
+      MEMORY_INTERNAL_URL: http://memory-api:8090
+
+  memory-migrate:
+    build:
+      context: ../../memory
+      dockerfile: Dockerfile
+    command: ["dystil-memory-migrate"]
+    depends_on:
+      dystil-api:
+        condition: service_healthy
+    env_file:
+      - .env.docker
+    environment:
+      MEMORY_DATABASE_URL: postgresql://work_insights:work_insights@postgres:5432/work_insights
+
+  memory-api:
+    build:
+      context: ../../memory
+      dockerfile: Dockerfile
+    depends_on:
+      memory-migrate:
+        condition: service_completed_successfully
+    env_file:
+      - .env.docker
+    environment:
+      MEMORY_DATABASE_URL: postgresql://work_insights:work_insights@postgres:5432/work_insights
+      MEMORY_API_BIND_ADDR: 0.0.0.0:8090
+    expose:
+      - "8090"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/ready', timeout=3)",
+        ]
+      interval: 60s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  memory-worker:
+    build:
+      context: ../../memory
+      dockerfile: Dockerfile
+    command: ["dystil-memory-worker"]
+    depends_on:
+      memory-migrate:
+        condition: service_completed_successfully
+    env_file:
+      - .env.docker
+    environment:
+      MEMORY_DATABASE_URL: postgresql://work_insights:work_insights@postgres:5432/work_insights
+      MEMORY_MAX_IN_FLIGHT_SEGMENTS: "4"
+    restart: unless-stopped
+
+  memory-backfill:
+    profiles: ["tools"]
+    build:
+      context: ../../memory
+      dockerfile: Dockerfile
+    command: ["dystil-memory-embedding-backfill"]
+    depends_on:
+      memory-migrate:
+        condition: service_completed_successfully
+    env_file:
+      - .env.docker
+    environment:
+      MEMORY_DATABASE_URL: postgresql://work_insights:work_insights@postgres:5432/work_insights

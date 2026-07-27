@@ -1,0 +1,17 @@
+{
+    "bundle": {
+        "publisher": "Second Order Systemss",
+        "macOS": {
+            "entitlements": "entitlements.plist",
+            "hardenedRuntime": true,
+            "exceptionDomain": "2os.ai",
+            "provisioningProfile": null,
+            "dmg": {
+                "background": "assets/dmg-background.png"
+            }
+        },
+        "externalBin": [
+            "bun"
+        ]
+    }
+}

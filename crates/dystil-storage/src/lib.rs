@@ -1,0 +1,375 @@
+//! Dystil-owned SQLite bootstrap for capture data.
+//!
+//! The schema is intentionally limited to what Dystil writes or reads. Older
+//! Dystil databases are opened in place; unknown legacy tables are left
+//! untouched and ignored.
+
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+    SqlitePool,
+};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+use thiserror::Error;
+
+mod work_cards;
+
+pub use work_cards::{
+    delete_work_card, get_work_card, hybrid_search_work_cards, hybrid_search_work_cards_range,
+    list_work_cards, list_work_cards_range, search_work_cards, search_work_cards_range,
+    upsert_work_card, NewWorkCard, StoredWorkCard,
+};
+
+#[derive(Debug, Error)]
+pub enum StorageError {
+    #[error("sqlite error: {0}")]
+    Sqlx(#[from] sqlx::Error),
+}
+
+pub async fn open_capture_database(path: impl AsRef<Path>) -> Result<SqlitePool, StorageError> {
+    if let Some(parent) = path.as_ref().parent() {
+        std::fs::create_dir_all(parent).map_err(|error| sqlx::Error::Io(error.into()))?;
+    }
+    // sqlx does not create a database file unless this is requested explicitly.
+    // A fresh Dystil data directory must be enough to start local capture.
+    let options = SqliteConnectOptions::new()
+        .filename(path.as_ref())
+        .create_if_missing(true)
+        // Capture has concurrent frame, UI-event, and redaction writers. WAL
+        // lets readers proceed while one writer is active; the timeout absorbs
+        // the short periods where SQLite must still serialize writers.
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .busy_timeout(Duration::from_secs(30));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(8)
+        .connect_with(options)
+        .await?;
+    initialize_capture_schema(&pool).await?;
+    Ok(pool)
+}
+
+/// Open an existing capture database for a sidecar that must never mutate
+/// capture data. Used by the Dystil MCP server.
+pub async fn open_capture_database_read_only(
+    path: impl AsRef<Path>,
+) -> Result<SqlitePool, StorageError> {
+    let path = path.as_ref();
+    if !path.is_file() {
+        return Err(StorageError::Sqlx(sqlx::Error::Io(
+            std::io::Error::new(std::io::ErrorKind::NotFound, "Dystil database not found").into(),
+        )));
+    }
+    let options = SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(true)
+        .busy_timeout(Duration::from_secs(10));
+    SqlitePoolOptions::new()
+        .max_connections(2)
+        .connect_with(options)
+        .await
+        .map_err(Into::into)
+}
+
+/// Idempotent baseline for new databases and additive compatibility setup for
+/// existing ones. It deliberately does not drop unknown legacy tables.
+pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS frames (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            device_name TEXT NOT NULL DEFAULT '',
+            snapshot_path TEXT NOT NULL DEFAULT '',
+            app_name TEXT,
+            window_name TEXT,
+            browser_url TEXT,
+            document_path TEXT,
+            focused BOOLEAN,
+            capture_trigger TEXT,
+            frame_text TEXT,
+            text_source TEXT,
+            accessibility_tree_json TEXT,
+            content_hash INTEGER,
+            simhash INTEGER,
+            elements_ref_frame_id INTEGER,
+            accessibility_redacted_at INTEGER
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    // Migrate existing databases: rename accessibility_text → frame_text,
+    // drop the duplicate full_text column. Errors are ignored — if the column
+    // was already renamed / dropped the query silently fails.
+    let _ = sqlx::query("ALTER TABLE frames RENAME COLUMN accessibility_text TO frame_text")
+        .execute(&mut *tx)
+        .await;
+    let _ = sqlx::query("ALTER TABLE frames DROP COLUMN full_text")
+        .execute(&mut *tx)
+        .await;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS elements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            frame_id INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            role TEXT NOT NULL,
+            text TEXT,
+            parent_id INTEGER,
+            depth INTEGER NOT NULL,
+            left_bound REAL,
+            top_bound REAL,
+            width_bound REAL,
+            height_bound REAL,
+            confidence REAL,
+            sort_order INTEGER,
+            properties TEXT,
+            on_screen INTEGER
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS ui_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            session_id TEXT,
+            relative_ms INTEGER NOT NULL DEFAULT 0,
+            event_type TEXT NOT NULL,
+            x REAL, y REAL, delta_x REAL, delta_y REAL,
+            button TEXT, click_count INTEGER, key_code TEXT, modifiers TEXT,
+            text_content TEXT, text_length INTEGER,
+            app_name TEXT, app_pid INTEGER, window_title TEXT, browser_url TEXT,
+            element_role TEXT, element_name TEXT, element_value TEXT,
+            element_description TEXT, element_automation_id TEXT,
+            element_bounds TEXT, frame_id INTEGER,
+            redacted_at INTEGER
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS dystil_text_redaction_state (
+            source_table TEXT NOT NULL,
+            source_row_id INTEGER NOT NULL,
+            surface TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            backend TEXT,
+            last_error TEXT,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (source_table, source_row_id, surface)
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_frames_timestamp ON frames(timestamp, id)")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_ui_events_timestamp ON ui_events(timestamp, id)")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_elements_frame_order ON elements(frame_id, sort_order)",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS work_cards (
+            window_id TEXT PRIMARY KEY,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            close_reason TEXT NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            applications_json TEXT NOT NULL DEFAULT '[]',
+            artifacts_json TEXT NOT NULL DEFAULT '[]',
+            actions_json TEXT NOT NULL DEFAULT '[]',
+            last_observed_state TEXT NOT NULL,
+            status TEXT NOT NULL,
+            uncertainties_json TEXT NOT NULL DEFAULT '[]',
+            card_json TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            embedding_model_id TEXT,
+            embedding_dimensions INTEGER,
+            embedding BLOB,
+            source_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_work_cards_time
+         ON work_cards(start_time DESC, window_id)",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS work_cards_fts USING fts5(
+            window_id UNINDEXED,
+            title,
+            summary,
+            applications,
+            artifacts,
+            actions,
+            last_observed_state,
+            tokenize = 'unicode61 remove_diacritics 2'
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    // Collaboration state is local UI/audit state. It intentionally contains
+    // only exchanged derived answers, never raw accessibility evidence.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS agent_mailbox_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            cursor INTEGER NOT NULL DEFAULT 0,
+            provider TEXT NOT NULL DEFAULT 'codex',
+            model TEXT NOT NULL DEFAULT 'gpt-5.6-luna',
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("INSERT OR IGNORE INTO agent_mailbox_state (id) VALUES (1)")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS agent_messages (
+            message_id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            sequence_id INTEGER NOT NULL,
+            peer_user_id TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            local_status TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_agent_messages_conversation
+         ON agent_messages(conversation_id, sequence_id)",
+    )
+    .execute(&mut *tx)
+    .await?;
+    // Durable, device-local chat state. A message owns the exact derived-card
+    // snapshot and generated answer used for that turn, so reopening chat never
+    // re-runs retrieval or spends provider tokens.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS local_chat_sessions (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS local_chat_messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES local_chat_sessions(id) ON DELETE CASCADE,
+            role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+            mode TEXT NOT NULL CHECK (mode IN ('local', 'team')),
+            question TEXT,
+            answer TEXT,
+            status TEXT NOT NULL CHECK (status IN ('pending', 'complete', 'failed')),
+            selected_cards_json TEXT,
+            citations_json TEXT,
+            provider TEXT,
+            model TEXT,
+            elapsed_ms INTEGER,
+            error_code TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_local_chat_messages_session
+         ON local_chat_messages(session_id, created_at, id)",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_local_chat_sessions_updated
+         ON local_chat_sessions(updated_at DESC, id DESC)",
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Stable per-install machine identifier used by Dystil cloud sync.
+pub fn get_or_create_machine_id(data_dir: impl AsRef<Path>) -> Result<String, StorageError> {
+    let path: PathBuf = data_dir.as_ref().join("machine-id");
+    if let Ok(value) = std::fs::read_to_string(&path) {
+        let value = value.trim();
+        if !value.is_empty() {
+            return Ok(value.to_owned());
+        }
+    }
+    let value = uuid::Uuid::new_v4().to_string();
+    std::fs::create_dir_all(data_dir.as_ref()).map_err(|error| sqlx::Error::Io(error.into()))?;
+    std::fs::write(&path, format!("{value}\n")).map_err(|error| sqlx::Error::Io(error.into()))?;
+    Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{initialize_capture_schema, open_capture_database};
+    use sqlx::sqlite::SqlitePoolOptions;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn opens_and_initializes_a_missing_database_file() {
+        let directory = tempdir().unwrap();
+        let database_path = directory.path().join("new").join("capture.sqlite");
+
+        let pool = open_capture_database(&database_path).await.unwrap();
+
+        assert!(database_path.is_file());
+        let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+        let frame_table_exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'frames'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(frame_table_exists, 1);
+    }
+
+    #[tokio::test]
+    async fn schema_is_idempotent_and_preserves_unknown_tables() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE legacy_unused (id INTEGER PRIMARY KEY, payload TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        initialize_capture_schema(&pool).await.unwrap();
+        initialize_capture_schema(&pool).await.unwrap();
+        let _: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='legacy_unused'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    }
+}

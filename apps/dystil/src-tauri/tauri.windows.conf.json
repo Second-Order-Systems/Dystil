@@ -1,0 +1,23 @@
+{
+    "bundle": {
+        "publisher": "Second Order Systemss",
+        "windows": {
+            "nsis": {
+                "installerIcon": "icons/icon.ico",
+                "installerHooks": "windows/hooks.nsh"
+            }
+        },
+        "externalBin": [
+            "bun"
+        ],
+        "targets": [
+            "nsis"
+        ],
+        "resources": {
+            "onnxruntime*\\lib\\onnxruntime.dll": "./",
+            "openblas\\bin\\*.dll": "./",
+            "vcredist\\*.dll": "./",
+            "assets/*": "./assets/"
+        }
+    }
+}

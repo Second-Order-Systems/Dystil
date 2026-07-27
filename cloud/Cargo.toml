@@ -1,0 +1,36 @@
+[workspace]
+members = [
+    "crates/work-insights-db",
+    "crates/work-insights-ingest",
+    "services/ingest-api",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+authors = ["dystil"]
+description = "Portable Dystil work-insights cloud services."
+repository = "https://github.com/dystil/dystil"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+
+[workspace.dependencies]
+anyhow = "1"
+async-trait = "0.1"
+axum = { version = "0.7.5", features = ["ws"] }
+chrono = { version = "0.4", features = ["serde"] }
+hex = "0.4"
+hmac = "0.12"
+percent-encoding = "2.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-rustls", "chrono", "json", "migrate"] }
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.5.2", features = ["trace", "cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }

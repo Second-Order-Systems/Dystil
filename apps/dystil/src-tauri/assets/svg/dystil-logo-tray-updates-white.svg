@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Dystil logo">
+  <rect x="72" y="72" width="880" height="880" rx="220" fill="#F5F1E9"/>
+  <g transform="translate(153.6 69.6) scale(.7)">
+    <path d="M330 285 L512 570 L694 285 M512 570 L512 625" fill="none" stroke="#14201B" stroke-width="54" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M512 650 C578 733 620 782 620 840 C620 900 572 940 512 940 C452 940 404 900 404 840 C404 782 446 733 512 650 Z" fill="#2F9E7B"/>
+  </g>
+</svg>

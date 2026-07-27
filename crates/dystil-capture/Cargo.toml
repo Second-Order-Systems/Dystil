@@ -1,0 +1,91 @@
+[package]
+name = "dystil-capture"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[features]
+default = []
+native = [
+    "dep:zbus",
+    "dep:libwayshot-xcap",
+]
+# Forward ONNX feature flags to dystil-redact
+onnx-cpu      = ["dystil-redact/onnx-cpu"]
+onnx-coreml   = ["dystil-redact/onnx-coreml"]
+onnx-directml = ["dystil-redact/onnx-directml"]
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+image.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+once_cell.workspace = true
+regex.workspace = true
+sqlx.workspace = true
+uuid.workspace = true
+dystil-redact = { path = "../dystil-redact" }
+
+anyhow.workspace = true
+lazy_static.workspace = true
+crossbeam-channel = "0.5"
+parking_lot.workspace = true
+arc-swap.workspace = true
+arboard = "3"
+dirs.workspace = true
+rusqlite = { version = "0.29", features = ["bundled"] }
+url.workspace = true
+
+tracing.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# a11y
+cidre = { version = "0.13", features = ["ax", "cg", "blocks", "ns", "app", "dispatch"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard"] }
+# screen (monitor.rs / capture_screenshot_by_window.rs)
+sck-rs = { git = "https://github.com/screenpipe/sck-rs", rev = "b7f48a1236b2339350baa1375a805c7ce32f88df" }
+xcap.workspace = true
+accessibility-sys.workspace = true
+core-foundation.workspace = true
+core-graphics.workspace = true
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+# screen: non-macOS monitor listing via xcap
+xcap.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-core = "0.58"
+uiautomation.workspace = true
+windows = { workspace = true, features = [
+    "implement",
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_LibraryLoader",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_UI_Accessibility",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Graphics_Gdi",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# a11y uses zbus's blocking API; evdev for input events; libc for fcntl
+zbus = { workspace = true, features = ["blocking-api", "tokio"], optional = true }
+evdev = "0.13"
+libc.workspace = true
+libwayshot-xcap = { workspace = true, optional = true }
+# screen: browser_utils/linux.rs URL detection via AT-SPI2
+atspi = { version = "0.25.0", features = ["tokio", "proxies-tokio", "zbus"] }
+atspi-common = { version = "0.9.0", default-features = false }
+atspi-proxies = { version = "0.9.0", default-features = false }
+
+[dev-dependencies]
+sqlx.workspace = true
+tempfile.workspace = true

@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dystil Sync Replay</title>
+<style>
+:root {
+  --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
+  --muted: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+  --amber: #d29922; --purple: #a371f7; --blue: #79c0ff;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: var(--bg); color: var(--text); padding: 20px; line-height: 1.5;
+}
+h1 { font-size: 1.4em; margin-bottom: 4px; }
+h2 { font-size: 1.1em; margin: 16px 0 8px; }
+.stats {
+  display: flex; gap: 16px; flex-wrap: wrap; margin: 12px 0;
+}
+.stat { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; min-width: 100px; }
+.stat .value { font-size: 1.5em; font-weight: 700; }
+.stat .label { font-size: 0.8em; color: var(--muted); }
+.stat.kept .value { color: var(--green); }
+.stat.dropped .value { color: var(--red); }
+.stat.segments .value { color: var(--blue); }
+.toolbar {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  position: sticky; top: 0; background: var(--bg); z-index: 10;
+  padding: 8px 0; border-bottom: 1px solid var(--border); margin-bottom: 16px;
+}
+.toolbar button, .toolbar select {
+  background: var(--card); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 0.85em;
+}
+.toolbar button:hover { background: #1f2a37; }
+.toolbar button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.iter-controls { display: flex; gap: 4px; align-items: center; }
+.iter-label { color: var(--muted); font-size: 0.85em; }
+.segment {
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  margin-bottom: 12px; overflow: hidden;
+}
+.segment-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 14px; cursor: pointer; user-select: none;
+}
+.segment-header:hover { background: #1f2a37; }
+.segment-header .info { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.segment-header .info .sep-id { font-family: monospace; font-size: 0.85em; color: var(--muted); }
+.segment-header .info .sep-time { font-size: 0.85em; color: var(--muted); }
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; font-weight: 600;
+}
+.badge.screen { background: #1f3a5f; color: var(--blue); }
+.badge.input { background: #3f3a1f; color: var(--amber); }
+.badge.stable { background: #1f3a2f; color: var(--green); }
+.badge.closing { background: #3a3a1f; color: var(--amber); }
+.badge.open { background: #1f2a3a; color: var(--muted); }
+.badge.kept { background: #1f3a2f; color: var(--green); }
+.badge.dropped { background: #3a1f2f; color: var(--red); }
+.segment-body { display: none; padding: 0 0 12px; }
+.segment-body.open { display: block; }
+.segment-meta {
+  padding: 0 14px 8px; font-size: 0.8em; color: var(--muted);
+  display: flex; gap: 16px; flex-wrap: wrap;
+}
+.event {
+  padding: 6px 14px 6px 28px; border-top: 1px solid var(--border); font-size: 0.85em;
+  display: flex; gap: 8px; align-items: flex-start;
+}
+.event.dropped { opacity: 0.5; }
+.event .ev-type { font-size: 1.1em; min-width: 24px; }
+.event .ev-body { flex: 1; min-width: 0; }
+.event .ev-text {
+  color: var(--text); word-break: break-word; max-height: 3em; overflow: hidden;
+  transition: max-height 0.2s; cursor: pointer;
+}
+.event .ev-text.expanded { max-height: none; }
+.event .ev-app { color: var(--muted); font-size: 0.85em; }
+.event .ev-reason { color: var(--red); font-size: 0.8em; }
+.event .ev-reason.kept { color: var(--green); }
+.ev-meta { display: flex; gap: 8px; align-items: center; }
+.empty { text-align: center; color: var(--muted); padding: 40px; }
+.timeline {
+  display: flex; height: 32px; gap: 2px; margin-bottom: 16px; align-items: stretch;
+  overflow-x: auto; padding: 4px 0;
+}
+.timeline .tl-seg {
+  border-radius: 4px; cursor: pointer; min-width: 6px; position: relative;
+}
+.timeline .tl-seg:hover { filter: brightness(1.3); }
+.timeline .tl-seg.stable { background: var(--green); }
+.timeline .tl-seg.open { background: var(--muted); }
+.timeline .tl-seg.closing { background: var(--amber); }
+</style>
+</head>
+<body>
+
+<h1>Dystil Sync Replay</h1>
+
+<div class="toolbar">
+  <div class="iter-controls">
+    <button id="btn-prev" title="Previous iteration">◀</button>
+    <span class="iter-label" id="iter-label">--</span>
+    <button id="btn-next" title="Next iteration">▶</button>
+  </div>
+  <label style="display:flex;align-items:center;gap:4px;font-size:0.85em;margin-left:8px;">
+    Range: <select id="iter-select"></select>
+  </label>
+  <span style="flex:1"></span>
+  <button id="btn-all" class="active">All events</button>
+  <button id="btn-kept">Kept only</button>
+  <button id="btn-dropped">Dropped only</button>
+  <button id="btn-expand-all">Expand all</button>
+  <button id="btn-collapse-all">Collapse all</button>
+</div>
+
+<div class="stats" id="stats"></div>
+<div class="timeline" id="timeline"></div>
+<div id="segments"></div>
+<div class="empty" id="empty" style="display:none">No segments in this iteration.</div>
+<div class="empty" id="loading">Loading data...</div>
+<div class="empty" id="error" style="display:none;color:var(--red)"></div>
+
+<script>
+/* REPLAY_DATA_PLACEHOLDER */
+
+if (typeof REPLAY_DATA === "undefined") {
+  document.body.innerHTML = '<div class="empty" style="color:var(--red);padding:40px">This is the template file. Run the replay tool first:<pre style="color:var(--text);margin-top:12px">cargo run --example replay -- --db ~/.dystil/db.sqlite --output replay.html</pre>Then open the generated <code>replay.html</code>.</div>';
+  throw new Error("template — run replay tool first");
+}
+
+let currentIter = 0;
+let currentFilter = "all";
+
+function $(id) { return document.getElementById(id); }
+
+function init() {
+  if (!REPLAY_DATA || !REPLAY_DATA.iterations || REPLAY_DATA.iterations.length === 0) return;
+  $("iter-select").innerHTML = REPLAY_DATA.iterations.map((_, i) =>
+    `<option value="${i}">Iteration ${i + 1}</option>`
+  ).join("");
+  $("iter-select").value = "0";
+  $("iter-select").onchange = () => showIter(parseInt($("iter-select").value));
+  $("btn-prev").onclick = () => { if (currentIter > 0) showIter(currentIter - 1); };
+  $("btn-next").onclick = () => { if (currentIter < REPLAY_DATA.iterations.length - 1) showIter(currentIter + 1); };
+  $("btn-all").onclick = () => setFilter("all");
+  $("btn-kept").onclick = () => setFilter("kept");
+  $("btn-dropped").onclick = () => setFilter("dropped");
+  $("btn-expand-all").onclick = () => document.querySelectorAll(".segment-body").forEach(el => el.classList.add("open"));
+  $("btn-collapse-all").onclick = () => document.querySelectorAll(".segment-body").forEach(el => el.classList.remove("open"));
+  showIter(0);
+}
+
+function setFilter(f) {
+  currentFilter = f;
+  ["all","kept","dropped"].forEach(k => $("btn-"+k).classList.toggle("active", k === f));
+  showIter(currentIter);
+}
+
+function showIter(idx) {
+  currentIter = idx;
+  $("iter-select").value = String(idx);
+  $("iter-label").innerText = `Iteration ${idx + 1}/${REPLAY_DATA.iterations.length}`;
+
+  let iter = REPLAY_DATA.iterations[idx];
+  renderStats(iter);
+  renderTimeline(iter);
+  renderSegments(iter);
+}
+
+function renderStats(iter) {
+  let total = iter.filter_kept + iter.filter_dropped;
+  $("stats").innerHTML = [
+    { v: total, l: "events read", cls: "" },
+    { v: iter.filter_kept, l: "kept", cls: "kept" },
+    { v: iter.filter_dropped, l: "dropped", cls: "dropped" },
+    { v: iter.segments.length, l: "segments", cls: "segments" },
+  ].map(s => `<div class="stat ${s.cls}"><div class="value">${s.v}</div><div class="label">${s.l}</div></div>`).join("");
+}
+
+function renderTimeline(iter) {
+  if (!iter.segments.length) { $("timeline").innerHTML = ""; return; }
+  let maxEnd = 0;
+  let minStart = Infinity;
+  for (let seg of iter.segments) {
+    let s = new Date(seg.start_time).getTime();
+    let e = new Date(seg.end_time).getTime();
+    if (s < minStart) minStart = s;
+    if (e > maxEnd) maxEnd = e;
+  }
+  let total = maxEnd - minStart || 1;
+  $("timeline").innerHTML = iter.segments.map((seg, i) => {
+    let w = Math.max(4, ((new Date(seg.end_time).getTime() - new Date(seg.start_time).getTime()) / total * 100));
+    return `<div class="tl-seg ${seg.status}" style="flex:0 0 ${w}%" title="${seg.segment_id} — ${seg.status}" onclick="scrollToSegment(${i})"></div>`;
+  }).join("");
+}
+
+function scrollToSegment(i) {
+  let el = document.querySelectorAll(".segment")[i];
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function renderSegments(iter) {
+  let segs = iter.segments;
+  $("segments").innerHTML = "";
+  $("empty").style.display = segs.length ? "none" : "block";
+  if (!segs.length) return;
+
+  for (let si = 0; si < segs.length; si++) {
+    let seg = segs[si];
+    let items = seg.items;
+    let visible = items.filter(ev => {
+      if (currentFilter === "kept") return ev.kept;
+      if (currentFilter === "dropped") return !ev.kept;
+      return true;
+    });
+    if (currentFilter !== "all" && visible.length === 0) continue;
+
+    let keptCount = items.filter(e => e.kept).length;
+    let droppedCount = items.length - keptCount;
+
+    let div = document.createElement("div");
+    div.className = "segment";
+    div.innerHTML = `
+      <div class="segment-header" onclick="this.nextElementSibling.classList.toggle('open')">
+        <div class="info">
+          <span class="sep-id">${seg.segment_id}</span>
+          <span class="sep-time">${fmtTime(seg.start_time)} → ${fmtTime(seg.end_time)}</span>
+          <span class="badge ${seg.status}">${seg.status}</span>
+          <span class="sep-time">${seg.item_count} items (${keptCount}k/${droppedCount}d)</span>
+          <span class="sep-time">${seg.token_estimate} tokens</span>
+        </div>
+        <span style="color:var(--muted);font-size:0.85em">${seg.boundary_reason}</span>
+      </div>
+      <div class="segment-body">
+        <div class="segment-meta">
+          <span>sequence: ${seg.device_sequence}</span>
+        </div>
+        ${visible.map(ev => renderEvent(ev)).join("")}
+      </div>`;
+    $("segments").appendChild(div);
+  }
+}
+
+function renderEvent(ev) {
+  let icon = ev.event_type === "screen" ? "&#x1F5A5;" : "&#x1F5B1;";
+  let dropCls = ev.kept ? "" : "dropped";
+  let reasonHtml = ev.kept
+    ? `<span class="ev-reason kept">KEPT</span>`
+    : `<span class="ev-reason">DROPPED &mdash; ${escHtml(ev.drop_reason || "unknown")}</span>`;
+  return `
+    <div class="event ${dropCls}">
+      <div class="ev-type">${icon}</div>
+      <div class="ev-body">
+        <div class="ev-meta">
+          <span class="badge ${ev.event_type}">${ev.event_type}</span>
+          <span style="color:var(--muted);font-size:0.8em">${fmtTime(ev.occurred_at)}</span>
+          ${ev.app_name ? `<span class="ev-app">${escHtml(ev.app_name)}${ev.window_name ? " &mdash; " + escHtml(ev.window_name) : ""}</span>` : ""}
+          ${reasonHtml}
+        </div>
+        <div class="ev-text" onclick="toggleText(this)" data-preview="${escAttr(ev.text_preview)}" data-full="${escAttr(ev.text_full || ev.text_preview)}">${escHtml(ev.text_preview) || "<em style='color:var(--muted)'>no text</em>"}</div>
+      </div>
+    </div>`;
+}
+
+function fmtTime(iso) {
+  if (!iso) return "--";
+  let d = new Date(iso);
+  return d.toLocaleString("en-US", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit", second:"2-digit" });
+}
+
+function escAttr(s) {
+  return s.replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+function toggleText(el) {
+  if (el.classList.contains("expanded")) {
+    el.textContent = el.dataset.preview || "";
+    el.classList.remove("expanded");
+  } else {
+    el.textContent = el.dataset.full || el.dataset.preview || "";
+    el.classList.add("expanded");
+  }
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+try {
+  init();
+  let ld = $("loading");
+  if (ld) ld.style.display = "none";
+} catch (e) {
+  let ld = $("loading");
+  if (ld) ld.style.display = "none";
+  let err = $("error");
+  if (err) {
+    err.style.display = "block";
+    err.innerText = "Error: " + (e.message || e);
+  }
+  console.error(e);
+}
+</script>
+</body>
+</html>

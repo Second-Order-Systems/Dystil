@@ -1,0 +1,32 @@
+[package]
+name = "dystil-sync"
+version = { workspace = true }
+authors = { workspace = true }
+description = "Direct SQLite work-insights sync for Dystil."
+repository = { workspace = true }
+license-file = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+chrono = { workspace = true }
+dystil-protocol = { path = "../dystil-protocol" }
+flate2 = "1"
+hex = { workspace = true }
+image = { workspace = true, features = ["jpeg"] }
+reqwest = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+sqlx = { workspace = true, features = ["sqlite", "runtime-tokio-rustls", "chrono", "json"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+clap = { workspace = true }
+tempfile = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[[example]]
+name = "replay"
+path = "examples/replay.rs"

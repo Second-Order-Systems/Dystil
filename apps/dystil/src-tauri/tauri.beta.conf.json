@@ -1,0 +1,132 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Dystil beta",
+  "identifier": "dystil.beta",
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "beforeBuildCommand": "bun run build",
+    "frontendDist": "../out",
+    "devUrl": "http://localhost:3000"
+  },
+  "bundle": {
+    "createUpdaterArtifacts": true,
+    "active": true,
+    "publisher": "Second Order Systemss",
+    "category": "DeveloperTool",
+    "shortDescription": "24/7 memory for your desktop",
+    "longDescription": "24/7 memory for your desktop. 100% local. You own your data.",
+    "copyright": "",
+    "targets": [
+      "app",
+      "dmg",
+      "deb",
+      "appimage",
+      "nsis"
+    ],
+    "externalBin": [
+      "bun",
+      "dystil-mcp"
+    ],
+    "icon": [
+      "icons/beta/32x32.png",
+      "icons/beta/128x128.png",
+      "icons/beta/128x128@2x.png",
+      "icons/beta/256x256.png",
+      "icons/beta/512x512.png",
+      "icons/beta/1024x1024.png",
+      "icons/beta/icon.icns",
+      "icons/beta/icon.ico",
+      "icons/dystil-logo-tray-failed.png",
+      "icons/dystil-logo-tray-beta.png"
+    ],
+    "resources": [
+      "assets/*",
+      "icons/1024x1024.png",
+      "PermissionFlow_PermissionFlow.bundle"
+    ],
+    "macOS": {
+      "entitlements": "entitlements.plist"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "dialog": false,
+      "endpoints": [
+        "https://artifacts.2os.ai/dystil/updates/beta/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJFMUZFQTkyN0VGNkY2NUYKUldSZjl2WitrdW9mTGpXS3RQYnRPN0NGMWlCV0Y3S3JMdjhCRkg5eXVmaXZkZDh6NlIyem1KM0YK"
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "dystil-beta"
+        ]
+      },
+      "mobile": [
+        {
+          "host": "dystil.dev",
+          "pathPrefix": [
+            "/auth"
+          ]
+        },
+        {
+          "host": "dystil.dev",
+          "pathPrefix": [
+            "/stripe-connect"
+          ]
+        },
+        {
+          "host": "dystil.dev",
+          "pathPrefix": [
+            "/purchase-successful"
+          ]
+        },
+        {
+          "host": "dystil.dev",
+          "pathPrefix": [
+            "/settings"
+          ]
+        },
+        {
+          "host": "dystil.dev",
+          "pathPrefix": [
+            "/changelog"
+          ]
+        },
+        {
+          "host": "dystil.dev",
+          "pathPrefix": [
+            "/onboarding"
+          ]
+        },
+        {
+          "host": "dystil.dev",
+          "pathPrefix": [
+            "/status"
+          ]
+        }
+      ]
+    }
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "trayIcon": {
+      "id": "dystil_main",
+      "iconPath": "icons/1024x1024.png",
+      "iconAsTemplate": false,
+      "menuOnLeftClick": true
+    },
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPDATA/**",
+          "$HOME/.dystil/**"
+        ]
+      },
+      "csp": null
+    },
+    "macOSPrivateApi": true
+  }
+}

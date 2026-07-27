@@ -1,0 +1,45 @@
+# Optional low-resource override for local development.
+#
+# Usage:
+# docker compose -f docker-compose.yml -f docker-compose.local.yml \
+#   --env-file .env.docker up --build
+#
+# With memory:
+# docker compose -f docker-compose.yml -f docker-compose.memory.yml \
+#   -f docker-compose.local.yml --env-file .env.docker up --build
+#
+# This file is opt-in and contains no macOS-, Windows-, or Linux-specific
+# Docker daemon configuration.
+
+x-local-logging: &local-logging
+  driver: json-file
+  options:
+    max-size: "5m"
+    max-file: "2"
+
+services:
+  postgres:
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - effective_cache_size=128MB
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - max_connections=20
+    mem_limit: 192m
+    cpus: 0.50
+    pids_limit: 100
+    shm_size: 64m
+    logging: *local-logging
+
+  dystil-api:
+    restart: "no"
+    mem_limit: 512m
+    cpus: 1.00
+    pids_limit: 200
+    logging: *local-logging

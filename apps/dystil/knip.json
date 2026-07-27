@@ -1,0 +1,28 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "app/**/page.tsx",
+    "app/**/layout.tsx",
+    "app/**/not-found.tsx",
+    "app/**/error.tsx",
+    "scripts/**/*.js"
+  ],
+  "project": [
+    "app/**/*.{ts,tsx}",
+    "components/**/*.{ts,tsx}",
+    "lib/**/*.{ts,tsx}",
+    "scripts/**/*.{ts,js}"
+  ],
+  "ignore": [
+    "**/__tests__/**",
+    "**/*.test.{ts,tsx}"
+  ],
+  "ignoreDependencies": [
+    "ts-node",
+    "mocha"
+  ],
+  "next": true,
+  "tailwind": true,
+  "postcss": true,
+  "vitest": true
+}

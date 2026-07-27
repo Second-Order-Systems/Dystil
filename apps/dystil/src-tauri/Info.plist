@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>This app requires screen capture access to record the screen.</string>
+    <key>CGRequestScreenCaptureAccess</key>
+    <string>This app requires screen capture access to record the screen.</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>Dystil saves action items it detects from your screen activity to Apple Reminders.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>dystil reads your calendar to detect meetings. Your calendar data stays on-device.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>dystil reads your calendar to detect meetings. Your calendar data stays on-device.</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+    <key>NSSupportsAutomaticTermination</key>
+    <true/>
+    <key>NSSupportsSuddenTermination</key>
+    <true/>
+</dict>
+</plist>

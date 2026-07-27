@@ -1,0 +1,680 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Tell the engine the UI is light by default so native scrollbars and form
+       controls render correctly. Overridden by `.dark` below. (#3746) */
+    color-scheme: light;
+
+    /*
+     * Dystil Brand Style Guide
+     * Black & White Geometric Minimalism
+     * No color. Sharp corners. Monospace typography.
+     */
+
+    /* Dystil — calm cream and green */
+    --background: 90 14% 97%; /* #F7F8F6 */
+    --foreground: 145 22% 10%; /* #14201B */
+
+    /* Surface colors - Limited grays */
+    --surface: 90 12% 94%;
+    --surface-secondary: 90 10% 91%;
+    --surface-tertiary: 90 8% 87%;
+
+    /* Card colors */
+    --card: 0 0% 100%;
+    --card-foreground: 145 22% 10%;
+    --card-hover: 151 25% 96%;
+
+    /* Popover colors */
+    --popover: 0 0% 100%;
+    --popover-foreground: 145 22% 10%;
+
+    --primary: 161 54% 40%; /* #2F9E7B */
+    --primary-foreground: 0 0% 100%;
+    --primary-hover: 158 56% 28%;
+    --primary-muted: 153 45% 94%;
+
+    /* Secondary - Gray */
+    --secondary: 90 12% 94%;
+    --secondary-foreground: 145 22% 10%;
+    --secondary-hover: 90 10% 90%;
+
+    /* Status colors - Grayscale only */
+    --success: 151 59% 45%;
+    --success-foreground: 0 0% 100%;
+    --success-muted: 153 45% 94%;
+
+    --warning: 38 83% 48%;
+    --warning-foreground: 0 0% 100%;
+    --warning-muted: 43 90% 93%;
+
+    --destructive: 359 61% 47%;
+    --destructive-foreground: 0 0% 100%;
+    --destructive-hover: 359 61% 37%;
+    --destructive-muted: 359 50% 94%;
+
+    --info: 195 66% 42%;
+    --info-foreground: 0 0% 100%;
+    --info-muted: 0 0% 90%;
+
+    /* Muted colors */
+    --muted: 90 12% 94%;
+    --muted-foreground: 145 10% 38%;
+
+    /* Accent colors */
+    --accent: 153 45% 94%;
+    --accent-foreground: 158 56% 28%;
+    --accent-hover: 153 35% 89%;
+
+    /* Border and input - 1px black/gray */
+    --border: 120 12% 91%;
+    --input: 0 0% 100%;
+    --input-focus: 161 54% 40%;
+    --ring: 161 54% 40%;
+
+    /* Text colors - B&W hierarchy */
+    --text-primary: 145 22% 10%;
+    --text-secondary: 145 10% 38%;
+    --text-tertiary: 145 8% 57%;
+    --text-disabled: 145 7% 67%;
+
+    /* Brand colors - All black for B&W aesthetic */
+    --brand-1: 0 0% 0%;
+    --brand-2: 0 0% 20%;
+    --brand-3: 0 0% 40%;
+    --brand-4: 0 0% 60%;
+    --brand-5: 0 0% 80%;
+
+    --color-1: 0 0% 0%;
+    --color-2: 0 0% 20%;
+    --color-3: 0 0% 40%;
+    --color-4: 0 0% 60%;
+    --color-5: 0 0% 80%;
+
+    /* Sidebar colors */
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 0 0% 0%;
+    --sidebar-primary: 0 0% 0%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 96%;
+    --sidebar-accent-foreground: 0 0% 0%;
+    --sidebar-border: 0 0% 80%;
+    --sidebar-ring: 0 0% 0%;
+
+    /* Sharp corners - no radius */
+    --radius: 0.75rem;
+
+    /* Font size scale — controlled by the font size setting */
+    --font-size-base: 16px;
+    --text-xs: calc(var(--font-size-base) * 0.75);
+    --text-sm: calc(var(--font-size-base) * 0.875);
+    --text-base: var(--font-size-base);
+    --text-lg: calc(var(--font-size-base) * 1.125);
+    --text-xl: calc(var(--font-size-base) * 1.25);
+    --text-2xl: calc(var(--font-size-base) * 1.5);
+    --text-3xl: calc(var(--font-size-base) * 1.875);
+    --text-4xl: calc(var(--font-size-base) * 2.25);
+  }
+
+  .dark {
+    /* Match native scrollbars and form controls to the dark UI even when the OS
+       is in light mode. The theme is class-based (`.dark` on <html>), not
+       prefers-color-scheme, so without this the WebView keeps painting a light
+       scrollbar/controls in dark mode (most visible on Windows). (#3746) */
+    color-scheme: dark;
+
+    /* Dark counterpart to the Dystil cream and green palette */
+    --background: 150 13% 8%;
+    --foreground: 120 15% 95%;
+
+    /* Surface colors */
+    --surface: 150 11% 11%;
+    --surface-secondary: 150 9% 14%;
+    --surface-tertiary: 150 8% 17%;
+
+    /* Card colors */
+    --card: 150 11% 10%;
+    --card-foreground: 120 15% 95%;
+    --card-hover: 150 12% 15%;
+
+    /* Popover colors */
+    --popover: 150 11% 10%;
+    --popover-foreground: 120 15% 95%;
+
+    --primary: 161 54% 45%;
+    --primary-foreground: 150 13% 8%;
+    --primary-hover: 161 54% 55%;
+    --primary-muted: 158 30% 17%;
+
+    /* Secondary */
+    --secondary: 150 9% 15%;
+    --secondary-foreground: 120 15% 95%;
+    --secondary-hover: 150 8% 19%;
+
+    /* Status colors - Grayscale */
+    --success: 151 59% 48%;
+    --success-foreground: 150 13% 8%;
+    --success-muted: 158 30% 17%;
+
+    --warning: 0 0% 60%;
+    --warning-foreground: 0 0% 0%;
+    --warning-muted: 0 0% 15%;
+
+    --destructive: 0 0% 100%;
+    --destructive-foreground: 0 0% 0%;
+    --destructive-hover: 0 0% 80%;
+    --destructive-muted: 0 0% 15%;
+
+    --info: 0 0% 60%;
+    --info-foreground: 0 0% 0%;
+    --info-muted: 0 0% 15%;
+
+    /* Muted colors — brightened for vibrancy/translucent sidebar */
+    --muted: 150 9% 15%;
+    --muted-foreground: 130 8% 72%;
+
+    /* Accent colors */
+    --accent: 158 30% 17%;
+    --accent-foreground: 145 45% 76%;
+    --accent-hover: 158 25% 22%;
+
+    /* Border and input */
+    --border: 150 8% 25%;
+    --input: 150 11% 10%;
+    --input-focus: 161 54% 45%;
+    --ring: 161 54% 45%;
+
+    /* Text colors */
+    --text-primary: 120 15% 95%;
+    --text-secondary: 130 8% 72%;
+    --text-tertiary: 130 7% 50%;
+    --text-disabled: 130 6% 35%;
+
+    /* Brand colors */
+    --brand-1: 0 0% 100%;
+    --brand-2: 0 0% 80%;
+    --brand-3: 0 0% 60%;
+    --brand-4: 0 0% 40%;
+    --brand-5: 0 0% 20%;
+
+    --color-1: 0 0% 100%;
+    --color-2: 0 0% 80%;
+    --color-3: 0 0% 60%;
+    --color-4: 0 0% 40%;
+    --color-5: 0 0% 20%;
+
+    /* Sidebar colors */
+    --sidebar-background: 0 0% 5%;
+    --sidebar-foreground: 0 0% 100%;
+    --sidebar-primary: 0 0% 100%;
+    --sidebar-primary-foreground: 0 0% 0%;
+    --sidebar-accent: 0 0% 14%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 0 0% 22%;
+    --sidebar-ring: 0 0% 100%;
+  }
+}
+
+/* Home-only Dystil mark: particles distil through the funnel into the drop. */
+.dystil-home-funnel {
+  fill: none;
+  stroke: hsl(var(--foreground));
+  stroke-width: 6.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.dystil-permission-kbd {
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--muted));
+  padding: 1px 6px;
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12px;
+}
+.dystil-onboarding-item {
+  animation: dystil-education-rise 1.1s cubic-bezier(.22,.61,.36,1) both;
+}
+.dystil-onboarding-item:nth-child(1) { animation-delay: .12s; }
+.dystil-onboarding-item:nth-child(2) { animation-delay: .32s; }
+.dystil-onboarding-item:nth-child(3) { animation-delay: .52s; }
+@keyframes dystil-education-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dystil-onboarding-item { animation: none; }
+}
+.dystil-home-drop-glow {
+  fill: hsl(var(--primary));
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: dystil-home-collect 3.4s ease-in-out infinite;
+}
+.dystil-home-drop { fill: hsl(var(--primary)); }
+.dystil-home-drop-glow { opacity: .16; }
+.dystil-home-speck {
+  fill: hsl(var(--foreground));
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: dystil-home-drip 3.4s ease-in infinite;
+}
+.dystil-home-speck-1 { --dystil-speck-x: -24px; animation-delay: 0s; }
+.dystil-home-speck-2 { --dystil-speck-x: 22px; animation-delay: .9s; }
+.dystil-home-speck-3 { --dystil-speck-x: -8px; animation-delay: 1.7s; }
+.dystil-home-speck-4 { --dystil-speck-x: 14px; animation-delay: 2.5s; }
+@keyframes dystil-home-drip {
+  0% { opacity: 0; transform: translate(var(--dystil-speck-x), -40px) scale(1); }
+  18% { opacity: .85; }
+  72% { opacity: .6; transform: translate(calc(var(--dystil-speck-x) * .12), -6px) scale(.9); }
+  100% { opacity: 0; transform: translate(0, 2px) scale(.4); }
+}
+@keyframes dystil-home-collect {
+  0%, 100% { transform: scale(.90); }
+  46% { transform: scale(1.05); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dystil-home-drop-glow,
+  .dystil-home-speck { animation: none; }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  /* Prevent flash during theme initialization and support transparency */
+  html {
+    background-color: hsl(var(--background));
+    transition: background-color 0ms; /* Instant transition to prevent flash */
+  }
+
+  body {
+    @apply bg-background text-foreground !pointer-events-auto !overscroll-none;
+  }
+
+  /* When translucent sidebar is enabled on macOS, the OS handles the background */
+  html.macos-vibrancy,
+  body.macos-vibrancy {
+    background-color: transparent !important;
+  }
+
+  /* Prevent intermittent scrollbars on Windows overlay — html/body should never scroll,
+     inner containers handle their own scrolling with scrollbar-hide */
+  html, body {
+    overflow: hidden;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar {
+    display: none;
+  }
+
+  *,
+  a,
+  button {
+    /* cursor: default; */
+    user-select: none;
+    -webkit-user-drag: none; /* Prevent element dragging */
+    -webkit-tap-highlight-color: transparent; /* Remove blue/purple flash on click */
+  }
+  :not(input):not(textarea),
+  :not(input):not(textarea)::after,
+  :not(input):not(textarea)::before {
+    -webkit-user-select: none; /* Safari */
+    -moz-user-select: none;    /* Firefox */
+   -ms-user-select: none;     /* Internet Explorer/Edge */
+    user-select: none;
+    -webkit-user-drag: none; /* Prevent element dragging */
+    /* cursor: default; */
+  }
+
+  input,
+  textarea,
+  [contenteditable],
+  [contenteditable="true"] {
+    -webkit-user-select: text !important;
+    -moz-user-select: text !important;
+    -ms-user-select: text !important;
+    user-select: text !important;
+  }
+
+  /* Prevent all image and element dragging globally */
+  img, a, [draggable] {
+    -webkit-user-drag: none;
+    user-drag: none;
+    -khtml-user-drag: none;
+    -moz-user-drag: none;
+    -o-user-drag: none;
+    -ms-user-drag: none;
+    draggable: false;
+  }
+
+  /* Disable macOS Live Text analysis on search modal thumbnail images.
+     Live Text creates invisible interactive overlays that steal click events. */
+  [role="dialog"] img {
+    -webkit-image-analysis: none;
+  }
+
+  /* Selectable text layer — override global user-select:none for OCR text overlay
+     and chat message prose content.
+     Must override *, :not(input):not(textarea), and ::before/::after rules above. */
+  .selectable-text-layer,
+  .selectable-text-layer *,
+  .selectable-text-layer *::before,
+  .selectable-text-layer *::after,
+  .prose,
+  .prose *,
+  .prose *::before,
+  .prose *::after {
+    -webkit-user-select: text !important;
+    -moz-user-select: text !important;
+    -ms-user-select: text !important;
+    user-select: text !important;
+    cursor: text !important;
+    -webkit-user-drag: none !important;
+  }
+  .selectable-text-layer::selection,
+  .selectable-text-layer *::selection,
+  .prose::selection,
+  .prose *::selection {
+    background-color: rgba(59, 130, 246, 0.35) !important;
+  }
+
+  .prose a,
+  .prose a * {
+    cursor: pointer !important;
+  }
+
+  /* Allow video controls to work normally */
+  video {
+    -webkit-user-drag: auto !important;
+    user-select: auto !important;
+  }
+
+  video::-webkit-media-controls,
+  video::-webkit-media-controls-enclosure,
+  video::-webkit-media-controls-panel,
+  video::-webkit-media-controls-timeline {
+    -webkit-user-drag: auto !important;
+    pointer-events: auto !important;
+    user-select: auto !important;
+  }
+
+  .scrollbar-hide {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;  /* Chrome, Safari and Opera */
+  }
+
+  /* Minimal scrollbar: visible track + thumb, no up/down arrow buttons (like reference) */
+  .scrollbar-minimal {
+    scrollbar-width: thin;  /* Firefox: thin scrollbar, no arrows */
+    scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent;
+  }
+  .scrollbar-minimal::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-minimal::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-minimal::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.4);
+    border-radius: 4px;
+  }
+  .scrollbar-minimal::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.6);
+  }
+  .scrollbar-minimal::-webkit-scrollbar-button {
+    display: none;  /* No arrow buttons */
+  }
+
+  /* Vibrant sidebar theme — Minimal macOS backdrop */
+  .vibrant-sidebar {
+    /* Light mode: subtle light overlay on translucent background */
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    border-color: transparent;
+  }
+  .light .vibrant-sidebar {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+  }
+  .dark .vibrant-sidebar {
+    /* Dark mode: subtle bright overlay on translucent background */
+    background-color: rgba(255, 255, 255, 0.06) !important;
+  }
+
+  /* System light mode fallback — covers the gap before JS applies .light class */
+  @media (prefers-color-scheme: light) {
+    html:not(.dark) .vibrant-sidebar {
+      background-color: rgba(255, 255, 255, 0.08) !important;
+    }
+    html:not(.dark) .vibrant-sidebar-fg {
+      color: hsl(0 0% 0%) !important;
+    }
+    html:not(.dark) .vibrant-sidebar-fg-muted {
+      color: hsl(0 0% 40%) !important;
+    }
+    html:not(.dark) .vibrant-nav-active {
+      color: hsl(0 0% 0%) !important;
+    }
+    html:not(.dark) .vibrant-nav-hover:hover {
+      color: hsl(0 0% 0%) !important;
+    }
+    html:not(.dark) .vibrant-nav-item {
+      color: hsl(0 0% 40%) !important;
+    }
+    html:not(.dark) .vibrant-nav-item:hover {
+      color: hsl(0 0% 0%) !important;
+    }
+    html:not(.dark) .vibrant-nav-item:hover .vibrant-sidebar-fg-muted {
+      color: hsl(0 0% 0%) !important;
+    }
+    html:not(.dark) .vibrant-heading {
+      color: hsl(0 0% 0%) !important;
+    }
+    html:not(.dark) .vibrant-card-border {
+      border-color: hsl(0 0% 0% / 0.1) !important;
+    }
+    html:not(.dark) .vibrant-btn-border {
+      border-color: hsl(0 0% 0% / 0.2) !important;
+      color: hsl(0 0% 0%) !important;
+    }
+    html:not(.dark) .vibrant-btn-border:hover {
+      color: hsl(0 0% 0% / 0.8) !important;
+    }
+    html:not(.dark) .vibrant-sidebar-border {
+      border-color: hsl(0 0% 0% / 0.08) !important;
+    }
+  }
+
+  /* System dark mode fallback — covers the gap before JS applies .dark class.
+     Applies to BOTH background and all text colors so there is no flash of
+     dark-vibrancy-background + light-mode text (= invisible text) on first
+     paint when macOS is in Auto/dark mode. */
+  @media (prefers-color-scheme: dark) {
+    html:not(.light) .vibrant-sidebar {
+      background-color: rgba(255, 255, 255, 0.06) !important;
+    }
+    html:not(.light) .vibrant-sidebar-fg {
+      color: hsl(0 0% 100%) !important;
+    }
+    html:not(.light) .vibrant-sidebar-fg-muted {
+      color: hsl(0 0% 75%) !important;
+    }
+    html:not(.light) .vibrant-nav-active {
+      color: hsl(0 0% 100%) !important;
+    }
+    html:not(.light) .vibrant-nav-hover:hover {
+      color: hsl(0 0% 100%) !important;
+    }
+    html:not(.light) .vibrant-nav-item {
+      color: hsl(0 0% 80%) !important;
+    }
+    html:not(.light) .vibrant-nav-item:hover {
+      color: hsl(0 0% 100%) !important;
+    }
+    html:not(.light) .vibrant-nav-item:hover .vibrant-sidebar-fg-muted {
+      color: hsl(0 0% 100%) !important;
+    }
+    html:not(.light) .vibrant-heading {
+      color: hsl(0 0% 100%) !important;
+    }
+    html:not(.light) .vibrant-card-border {
+      border-color: hsl(0 0% 100% / 0.1) !important;
+    }
+    html:not(.light) .vibrant-btn-border {
+      border-color: hsl(0 0% 100% / 0.2) !important;
+      color: hsl(0 0% 100%) !important;
+    }
+    html:not(.light) .vibrant-btn-border:hover {
+      color: hsl(0 0% 100% / 0.8) !important;
+    }
+    html:not(.light) .vibrant-sidebar-border {
+      border-color: hsl(0 0% 100% / 0.08) !important;
+    }
+  }
+
+  .vibrant-sidebar-border {
+    border-color: transparent;
+  }
+  .vibrant-sidebar-fg {
+    color: hsl(var(--foreground));
+  }
+  .vibrant-sidebar-fg-muted {
+    color: hsl(var(--muted-foreground));
+  }
+  .vibrant-nav-active {
+    color: hsl(var(--foreground));
+    font-weight: 600;
+  }
+  .vibrant-nav-hover:hover {
+    color: hsl(var(--foreground));
+  }
+  .vibrant-nav-item {
+    color: hsl(var(--muted-foreground));
+  }
+  .vibrant-nav-item:hover {
+    color: hsl(var(--foreground));
+  }
+  /* Icon inside a hovered nav item inherits the foreground color */
+  .vibrant-nav-item:hover .vibrant-sidebar-fg-muted {
+    color: hsl(var(--foreground));
+  }
+  .vibrant-heading {
+    color: hsl(var(--foreground));
+  }
+  .vibrant-card-border {
+    border-color: hsl(var(--foreground) / 0.1);
+  }
+  .vibrant-btn-border {
+    border-color: hsl(var(--foreground) / 0.2);
+    color: hsl(var(--foreground));
+  }
+  .vibrant-btn-border:hover {
+    color: hsl(var(--foreground) / 0.8);
+  }
+
+  @keyframes shimmer {
+    0% {
+      background-position: -200% 0;
+    }
+    100% {
+      background-position: 200% 0;
+    }
+  }
+
+  .animate-shimmer {
+    animation: shimmer 1.5s infinite linear;
+  }
+
+
+}
+
+.pf-v6-c-text-input-group__text-input {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  position: relative;
+  width: 100%;
+  padding-block-end: 8px !important;
+  padding-block-start: 8px !important;
+  padding-bottom: 8px !important;
+  padding-inline-end: 16px !important;
+  padding-inline-start: 38px !important;
+  padding-left: 38px !important;
+  padding-right: 16px !important;
+  padding-top: 8px !important;
+}
+.pf-v6-c-text-input-group__text-input::placeholder {
+  padding-left: 20px !important;
+}
+.pf-v6-c-text-input-group__icon {
+  inset-block-start: 18.5px !important;
+  inset-inline-start: 16px !important;
+  line-height: 21px !important;
+  position: absolute !important;
+}
+
+/* PatternFly LogViewer dark theme overrides */
+.dark .pf-v5-c-log-viewer {
+  background-color: hsl(var(--background)) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+.dark .pf-v5-c-log-viewer__main {
+  background-color: hsl(var(--background)) !important;
+}
+
+.dark .pf-v5-c-log-viewer__list {
+  background-color: hsl(var(--background)) !important;
+}
+
+.dark .pf-v5-c-log-viewer__list-item {
+  background-color: hsl(var(--background)) !important;
+  color: hsl(var(--foreground)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+
+.dark .pf-v5-c-toolbar {
+  background-color: hsl(var(--background)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+
+.dark .pf-v5-c-toolbar__content {
+  background-color: hsl(var(--background)) !important;
+}
+
+.dark .pf-v5-c-text-input-group {
+  background-color: hsl(var(--input)) !important;
+}
+
+.dark .pf-v5-c-text-input-group__text-input {
+  background-color: hsl(var(--input)) !important;
+  color: hsl(var(--foreground)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+
+.dark .pf-v5-c-text-input-group__text-input::placeholder {
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+
+/* TipTap — show placeholder only on the first empty paragraph of an empty doc.
+   Mirrors the muted-foreground/40 styling we use on native textareas. */
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: hsl(var(--muted-foreground) / 0.4);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}

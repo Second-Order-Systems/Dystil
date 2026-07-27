@@ -1,0 +1,104 @@
+# Binaries for programs and examples
+*.exe
+*.exe~
+*.dll
+*.dylib
+*.so
+
+# Test binary, built with `cargo test`
+*.test
+
+# Rust/Cargo specific files
+*target
+
+# IDE specific files
+.idea/
+.vscode/
+*.rs.bk
+
+# act cli
+.secrets
+
+# db 
+data/ 
+text_json/
+
+src-tauri/deno-*
+apps/dystil/src-tauri/dystil-mcp-*
+
+# Tauri signing key
+tauri_key_louis.key
+pnpm-lock.yaml
+
+.DS_Store
+
+# Ignore onnxruntime-win-x64 libraries
+onnxruntime-win-x64*/
+
+# ignore environment variables
+.env
+.env.local
+.local/work-card-eval/
+cloud/.env.docker
+cloud/.env.vm
+
+# JavaScript stuff
+node_modules/
+*.tsbuildinfo
+bun-debug.log*
+
+*.key*
+
+# Bun/auth service local artifacts
+.bun/
+cloud/services/auth/dist/
+cloud/services/auth/.env*
+!cloud/services/auth/.env.example
+
+# Swift build artifacts (ee/sdk)
+.build/
+
+# Python stuff
+venv/
+app.py
+*.pyc
+*.pyo
+*.pyd
+*.py
+*.pyw
+*.pyz
+*.py3
+*.py3w
+*.py3z
+__pycache__/
+.pytest_cache/
+!memory/**/*.py
+
+screenpipe-app-tauri/src-tauri/.next/
+.vercel
+.wrangler/
+
+
+
+.playwright*
+
+# Claude Code
+.claude/worktrees/
+.claude/*.local* # local changes are specific to the individual developer, let's not check them in for everyone.
+.claude/*.lock
+apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-arm64-1.19.2/
+apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2/
+crates/screenpipe-audio/onnxruntime-win-x64-1.19.2.zip
+crates/screenpipe-audio/onnxruntime-win-arm64-1.19.2.zip
+crates/screenpipe-audio/openblas-0.3.31-x64.zip
+crates/screenpipe-audio/openblas-0.3.31-woa64-dll.zip
+apps/screenpipe-app-tauri/src-tauri/openblas/
+apps/screenpipe-app-tauri/src-tauri/mlx.metallib
+.serena/
+.worktrees/
+
+# license copies staged into npm packages at publish time (canonical: /LICENSE.md)
+packages/cli/*/LICENSE.md
+packages/screenpipe-mcp/LICENSE.md
+ee/sdk/LICENSE.md
+ee/sdk/npm/*/LICENSE.md

@@ -1,0 +1,24 @@
+{
+    "bundle": {
+        "publisher": "Second Order Systemss",
+        "resources": [
+            "assets/*"
+        ],
+        "externalBin": [
+            "bun"
+        ],
+        "linux": {
+            "deb": {
+                "depends": [
+                    "tesseract-ocr",
+                    "libtesseract-dev"
+                ]
+            },
+            "appimage": {
+                "files": {
+                    "/usr/bin/tesseract": "./tesseract"
+                }
+            }
+        }
+    }
+}
