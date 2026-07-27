@@ -57,7 +57,13 @@ jobs:
         shell: bash
         run: |
           perl -0pi -e 's/^version = ".*"$/version = "${{ github.event.inputs.version }}"/m' "${{ env.APP_SRC_TAURI_DIR }}/Cargo.toml"
-
+      - name: Compute release version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(grep '^version = ' "${{ env.APP_SRC_TAURI_DIR }}/Cargo.toml" | sed 's/version = "\(.*\)"/\1/')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Release version: ${VERSION}"
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -179,52 +185,44 @@ jobs:
               Copy-Item $_.FullName (Join-Path $stagingDir $destinationName)
             }
 
-      - name: Upload release bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-windows-individual
-          if-no-files-found: error
-          path: release-staging/individual
-
-  publish-release:
-    needs: [check_commit, publish-windows]
-    if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Update version in Cargo.toml
-        if: github.event.inputs.version != ''
-        shell: bash
+      - name: Upload release bundle to R2
+        shell: powershell
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          perl -0pi -e 's/^version = ".*"$/version = "${{ github.event.inputs.version }}"/m' "${{ env.APP_SRC_TAURI_DIR }}/Cargo.toml"
+          $ErrorActionPreference = "Stop"
 
-      - name: Compute release version
-        id: version
-        shell: bash
-        run: |
-          VERSION=$(grep '^version = ' "${{ env.APP_SRC_TAURI_DIR }}/Cargo.toml" | sed 's/version = "\(.*\)"/\1/')
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          aws --version
 
-      - name: Download built artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-artifacts
+          $endpoint = "https://$env:R2_ACCOUNT_ID.r2.cloudflarestorage.com"
+          $source = "release-staging/individual"
+          $destination = "s3://$env:R2_BUCKET/releases/v$env:RELEASE_VERSION/windows/individual/"
 
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: Dystil ${{ steps.version.outputs.tag }}
-          draft: false
-          prerelease: false
-          make_latest: false
-          overwrite_files: true
-          fail_on_unmatched_files: true
-          files: |
-            release-artifacts/**/*.exe
-            release-artifacts/**/*.zip
-            release-artifacts/**/*.sig
+          if (-not (Test-Path $source)) {
+            throw "Release staging directory does not exist: $source"
+          }
+
+          $files = Get-ChildItem -Path $source -Recurse -File
+          if ($files.Count -eq 0) {
+            throw "No release files found in: $source"
+          }
+
+          Write-Host "Uploading $($files.Count) files to $destination"
+
+          aws s3 cp `
+            $source `
+            $destination `
+            --recursive `
+            --endpoint-url $endpoint `
+            --no-progress
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "R2 upload failed with exit code $LASTEXITCODE"
+          }
+
+          Write-Host "Uploaded release to R2 successfully"
