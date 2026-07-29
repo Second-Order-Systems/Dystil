@@ -130,8 +130,9 @@ impl DystilEngine {
     pub async fn run_forever<H: EngineHost + 'static>(self, host: Arc<H>) {
         // Run a best-effort pass as soon as the engine starts, then every
         // configured interval thereafter.
-        let mut last_snapshot_cleanup = std::time::Instant::now()
-            - Duration::from_secs(self.config.snapshot_cleanup_interval_secs.max(1));
+        let snapshot_cleanup_interval =
+            Duration::from_secs(self.config.snapshot_cleanup_interval_secs.max(1));
+        let mut last_snapshot_cleanup: Option<std::time::Instant> = None;
         loop {
             let delay = match self.run_once(host.as_ref()).await {
                 Ok(Some(outcome)) => Duration::from_secs(outcome.config.sync_interval_secs.max(1)),
@@ -142,8 +143,8 @@ impl DystilEngine {
                 }
             };
 
-            if last_snapshot_cleanup.elapsed()
-                >= Duration::from_secs(self.config.snapshot_cleanup_interval_secs.max(1))
+            if last_snapshot_cleanup
+                .is_none_or(|last| last.elapsed() >= snapshot_cleanup_interval)
             {
                 let db_path = match host.capture_db_path().await {
                     Ok(db_path) => Some(db_path),
@@ -183,7 +184,7 @@ impl DystilEngine {
                     }
                 }
                 tracing::info!("dystil-engine: periodic snapshot cleanup completed");
-                last_snapshot_cleanup = std::time::Instant::now();
+                last_snapshot_cleanup = Some(std::time::Instant::now());
             }
             sleep(delay).await;
         }
