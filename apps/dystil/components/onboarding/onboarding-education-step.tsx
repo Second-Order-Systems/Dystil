@@ -1,7 +1,7 @@
 import { LockKeyhole, Sprout, Compass } from "lucide-react";
 import { OnboardingTopbar } from "@/components/onboarding/onboarding-topbar";
 
-export function OnboardingEducationStep({ onContinue, onBack }: { onContinue: () => void; onBack: () => void }) {
+export function OnboardingEducationStep({ onContinue, onBack, currentStep, totalSteps }: { onContinue: () => void; onBack: () => void; currentStep: number; totalSteps: number }) {
   const promises = [
     [LockKeyhole, "Stays on device", "Identifying details are stripped locally. Our servers never see them."],
     [Sprout, "Zero drag", "Runs only on spare CPU and battery. Steps back the second you need it."],
@@ -11,7 +11,7 @@ export function OnboardingEducationStep({ onContinue, onBack }: { onContinue: ()
   return (
     <div className="relative h-dvh overflow-y-auto bg-[radial-gradient(1100px_500px_at_85%_-10%,#ebf4ef_0%,transparent_60%),radial-gradient(900px_500px_at_-10%_110%,#eef3ee_0%,transparent_55%)] px-4 py-10 text-foreground">
       <div className="mx-auto w-full max-w-4xl">
-        <div className="mb-[22px]"><OnboardingTopbar currentStep={1} /></div>
+        <div className="mb-[22px]"><OnboardingTopbar currentStep={currentStep} totalSteps={totalSteps} /></div>
         <section className="rounded-[20px] border border-border bg-card px-[22px] py-7 shadow-[0_1px_2px_rgba(20,32,27,.04),0_12px_40px_rgba(20,32,27,.07)] sm:px-10 sm:py-[38px]">
           <span className="mb-[18px] inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-primary">
             <span className="h-2 w-2 animate-pulse rounded-full bg-primary" /> Private by design

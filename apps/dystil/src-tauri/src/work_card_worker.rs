@@ -14,9 +14,47 @@ use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
 
 #[derive(Debug, Clone)]
+pub enum WorkCardGeneratorConfig {
+    Http(LocalWorkCardConfig),
+    Managed {
+        provider: dystil_ai::ProviderKind,
+        model: String,
+    },
+}
+
+impl WorkCardGeneratorConfig {
+    fn model_id(&self) -> String {
+        match self {
+            Self::Http(config) => config.generator_model.clone(),
+            Self::Managed { provider, model } => format!("{}:{}", provider.slug(), model),
+        }
+    }
+
+    fn embedding_config(&self) -> (Option<String>, Option<String>) {
+        match self {
+            Self::Http(config) => (config.embedding_url.clone(), config.embedding_model.clone()),
+            Self::Managed { .. } => LocalWorkCardConfig::from_env()
+                .map(|config| (config.embedding_url, config.embedding_model))
+                .unwrap_or((None, None)),
+        }
+    }
+
+    fn max_windows(&self) -> usize {
+        match self {
+            Self::Http(config) => config.max_windows,
+            Self::Managed { .. } => 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct LocalWorkCardConfig {
     pub generator_url: String,
     pub generator_model: String,
+    pub api_key: Option<String>,
+    /// OpenAI-compatible APIs reject several llama.cpp-only parameters.
+    pub openai_compatible: bool,
+    pub use_max_completion_tokens: bool,
     pub embedding_url: Option<String>,
     pub embedding_model: Option<String>,
     pub max_windows: usize,
@@ -29,6 +67,9 @@ impl LocalWorkCardConfig {
             generator_url: generator_url.trim_end_matches('/').to_string(),
             generator_model: std::env::var("DYSTIL_WORK_CARD_LLM_MODEL")
                 .unwrap_or_else(|_| "qwen3.5-2b-q4_k_m".to_string()),
+            api_key: std::env::var("DYSTIL_WORK_CARD_API_KEY").ok(),
+            openai_compatible: false,
+            use_max_completion_tokens: false,
             embedding_url: std::env::var("DYSTIL_WORK_CARD_EMBEDDING_URL")
                 .ok()
                 .map(|value| value.trim_end_matches('/').to_string()),
@@ -39,6 +80,48 @@ impl LocalWorkCardConfig {
                 .unwrap_or(4),
         })
     }
+}
+
+/// Resolve the model for both manual and periodic generation. An active BYOK
+/// profile takes precedence over the optional local llama.cpp setup, so one
+/// user choice powers both Dystil AI surfaces.
+pub async fn configured_work_card_config(
+    pool: &SqlitePool,
+) -> Result<Option<WorkCardGeneratorConfig>, String> {
+    if let Some(profile) = crate::byok::active_profile(pool).await? {
+        return Ok(Some(WorkCardGeneratorConfig::Http(LocalWorkCardConfig {
+            generator_url: profile.endpoint,
+            generator_model: profile.work_card_model,
+            api_key: Some(profile.api_key),
+            openai_compatible: true,
+            use_max_completion_tokens: true,
+            embedding_url: None,
+            embedding_model: None,
+            max_windows: 4,
+        })));
+    }
+    if let Some(config) = LocalWorkCardConfig::from_env() {
+        return Ok(Some(WorkCardGeneratorConfig::Http(config)));
+    }
+    let (provider, _) = crate::agent_mailbox::preferences(pool).await?;
+    let provider = crate::ai::provider_kind(&provider)?;
+    let runtime = crate::ai::provider_runtime(provider.clone())?;
+    if !runtime
+        .authenticated()
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        return Ok(None);
+    }
+    // Work cards are background enrichment, so do not inherit the often more
+    // capable interactive-chat model. Keep the provider-specific low-cost
+    // model stable and explicit.
+    let model = match provider {
+        dystil_ai::ProviderKind::Codex => "gpt-5.6-luna",
+        dystil_ai::ProviderKind::Claude => "haiku",
+    }
+    .to_string();
+    Ok(Some(WorkCardGeneratorConfig::Managed { provider, model }))
 }
 
 pub fn background_generation_allowed() -> bool {
@@ -106,7 +189,7 @@ pub struct WorkCardGenerationReport {
 
 pub async fn generate_closed_work_cards(
     pool: &SqlitePool,
-    config: &LocalWorkCardConfig,
+    config: &WorkCardGeneratorConfig,
 ) -> Result<WorkCardGenerationReport, String> {
     let started = Instant::now();
     let items = load_recent_evidence(pool).await?;
@@ -130,7 +213,7 @@ pub async fn generate_closed_work_cards(
     let candidates = windows
         .into_iter()
         .filter(|window| !existing.contains(&window.window_id))
-        .take(config.max_windows)
+        .take(config.max_windows())
         .collect::<Vec<_>>();
     let candidate_windows = candidates.len();
     let client = Client::builder()
@@ -167,7 +250,8 @@ pub async fn generate_closed_work_cards(
             continue;
         }
         let searchable = searchable_card_text(&card);
-        let embedding = if let Some(url) = &config.embedding_url {
+        let (embedding_url, embedding_model) = config.embedding_config();
+        let embedding = if let Some(url) = &embedding_url {
             Some(embed_text(&client, url, &searchable).await?)
         } else {
             None
@@ -182,6 +266,26 @@ pub async fn generate_closed_work_cards(
             .ok()
             .and_then(|value| value.as_str().map(str::to_string))
             .unwrap_or_else(|| "unknown".to_string());
+        let evidence_links = evidence
+            .iter()
+            .flat_map(|item| {
+                item.source_ids
+                    .iter()
+                    .map(move |source_id| (source_id, &item.occurred_at))
+            })
+            .filter_map(|(source_id, occurred_at)| {
+                let source_id = source_id.strip_prefix("local_").unwrap_or(source_id);
+                let (source_type, source_row_id) = source_id.split_once('_')?;
+                matches!(source_type, "frame" | "event")
+                    .then(|| source_row_id.parse::<i64>().ok())
+                    .flatten()
+                    .map(|source_row_id| dystil_storage::WorkCardEvidenceLink {
+                        source_type: source_type.to_string(),
+                        source_row_id,
+                        occurred_at: occurred_at.to_rfc3339(),
+                    })
+            })
+            .collect();
         dystil_storage::upsert_work_card(
             pool,
             &dystil_storage::NewWorkCard {
@@ -199,10 +303,11 @@ pub async fn generate_closed_work_cards(
                 status,
                 uncertainties: card.uncertainties.clone(),
                 card_json: serde_json::to_value(&card).map_err(|error| error.to_string())?,
-                model_id: config.generator_model.clone(),
+                model_id: config.model_id(),
                 source_hash,
-                embedding_model_id: embedding.as_ref().and(config.embedding_model.clone()),
+                embedding_model_id: embedding.as_ref().and(embedding_model),
                 embedding,
+                evidence: evidence_links,
             },
         )
         .await
@@ -221,17 +326,32 @@ pub async fn generate_closed_work_cards(
 
 async fn request_work_card(
     client: &Client,
-    config: &LocalWorkCardConfig,
+    config: &WorkCardGeneratorConfig,
     prompt: &str,
     schema: &serde_json::Value,
     max_tokens: u32,
 ) -> Result<WorkCard, String> {
-    let payload = serde_json::json!({
+    if let WorkCardGeneratorConfig::Managed { provider, model } = config {
+        let runtime = crate::ai::provider_runtime(provider.clone())?;
+        let model = (model != "default").then_some(model.as_str());
+        let response = runtime
+            .run_structured_json_with_model(
+                prompt,
+                schema,
+                std::time::Duration::from_secs(180),
+                model,
+            )
+            .await
+            .map_err(|error| format!("managed work-card generation failed: {error}"))?;
+        return serde_json::from_value(response)
+            .map_err(|error| format!("managed provider returned invalid card JSON: {error}"));
+    }
+    let WorkCardGeneratorConfig::Http(config) = config else {
+        unreachable!("managed configuration is returned above");
+    };
+    let mut payload = serde_json::json!({
         "model": config.generator_model,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.0,
-        "max_tokens": max_tokens,
-        "chat_template_kwargs": {"enable_thinking": false},
         "response_format": {
             "type": "json_schema",
             "json_schema": {
@@ -241,9 +361,28 @@ async fn request_work_card(
             }
         }
     });
-    let response = client
+    if config.openai_compatible {
+        // gpt-5.6-luna requires this for Chat Completions structured output.
+        payload["reasoning_effort"] = serde_json::json!("none");
+    } else {
+        payload["temperature"] = serde_json::json!(0.0);
+        payload["chat_template_kwargs"] = serde_json::json!({"enable_thinking": false});
+    }
+    let token_key = if config.use_max_completion_tokens {
+        "max_completion_tokens"
+    } else {
+        "max_tokens"
+    };
+    payload[token_key] = serde_json::json!(max_tokens);
+    let request = client
         .post(format!("{}/v1/chat/completions", config.generator_url))
-        .json(&payload)
+        .json(&payload);
+    let request = if let Some(api_key) = &config.api_key {
+        request.bearer_auth(api_key)
+    } else {
+        request
+    };
+    let response = request
         .send()
         .await
         .map_err(|error| format!("local generator request failed: {error}"))?
@@ -431,13 +570,16 @@ mod tests {
             .await;
         let report = generate_closed_work_cards(
             &pool,
-            &LocalWorkCardConfig {
+            &WorkCardGeneratorConfig::Http(LocalWorkCardConfig {
                 generator_url: server.uri(),
                 generator_model: "test-model".into(),
+                api_key: None,
+                openai_compatible: false,
+                use_max_completion_tokens: false,
                 embedding_url: None,
                 embedding_model: None,
                 max_windows: 4,
-            },
+            }),
         )
         .await
         .unwrap();

@@ -38,6 +38,7 @@ onnxruntime-win-x64*/
 # ignore environment variables
 .env
 .env.local
+.openai_key
 .local/work-card-eval/
 cloud/.env.docker
 cloud/.env.vm

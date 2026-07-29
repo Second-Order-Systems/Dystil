@@ -4,7 +4,8 @@ use tauri::State;
 
 use crate::recording::RecordingState;
 use crate::work_card_worker::{
-    embed_text, generate_closed_work_cards, LocalWorkCardConfig, WorkCardGenerationReport,
+    configured_work_card_config, embed_text, generate_closed_work_cards, LocalWorkCardConfig,
+    WorkCardGenerationReport,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -128,16 +129,16 @@ pub async fn delete_work_card(
         .map_err(|error| error.to_string())
 }
 
-/// Generate closed local work windows through an explicitly configured local
-/// llama.cpp endpoint. No cloud request is made.
+/// Generate closed activity windows using the active AI choice. Evidence is
+/// sanitized before it reaches a connected provider.
 #[tauri::command]
 #[specta::specta]
 pub async fn generate_work_cards_now(
     state: State<'_, RecordingState>,
 ) -> Result<WorkCardGenerationReport, String> {
-    let config = LocalWorkCardConfig::from_env().ok_or_else(|| {
-        "local work-card model is not configured (set DYSTIL_WORK_CARD_LLM_URL)".to_string()
-    })?;
     let pool = pool(&state).await?;
+    let config = configured_work_card_config(&pool).await?.ok_or_else(|| {
+        "connect an AI provider or enable experimental local processing first".to_string()
+    })?;
     generate_closed_work_cards(&pool, &config).await
 }

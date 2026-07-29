@@ -50,9 +50,7 @@ pub(crate) async fn list_peers() -> Result<AgentPeersResponse, String> {
     response_json(response).await
 }
 
-pub(crate) async fn send(
-    input: &AgentMessageInput,
-) -> Result<AgentMessage, String> {
+pub(crate) async fn send(input: &AgentMessageInput) -> Result<AgentMessage, String> {
     let (client, base, _) = cloud_client().await?;
     let response = client
         .post(format!("{base}/v1/agent/messages"))
@@ -80,16 +78,21 @@ pub(crate) async fn sync(pool: &SqlitePool) -> Result<Vec<AgentMessage>, String>
     for message in &response.messages {
         persist_message(&mut *tx, message, "received").await?;
     }
-    sqlx::query("UPDATE agent_mailbox_state SET cursor = ?1, updated_at = datetime('now') WHERE id = 1")
-        .bind(response.next_cursor)
-        .execute(&mut *tx)
-        .await
-        .map_err(|error| error.to_string())?;
+    sqlx::query(
+        "UPDATE agent_mailbox_state SET cursor = ?1, updated_at = datetime('now') WHERE id = 1",
+    )
+    .bind(response.next_cursor)
+    .execute(&mut *tx)
+    .await
+    .map_err(|error| error.to_string())?;
     tx.commit().await.map_err(|error| error.to_string())?;
     Ok(response.messages)
 }
 
-pub(crate) async fn persist_outgoing(pool: &SqlitePool, message: &AgentMessage) -> Result<(), String> {
+pub(crate) async fn persist_outgoing(
+    pool: &SqlitePool,
+    message: &AgentMessage,
+) -> Result<(), String> {
     let mut tx = pool.begin().await.map_err(|error| error.to_string())?;
     persist_message(&mut *tx, message, "sent").await?;
     tx.commit().await.map_err(|error| error.to_string())
@@ -100,7 +103,11 @@ async fn persist_message(
     message: &AgentMessage,
     status: &str,
 ) -> Result<(), String> {
-    let direction = if status == "sent" { "outgoing" } else { "incoming" };
+    let direction = if status == "sent" {
+        "outgoing"
+    } else {
+        "incoming"
+    };
     let payload = serde_json::to_string(message).map_err(|error| error.to_string())?;
     sqlx::query(
         "INSERT INTO agent_messages (
@@ -112,7 +119,11 @@ async fn persist_message(
     .bind(&message.message_id)
     .bind(&message.conversation_id)
     .bind(message.sequence_id)
-    .bind(if direction == "outgoing" { &message.recipient_user_id } else { &message.sender_user_id })
+    .bind(if direction == "outgoing" {
+        &message.recipient_user_id
+    } else {
+        &message.sender_user_id
+    })
     .bind(direction)
     .bind(message.payload.kind().as_str())
     .bind(status)
@@ -135,12 +146,18 @@ pub(crate) async fn pending_requests(pool: &SqlitePool) -> Result<Vec<AgentMessa
     .await
     .map_err(|error| error.to_string())?;
     rows.into_iter()
-        .map(|row| serde_json::from_str::<AgentMessage>(&row.get::<String, _>("payload_json"))
-            .map_err(|error| error.to_string()))
+        .map(|row| {
+            serde_json::from_str::<AgentMessage>(&row.get::<String, _>("payload_json"))
+                .map_err(|error| error.to_string())
+        })
         .collect()
 }
 
-pub(crate) async fn set_local_status(pool: &SqlitePool, message_id: &str, status: &str) -> Result<(), String> {
+pub(crate) async fn set_local_status(
+    pool: &SqlitePool,
+    message_id: &str,
+    status: &str,
+) -> Result<(), String> {
     sqlx::query("UPDATE agent_messages SET local_status = ?1, updated_at = datetime('now') WHERE message_id = ?2")
         .bind(status)
         .bind(message_id)
@@ -151,13 +168,19 @@ pub(crate) async fn set_local_status(pool: &SqlitePool, message_id: &str, status
 }
 
 pub(crate) async fn preferences(pool: &SqlitePool) -> Result<(String, String), String> {
-    sqlx::query_as::<_, (String, String)>("SELECT provider, model FROM agent_mailbox_state WHERE id = 1")
-        .fetch_one(pool)
-        .await
-        .map_err(|error| error.to_string())
+    sqlx::query_as::<_, (String, String)>(
+        "SELECT provider, model FROM agent_mailbox_state WHERE id = 1",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|error| error.to_string())
 }
 
-pub(crate) async fn set_preferences(pool: &SqlitePool, provider: &str, model: &str) -> Result<(), String> {
+pub(crate) async fn set_preferences(
+    pool: &SqlitePool,
+    provider: &str,
+    model: &str,
+) -> Result<(), String> {
     sqlx::query("UPDATE agent_mailbox_state SET provider = ?1, model = ?2, updated_at = datetime('now') WHERE id = 1")
         .bind(provider)
         .bind(model)
@@ -177,7 +200,10 @@ pub(crate) fn new_request(recipient_user_id: String, question: String) -> AgentM
         turn_index: 0,
         payload: AgentMessagePayload::Request(dystil_protocol::agent_mailbox::AgentRequestBody {
             question,
-            search: dystil_protocol::agent_mailbox::AgentSearchScope { lookback_days: 30, max_cards: 12 },
+            search: dystil_protocol::agent_mailbox::AgentSearchScope {
+                lookback_days: 30,
+                max_cards: 12,
+            },
         }),
     }
 }
@@ -197,13 +223,20 @@ pub(crate) fn new_reply(
     }
 }
 
-async fn response_json<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> Result<T, String> {
+async fn response_json<T: serde::de::DeserializeOwned>(
+    response: reqwest::Response,
+) -> Result<T, String> {
     let status = response.status();
     let bytes = response.bytes().await.map_err(|error| error.to_string())?;
     if !status.is_success() {
         let error = serde_json::from_slice::<serde_json::Value>(&bytes)
             .ok()
-            .and_then(|value| value.get("error").and_then(|value| value.as_str()).map(str::to_owned))
+            .and_then(|value| {
+                value
+                    .get("error")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned)
+            })
             .unwrap_or_else(|| format!("cloud agent request failed with {status}"));
         return Err(error);
     }
@@ -213,8 +246,14 @@ async fn response_json<T: serde::de::DeserializeOwned>(response: reqwest::Respon
 pub(crate) fn websocket_url(base: &str) -> Result<url::Url, String> {
     let mut url = url::Url::parse(base).map_err(|error| error.to_string())?;
     match url.scheme() {
-        "https" => { url.set_scheme("wss").map_err(|_| "invalid cloud WebSocket URL".to_string())?; }
-        "http" => { url.set_scheme("ws").map_err(|_| "invalid cloud WebSocket URL".to_string())?; }
+        "https" => {
+            url.set_scheme("wss")
+                .map_err(|_| "invalid cloud WebSocket URL".to_string())?;
+        }
+        "http" => {
+            url.set_scheme("ws")
+                .map_err(|_| "invalid cloud WebSocket URL".to_string())?;
+        }
         _ => return Err("cloud URL must use http or https".into()),
     }
     url.set_path("/v1/agent/ws");

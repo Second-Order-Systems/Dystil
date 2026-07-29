@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use sqlx::{Row, SqlitePool};
 use tokio::task::JoinHandle;
+use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use dystil_redact::{record_state, sanitize_text, RedactionStatus, TextRedactor};
@@ -34,6 +35,7 @@ const MIN_LEN_FOR_ONNX: usize = 12;
 pub struct RedactionWorker {
     stop: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
+    model: Arc<RwLock<Option<Arc<dyn TextRedactor>>>>,
 }
 
 impl RedactionWorker {
@@ -41,11 +43,24 @@ impl RedactionWorker {
     /// followed by an ONNX pass on the residual. If `None`, regex only.
     pub fn start(pool: SqlitePool, model: Option<Arc<dyn TextRedactor>>) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
-        let join = tokio::spawn(run_worker(pool, model, stop.clone()));
+        let model = Arc::new(RwLock::new(model));
+        let join = tokio::spawn(run_worker(pool, model.clone(), stop.clone()));
         Self {
             stop,
             join: Some(join),
+            model,
         }
+    }
+
+    /// Replace the optional model without stopping capture or the worker.
+    /// Records already persisted safely with deterministic redaction remain
+    /// valid; later pending batches use the newly available model.
+    pub async fn set_model(&self, model: Arc<dyn TextRedactor>) {
+        *self.model.write().await = Some(model);
+    }
+
+    pub fn model_handle(&self) -> Arc<RwLock<Option<Arc<dyn TextRedactor>>>> {
+        self.model.clone()
     }
 
     pub async fn shutdown(mut self) {
@@ -66,7 +81,11 @@ impl Drop for RedactionWorker {
 // Worker loop
 // ---------------------------------------------------------------------------
 
-async fn run_worker(pool: SqlitePool, model: Option<Arc<dyn TextRedactor>>, stop: Arc<AtomicBool>) {
+async fn run_worker(
+    pool: SqlitePool,
+    model: Arc<RwLock<Option<Arc<dyn TextRedactor>>>>,
+    stop: Arc<AtomicBool>,
+) {
     let mut tick = tokio::time::interval(POLL_INTERVAL);
     tick.tick().await; // discard the immediate first tick
 
@@ -79,7 +98,8 @@ async fn run_worker(pool: SqlitePool, model: Option<Arc<dyn TextRedactor>>, stop
             break;
         }
 
-        match process_pending_batch(&pool, model.as_deref()).await {
+        let active_model = model.read().await.clone();
+        match process_pending_batch(&pool, active_model.as_deref()).await {
             Ok(0) => debug!("redaction worker: nothing pending"),
             Ok(n) => info!(processed = n, "redaction worker: batch complete"),
             Err(e) => warn!("redaction worker: batch error: {}", e),

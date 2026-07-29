@@ -26,13 +26,14 @@ use tracing_oslog::OsLogger;
 use updates::start_update_check;
 use window::ShowRewindWindow;
 
-mod app_config;
-mod ai;
 mod agent_commands;
 mod agent_mailbox;
 mod agent_worker;
+mod ai;
+mod app_config;
 mod auth;
 mod build_capabilities;
+mod byok;
 mod capture_config;
 mod capture_policy;
 mod capture_session;
@@ -70,10 +71,11 @@ mod work_cards;
 #[cfg(feature = "cloud-sync")]
 mod work_insights_engine;
 
-pub use auth::*;
-pub use ai::*;
 pub use agent_commands::*;
+pub use ai::*;
+pub use auth::*;
 pub use build_capabilities::*;
+pub use byok::*;
 pub use server::*;
 
 pub use recording::*;
@@ -737,6 +739,9 @@ async fn main() {
                 error!("Failed to init onboarding store, using defaults: {}", e);
                 store::OnboardingStore::default()
             });
+            if onboarding_store.local_processing_enabled {
+                std::env::set_var("DYSTIL_LOCAL_PROCESSING_ENABLED", "1");
+            }
             app.manage(onboarding_store.clone());
 
             // Show the main home window for manual launches. OS autostart

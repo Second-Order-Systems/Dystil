@@ -6,12 +6,11 @@ use anyhow::{Context, Result};
 use chrono::Duration;
 use clap::{Parser, Subcommand};
 use dystil_work_cards::{
-    atom_json_schema, build_atom_prompt, build_card_prompt_from_atoms, build_evidence_windows,
-    build_work_card_prompt, chunk_reduced_window, compact_window, merge_atoms,
-    reduce_window_before_budget, sanitize_work_card, validate_atoms, validate_work_card,
-    ChunkConfig, CompactedWindow, CompactionConfig, DistilledEvidenceChunk, EvidenceChunk,
-    ExportedSegment, GeneratedAtoms, GeneratedWorkCard, MergedAtoms, PreBudgetReductionConfig,
-    PromptConfig, PromptRecord, ReducedEvidenceWindow, ValidationReport, WindowConfig,
+    build_evidence_windows, build_work_card_prompt, chunk_reduced_window, compact_window,
+    reduce_window_before_budget, sanitize_work_card, validate_work_card, ChunkConfig,
+    CompactedWindow, CompactionConfig, ExportedSegment, GeneratedWorkCard,
+    PreBudgetReductionConfig, PromptConfig, PromptRecord, ReducedEvidenceWindow, ValidationReport,
+    WindowConfig,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -49,34 +48,6 @@ enum Command {
         hard_max_tokens: u32,
         #[arg(long, default_value_t = 400)]
         overlap_tokens: u32,
-    },
-    AtomPrompts {
-        #[arg(long)]
-        input: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
-    },
-    ValidateAtoms {
-        #[arg(long)]
-        chunks: PathBuf,
-        #[arg(long)]
-        generated: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
-    },
-    MergeAtoms {
-        #[arg(long)]
-        generated: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
-    },
-    CardPromptsFromAtoms {
-        #[arg(long)]
-        reduced: PathBuf,
-        #[arg(long)]
-        atoms: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
     },
     Compact {
         #[arg(long)]
@@ -148,23 +119,6 @@ struct ValidationRecord {
     report: ValidationReport,
 }
 
-#[derive(Debug, Serialize)]
-struct AtomPromptRecord {
-    window_id: String,
-    chunk_id: String,
-    prompt: String,
-    schema: serde_json::Value,
-    evidence: Vec<dystil_work_cards::CompactedEvidence>,
-}
-
-#[derive(Debug, Serialize, serde::Deserialize)]
-struct AtomValidationRecord {
-    window_id: String,
-    chunk_id: String,
-    report: dystil_work_cards::AtomValidationReport,
-    atoms: DistilledEvidenceChunk,
-}
-
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Reduce {
@@ -195,18 +149,6 @@ fn main() -> Result<()> {
                 overlap_tokens,
             },
         ),
-        Command::AtomPrompts { input, output } => atom_prompts(&input, &output),
-        Command::ValidateAtoms {
-            chunks,
-            generated,
-            output,
-        } => validate_atoms_file(&chunks, &generated, &output),
-        Command::MergeAtoms { generated, output } => merge_atoms_file(&generated, &output),
-        Command::CardPromptsFromAtoms {
-            reduced,
-            atoms,
-            output,
-        } => card_prompts_from_atoms(&reduced, &atoms, &output),
         Command::Compact {
             input,
             output,
@@ -296,83 +238,6 @@ fn chunk(input: &Path, output: &Path, config: ChunkConfig) -> Result<()> {
     Ok(())
 }
 
-fn atom_prompts(input: &Path, output: &Path) -> Result<()> {
-    let chunks: Vec<EvidenceChunk> = read_jsonl(input)?;
-    let records = chunks
-        .iter()
-        .map(|chunk| AtomPromptRecord {
-            window_id: chunk.window_id.clone(),
-            chunk_id: chunk.chunk_id.clone(),
-            prompt: build_atom_prompt(chunk),
-            schema: atom_json_schema(chunk),
-            evidence: chunk.evidence.clone(),
-        })
-        .collect::<Vec<_>>();
-    write_jsonl(output, &records)
-}
-
-fn validate_atoms_file(chunks: &Path, generated: &Path, output: &Path) -> Result<()> {
-    let chunks: Vec<EvidenceChunk> = read_jsonl(chunks)?;
-    let lookup = chunks
-        .into_iter()
-        .map(|c| (c.chunk_id.clone(), c))
-        .collect::<std::collections::HashMap<_, _>>();
-    let generated: Vec<GeneratedAtoms> = read_jsonl(generated)?;
-    let mut records = Vec::new();
-    for mut record in generated {
-        let chunk = lookup
-            .get(&record.chunk_id)
-            .with_context(|| format!("unknown chunk {}", record.chunk_id))?;
-        let report = validate_atoms(chunk, &mut record.atoms);
-        records.push(AtomValidationRecord {
-            window_id: record.window_id,
-            chunk_id: record.chunk_id,
-            report,
-            atoms: record.atoms,
-        });
-    }
-    write_jsonl(output, &records)
-}
-
-fn merge_atoms_file(generated: &Path, output: &Path) -> Result<()> {
-    let records: Vec<AtomValidationRecord> = read_jsonl(generated)?;
-    let mut by_window = std::collections::BTreeMap::<String, Vec<DistilledEvidenceChunk>>::new();
-    for record in records {
-        by_window
-            .entry(record.window_id)
-            .or_default()
-            .push(record.atoms);
-    }
-    let merged = by_window
-        .into_iter()
-        .map(|(id, chunks)| merge_atoms(id, chunks))
-        .collect::<Vec<_>>();
-    write_jsonl(output, &merged)
-}
-
-fn card_prompts_from_atoms(reduced: &Path, atoms: &Path, output: &Path) -> Result<()> {
-    let reduced: Vec<ReducedEvidenceWindow> = read_jsonl(reduced)?;
-    let atoms: Vec<MergedAtoms> = read_jsonl(atoms)?;
-    let lookup = atoms
-        .into_iter()
-        .map(|a| (a.window_id.clone(), a))
-        .collect::<std::collections::HashMap<_, _>>();
-    let prompts = reduced
-        .into_iter()
-        .map(|record| {
-            let atoms = lookup
-                .get(&record.window.window_id)
-                .with_context(|| format!("missing atoms {}", record.window.window_id))?;
-            Ok(PromptRecord {
-                window_id: record.window.window_id.clone(),
-                prompt: build_card_prompt_from_atoms(&record.window, atoms),
-                evidence: record.evidence,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    write_jsonl(output, &prompts)
-}
-
 fn persist(database: &Path, compacted: &Path, generated: &Path) -> Result<()> {
     let compacted: Vec<CompactedWindow> = read_jsonl(compacted)?;
     let mut generated: Vec<GeneratedWorkCard> = read_jsonl(generated)?;
@@ -425,6 +290,7 @@ fn persist(database: &Path, compacted: &Path, generated: &Path) -> Result<()> {
                     source_hash,
                     embedding_model_id: None,
                     embedding: None,
+                    evidence: vec![],
                 },
             )
             .await?;

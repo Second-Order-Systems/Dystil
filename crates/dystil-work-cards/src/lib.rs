@@ -4,10 +4,6 @@
 //! turns capture evidence into bounded, deterministic model inputs and
 //! validates generated cards against the evidence that was actually observed.
 
-mod atom_merge;
-mod atom_prompt;
-mod atom_validation;
-mod atoms;
 mod chunking;
 mod compaction;
 mod prebudget;
@@ -17,12 +13,6 @@ mod schema;
 mod validation;
 mod windowing;
 
-pub use atom_merge::merge_atoms;
-pub use atom_prompt::{atom_json_schema, build_atom_prompt, build_card_prompt_from_atoms};
-pub use atom_validation::{validate_atoms, AtomValidationReport};
-pub use atoms::{
-    DistilledAtom, DistilledEventType, DistilledEvidenceChunk, GeneratedAtoms, MergedAtoms,
-};
 pub use chunking::{chunk_reduced_window, ChunkConfig, ChunkingStats, EvidenceChunk};
 pub use compaction::{compact_window, CompactionConfig, CompactionStats};
 pub use prebudget::{

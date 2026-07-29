@@ -24,6 +24,7 @@ fn card() -> NewWorkCard {
         source_hash: "sha256:test".into(),
         embedding_model_id: None,
         embedding: None,
+        evidence: vec![],
     }
 }
 
@@ -39,11 +40,24 @@ async fn stdio_server_handles_initialize_and_returns_a_derived_card() {
     let database = directory.path().join("db.sqlite");
     let pool = open_capture_database(&database).await.unwrap();
     upsert_work_card(&pool, &card()).await.unwrap();
+    sqlx::query(
+        "INSERT INTO frames(timestamp, frame_text) VALUES ('2026-07-17T09:05:00Z', 'Investigated MCP activity retrieval')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     // Keep Dystil's normal writer pool alive while the sidecar opens its own
     // read-only connection, matching the real desktop process arrangement.
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_dystil-mcp"))
-        .args(["--database", database.to_str().unwrap()])
+        .args([
+            "--database",
+            database.to_str().unwrap(),
+            "--access",
+            "activity",
+            "--max-calls",
+            "2",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -57,10 +71,12 @@ async fn stdio_server_handles_initialize_and_returns_a_derived_card() {
         .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n")
         .await
         .unwrap();
-    assert_eq!(
-        read_json_line(&mut lines).await["result"]["serverInfo"]["name"],
-        "dystil"
-    );
+    let initialized = read_json_line(&mut lines).await;
+    assert_eq!(initialized["result"]["serverInfo"]["name"], "dystil");
+    assert!(initialized["result"]["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("preferred source"));
 
     let request = json!({
         "jsonrpc":"2.0", "id":2, "method":"tools/call",
@@ -74,6 +90,32 @@ async fn stdio_server_handles_initialize_and_returns_a_derived_card() {
     let content = response["result"]["content"][0]["text"].as_str().unwrap();
     assert!(content.contains("Reviewed auth rollout"));
     assert!(!content.contains("frame_text"));
+
+    let request = json!({
+        "jsonrpc":"2.0", "id":3, "method":"tools/call",
+        "params":{"name":"dystil_search_activity","arguments":{"query":"MCP activity"}}
+    });
+    stdin
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .unwrap();
+    let response = read_json_line(&mut lines).await;
+    let content = response["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(content.contains("Investigated MCP activity retrieval"));
+
+    let request = json!({
+        "jsonrpc":"2.0", "id":4, "method":"tools/call",
+        "params":{"name":"dystil_get_work_card","arguments":{"card_id":"card-1"}}
+    });
+    stdin
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .unwrap();
+    let response = read_json_line(&mut lines).await;
+    assert_eq!(
+        response["error"]["message"],
+        "retrieval call budget exhausted"
+    );
 
     drop(stdin);
     let status = child.wait().await.unwrap();

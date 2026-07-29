@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use std::collections::HashMap;
 
+use crate::ActivityRecord;
 use crate::StorageError;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -23,6 +24,15 @@ pub struct NewWorkCard {
     pub source_hash: String,
     pub embedding_model_id: Option<String>,
     pub embedding: Option<Vec<f32>>,
+    #[serde(default)]
+    pub evidence: Vec<WorkCardEvidenceLink>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkCardEvidenceLink {
+    pub source_type: String,
+    pub source_row_id: i64,
+    pub occurred_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -131,8 +141,63 @@ pub async fn upsert_work_card(pool: &SqlitePool, card: &NewWorkCard) -> Result<(
     .bind(&card.last_observed_state)
     .execute(&mut *tx)
     .await?;
+    sqlx::query("DELETE FROM work_card_evidence WHERE card_id = ?1")
+        .bind(&card.window_id)
+        .execute(&mut *tx)
+        .await?;
+    for evidence in &card.evidence {
+        if !matches!(evidence.source_type.as_str(), "frame" | "event") {
+            continue;
+        }
+        sqlx::query(
+            "INSERT OR IGNORE INTO work_card_evidence(card_id, source_type, source_row_id, occurred_at)
+             VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(&card.window_id)
+        .bind(&evidence.source_type)
+        .bind(evidence.source_row_id)
+        .bind(&evidence.occurred_at)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     Ok(())
+}
+
+/// Return the retrieval-safe activity records that were used to generate a
+/// card. Missing/expired source rows are simply omitted.
+pub async fn get_work_card_evidence(
+    pool: &SqlitePool,
+    card_id: &str,
+    limit: u32,
+) -> Result<Vec<ActivityRecord>, StorageError> {
+    let rows = sqlx::query(
+        "SELECT d.source_type, d.source_row_id, d.timestamp, d.app_name, d.window_name, d.browser_url, d.text
+         FROM work_card_evidence e
+         JOIN activity_search_documents d
+           ON d.source_type = e.source_type AND d.source_row_id = e.source_row_id
+         WHERE e.card_id = ?1
+         ORDER BY datetime(e.occurred_at), d.id
+         LIMIT ?2",
+    )
+    .bind(card_id)
+    .bind(limit.clamp(1, 80) as i64)
+    .fetch_all(pool)
+    .await?;
+    rows.iter()
+        .map(|row| {
+            let source_type: String = row.try_get("source_type")?;
+            let source_row_id: i64 = row.try_get("source_row_id")?;
+            Ok(ActivityRecord {
+                source_id: format!("{source_type}:{source_row_id}"),
+                timestamp: row.try_get("timestamp")?,
+                app_name: row.try_get("app_name")?,
+                window_name: row.try_get("window_name")?,
+                browser_url: row.try_get("browser_url")?,
+                text: row.try_get("text")?,
+            })
+        })
+        .collect()
 }
 
 pub async fn list_work_cards(
@@ -502,6 +567,7 @@ mod tests {
             source_hash: "sha256:test".into(),
             embedding_model_id: Some("embedder".into()),
             embedding: Some(vec![0.25, -0.5]),
+            evidence: vec![],
         }
     }
 
@@ -544,6 +610,34 @@ mod tests {
             .unwrap()
             .is_empty());
         assert_eq!(list_work_cards(&pool, 10).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn work_card_evidence_resolves_only_search_projection_records() {
+        let directory = tempdir().unwrap();
+        let pool = open_capture_database(directory.path().join("capture.sqlite"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO frames(timestamp, frame_text) VALUES ('2026-07-17T09:00:00Z', 'Investigated card evidence')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut stored = card("win_evidence", "Evidence card", "Uses source link");
+        stored.evidence = vec![WorkCardEvidenceLink {
+            source_type: "frame".into(),
+            source_row_id: 1,
+            occurred_at: "2026-07-17T09:00:00Z".into(),
+        }];
+        upsert_work_card(&pool, &stored).await.unwrap();
+
+        let evidence = get_work_card_evidence(&pool, "win_evidence", 10)
+            .await
+            .unwrap();
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].source_id, "frame:1");
+        assert_eq!(evidence[0].text, "Investigated card evidence");
     }
 
     #[tokio::test]

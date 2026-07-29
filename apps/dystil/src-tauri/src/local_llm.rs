@@ -55,6 +55,15 @@ struct ManagedServer {
 
 impl ManagedServer {
     fn spawn(binary: &str, model_path: &str, port: u16, embed: bool) -> Result<Self, String> {
+        // Do not treat a health response from an unrelated prior process as
+        // this manager's own server. A stale dev instance otherwise makes the
+        // child exit while the subsequent health check falsely reports ready.
+        std::net::TcpListener::bind(("127.0.0.1", port)).map_err(|_| {
+            format!(
+                "local {kind} port {port} is already in use; close the other Dystil instance and try again",
+                kind = if embed { "embedder" } else { "generator" }
+            )
+        })?;
         let mut args: Vec<String> = vec![
             "-m".into(),
             model_path.into(),
@@ -76,11 +85,7 @@ impl ManagedServer {
                 "1024".into(),
             ]);
         } else {
-            args.extend_from_slice(&[
-                "--no-mmproj".into(),
-                "--ctx-size".into(),
-                "16384".into(),
-            ]);
+            args.extend_from_slice(&["--no-mmproj".into(), "--ctx-size".into(), "16384".into()]);
         }
         let kind = if embed { "embedder" } else { "generator" };
         let child = Command::new(binary)
@@ -116,7 +121,9 @@ fn bundled_bin_dir() -> PathBuf {
     }
     #[cfg(debug_assertions)]
     dirs.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries"));
-    dirs.into_iter().next().unwrap_or_else(|| PathBuf::from("."))
+    dirs.into_iter()
+        .next()
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn llama_server_name() -> String {
@@ -129,17 +136,16 @@ fn llama_server_name() -> String {
 
 fn find_llama_server_on_path() -> Option<String> {
     let name = llama_server_name();
-    std::env::var_os("PATH")
-        .and_then(|path| {
-            std::env::split_paths(&path).find_map(|dir| {
-                let candidate = dir.join(&name);
-                if candidate.is_file() {
-                    Some(candidate.to_string_lossy().to_string())
-                } else {
-                    None
-                }
-            })
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path).find_map(|dir| {
+            let candidate = dir.join(&name);
+            if candidate.is_file() {
+                Some(candidate.to_string_lossy().to_string())
+            } else {
+                None
+            }
         })
+    })
 }
 
 fn find_llama_server_bundled() -> Option<String> {
@@ -153,8 +159,7 @@ fn find_llama_server_bundled() -> Option<String> {
 }
 
 fn find_llama_server() -> Option<String> {
-    find_llama_server_on_path()
-        .or_else(find_llama_server_bundled)
+    find_llama_server_on_path().or_else(find_llama_server_bundled)
 }
 
 async fn download_llama_server(bin_dir: &Path) -> Result<String, String> {
@@ -187,19 +192,24 @@ async fn download_llama_server(bin_dir: &Path) -> Result<String, String> {
     let file = std::fs::File::open(&zip_path).map_err(|e| format!("open zip: {e}"))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("read zip: {e}"))?;
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).map_err(|e| format!("zip entry {i}: {e}"))?;
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("zip entry {i}: {e}"))?;
         let entry_name = entry.name().to_string();
         let entry_path = Path::new(&entry_name);
-        if entry_path.file_name().map(|n| n == server_name.as_str()).unwrap_or(false) {
-            let mut out = std::fs::File::create(&dest)
-                .map_err(|e| format!("create {dest:?}: {e}"))?;
+        if entry_path
+            .file_name()
+            .map(|n| n == server_name.as_str())
+            .unwrap_or(false)
+        {
+            let mut out =
+                std::fs::File::create(&dest).map_err(|e| format!("create {dest:?}: {e}"))?;
             std::io::copy(&mut entry, &mut out)
                 .map_err(|e| format!("extract {entry_name}: {e}"))?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
-                    .ok();
+                std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).ok();
             }
             info!("llama-server extracted to {dest:?}");
             let _ = std::fs::remove_file(&zip_path);
@@ -207,6 +217,16 @@ async fn download_llama_server(bin_dir: &Path) -> Result<String, String> {
         }
     }
     Err("llama-server binary not found in downloaded archive".into())
+}
+
+async fn resolve_llama_server(data_dir: &Path) -> Result<String, String> {
+    match find_llama_server() {
+        Some(binary) => Ok(binary),
+        None => {
+            info!("llama-server not on PATH — attempting download");
+            download_llama_server(&data_dir.join("bin")).await
+        }
+    }
 }
 
 // ── Model downloads ────────────────────────────────────────────────
@@ -248,8 +268,7 @@ async fn download_model(models_dir: &Path, repo: &str, filename: &str) -> Result
             .map_err(|e| format!("read {filename} failed: {e}"))?,
     );
     {
-        let mut file = std::fs::File::create(&tmp)
-            .map_err(|e| format!("create {tmp:?}: {e}"))?;
+        let mut file = std::fs::File::create(&tmp).map_err(|e| format!("create {tmp:?}: {e}"))?;
         std::io::copy(&mut stream, &mut file)
             .map_err(|e| format!("write {filename} failed: {e}"))?;
     }
@@ -277,7 +296,9 @@ async fn wait_for_server(port: u16, kind: &str) -> Result<(), String> {
             }
         }
     }
-    Err(format!("{kind} server on port {port} did not become healthy after {HEALTH_CHECK_RETRIES} tries"))
+    Err(format!(
+        "{kind} server on port {port} did not become healthy after {HEALTH_CHECK_RETRIES} tries"
+    ))
 }
 
 // ── Public API ─────────────────────────────────────────────────────
@@ -288,85 +309,93 @@ pub struct LocalLlmManager {
 }
 
 impl LocalLlmManager {
-    pub async fn start(data_dir: &Path) -> Self {
+    /// The embedder is always local retrieval infrastructure. The generator is
+    /// optional experimental enrichment and is controlled independently.
+    pub async fn start(data_dir: &Path, enable_generator: bool) -> Self {
         if std::env::var("DYSTIL_WORK_CARD_LLM_URL").is_ok() {
             info!("DYSTIL_WORK_CARD_LLM_URL already set — using external endpoint");
-            return Self { generator: None, embedder: None };
+            return Self {
+                generator: None,
+                embedder: None,
+            };
         }
 
         let models_dir = data_dir.join("models");
         if let Err(e) = std::fs::create_dir_all(&models_dir) {
             warn!("failed to create models dir {models_dir:?}: {e}");
-            return Self { generator: None, embedder: None };
+            return Self {
+                generator: None,
+                embedder: None,
+            };
         }
 
-        // Find or download llama-server binary
-        let binary = match find_llama_server() {
-            Some(b) => b,
-            None => {
-                info!("llama-server not on PATH — attempting download");
-                let bin_dir = data_dir.join("bin");
-                match download_llama_server(&bin_dir).await {
-                    Ok(b) => b,
-                    Err(e) => {
-                        warn!("{e} — local LLM unavailable; set DYSTIL_WORK_CARD_LLM_URL to use an external endpoint");
-                        return Self { generator: None, embedder: None };
-                    }
-                }
+        let binary = match resolve_llama_server(data_dir).await {
+            Ok(binary) => binary,
+            Err(error) => {
+                warn!("{error} — local embedding unavailable");
+                return Self {
+                    generator: None,
+                    embedder: None,
+                };
             }
         };
 
-        // Download models in parallel
-        let (gen_res, emb_res) = tokio::join!(
-            download_model(&models_dir, GENERATOR_MODEL_REPO, GENERATOR_MODEL_FILENAME),
-            download_model(&models_dir, EMBEDDER_MODEL_REPO, EMBEDDER_MODEL_FILENAME),
-        );
-
-        if let Err(ref e) = gen_res {
-            warn!("generator model download failed: {e} — work card generation disabled");
-        }
-        let generator = gen_res.ok().and_then(|path| {
-            ManagedServer::spawn(&binary, &path, GENERATOR_PORT, false)
-                .map_err(|e| warn!("failed to spawn generator: {e}"))
-                .ok()
-        });
-
-        if let Err(ref e) = emb_res {
-            warn!("embedder model download failed: {e}");
-        }
-        let embedder = emb_res.ok().and_then(|path| {
-            ManagedServer::spawn(&binary, &path, EMBEDDER_PORT, true)
-                .map_err(|e| warn!("failed to spawn embedder: {e}"))
-                .ok()
-        });
-
-        if let Some(ref server) = generator {
-            if let Err(e) = wait_for_server(server.port(), "generator").await {
-                warn!("{e}");
-            } else {
-                std::env::set_var(
-                    "DYSTIL_WORK_CARD_LLM_URL",
-                    format!("http://127.0.0.1:{GENERATOR_PORT}"),
-                );
-                std::env::set_var("DYSTIL_WORK_CARD_LLM_MODEL", GENERATOR_MODEL_ID);
-                info!("local generator endpoint ready at port {GENERATOR_PORT}");
-            }
-        }
-
+        let embedder =
+            match download_model(&models_dir, EMBEDDER_MODEL_REPO, EMBEDDER_MODEL_FILENAME).await {
+                Ok(path) => ManagedServer::spawn(&binary, &path, EMBEDDER_PORT, true)
+                    .map_err(|error| warn!("failed to spawn embedder: {error}"))
+                    .ok(),
+                Err(error) => {
+                    warn!("embedder model download failed: {error}");
+                    None
+                }
+            };
         if let Some(ref server) = embedder {
-            if let Err(e) = wait_for_server(server.port(), "embedder").await {
-                warn!("{e}");
+            if let Err(error) = wait_for_server(server.port(), "embedder").await {
+                warn!("{error}");
             } else {
                 std::env::set_var(
                     "DYSTIL_WORK_CARD_EMBEDDING_URL",
                     format!("http://127.0.0.1:{EMBEDDER_PORT}"),
                 );
                 std::env::set_var("DYSTIL_WORK_CARD_EMBEDDING_MODEL", EMBEDDER_MODEL_ID);
-                info!("local embedder endpoint ready at port {EMBEDDER_PORT}");
             }
         }
 
-        Self { generator, embedder }
+        let mut manager = Self {
+            generator: None,
+            embedder,
+        };
+        if enable_generator {
+            if let Err(error) = manager.enable_generator(data_dir).await {
+                warn!("generator unavailable: {error}");
+            }
+        }
+        manager
+    }
+
+    pub async fn enable_generator(&mut self, data_dir: &Path) -> Result<(), String> {
+        if self.generator.is_some() && self.is_generator_ready() {
+            return Ok(());
+        }
+        let models_dir = data_dir.join("models");
+        std::fs::create_dir_all(&models_dir)
+            .map_err(|error| format!("failed to create models directory: {error}"))?;
+        let binary = resolve_llama_server(data_dir).await?;
+        let path =
+            download_model(&models_dir, GENERATOR_MODEL_REPO, GENERATOR_MODEL_FILENAME).await?;
+        let server = ManagedServer::spawn(&binary, &path, GENERATOR_PORT, false)?;
+        if let Err(error) = wait_for_server(server.port(), "generator").await {
+            return Err(error);
+        }
+        std::env::set_var(
+            "DYSTIL_WORK_CARD_LLM_URL",
+            format!("http://127.0.0.1:{GENERATOR_PORT}"),
+        );
+        std::env::set_var("DYSTIL_WORK_CARD_LLM_MODEL", GENERATOR_MODEL_ID);
+        info!("local generator endpoint ready at port {GENERATOR_PORT}");
+        self.generator = Some(server);
+        Ok(())
     }
 
     pub async fn shutdown(&mut self) {
@@ -378,7 +407,15 @@ impl LocalLlmManager {
         }
     }
 
+    pub async fn disable_generator(&mut self) {
+        if let Some(mut generator) = self.generator.take() {
+            generator.shutdown().await;
+        }
+        std::env::remove_var("DYSTIL_WORK_CARD_LLM_URL");
+        std::env::remove_var("DYSTIL_WORK_CARD_LLM_MODEL");
+    }
+
     pub fn is_generator_ready(&self) -> bool {
-        std::env::var("DYSTIL_WORK_CARD_LLM_URL").is_ok()
+        self.generator.is_some() && std::env::var("DYSTIL_WORK_CARD_LLM_URL").is_ok()
     }
 }

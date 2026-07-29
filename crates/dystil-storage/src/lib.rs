@@ -12,12 +12,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use thiserror::Error;
 
+mod activity_search;
 mod work_cards;
 
+pub use activity_search::{get_activity_context, search_activity, ActivityRecord};
 pub use work_cards::{
-    delete_work_card, get_work_card, hybrid_search_work_cards, hybrid_search_work_cards_range,
-    list_work_cards, list_work_cards_range, search_work_cards, search_work_cards_range,
-    upsert_work_card, NewWorkCard, StoredWorkCard,
+    delete_work_card, get_work_card, get_work_card_evidence, hybrid_search_work_cards,
+    hybrid_search_work_cards_range, list_work_cards, list_work_cards_range, search_work_cards,
+    search_work_cards_range, upsert_work_card, NewWorkCard, StoredWorkCard, WorkCardEvidenceLink,
 };
 
 #[derive(Debug, Error)]
@@ -222,6 +224,120 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
     )
     .execute(&mut *tx)
     .await?;
+    // A deliberately narrow projection of capture rows for retrieval. This is
+    // separate from the raw tables so callers never need arbitrary SQL or an
+    // accessibility-tree/screenshot interface.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS activity_search_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_type TEXT NOT NULL CHECK (source_type IN ('frame', 'event')),
+            source_row_id INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            app_name TEXT,
+            window_name TEXT,
+            browser_url TEXT,
+            text TEXT NOT NULL,
+            UNIQUE(source_type, source_row_id)
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_activity_search_documents_time
+         ON activity_search_documents(timestamp, id)",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS activity_search_fts USING fts5(
+            text, app_name, window_name, browser_url,
+            content='activity_search_documents', content_rowid='id',
+            tokenize = 'unicode61 remove_diacritics 2'
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    for statement in [
+        "CREATE TRIGGER IF NOT EXISTS activity_search_documents_ai AFTER INSERT ON activity_search_documents BEGIN
+            INSERT INTO activity_search_fts(rowid, text, app_name, window_name, browser_url)
+            VALUES (new.id, new.text, new.app_name, new.window_name, new.browser_url);
+         END",
+        "CREATE TRIGGER IF NOT EXISTS activity_search_documents_ad AFTER DELETE ON activity_search_documents BEGIN
+            INSERT INTO activity_search_fts(activity_search_fts, rowid, text, app_name, window_name, browser_url)
+            VALUES ('delete', old.id, old.text, old.app_name, old.window_name, old.browser_url);
+         END",
+        "CREATE TRIGGER IF NOT EXISTS activity_search_documents_au AFTER UPDATE ON activity_search_documents BEGIN
+            INSERT INTO activity_search_fts(activity_search_fts, rowid, text, app_name, window_name, browser_url)
+            VALUES ('delete', old.id, old.text, old.app_name, old.window_name, old.browser_url);
+            INSERT INTO activity_search_fts(rowid, text, app_name, window_name, browser_url)
+            VALUES (new.id, new.text, new.app_name, new.window_name, new.browser_url);
+         END",
+        "CREATE TRIGGER IF NOT EXISTS frames_activity_search_ai AFTER INSERT ON frames BEGIN
+            INSERT OR REPLACE INTO activity_search_documents(source_type, source_row_id, timestamp, app_name, window_name, browser_url, text)
+            SELECT 'frame', new.id, new.timestamp, new.app_name, new.window_name, new.browser_url, new.frame_text
+            WHERE trim(coalesce(new.frame_text, '')) <> '';
+         END",
+        "CREATE TRIGGER IF NOT EXISTS frames_activity_search_au AFTER UPDATE ON frames BEGIN
+            DELETE FROM activity_search_documents WHERE source_type = 'frame' AND source_row_id = new.id;
+            INSERT INTO activity_search_documents(source_type, source_row_id, timestamp, app_name, window_name, browser_url, text)
+            SELECT 'frame', new.id, new.timestamp, new.app_name, new.window_name, new.browser_url, new.frame_text
+            WHERE trim(coalesce(new.frame_text, '')) <> '';
+         END",
+        "CREATE TRIGGER IF NOT EXISTS frames_activity_search_ad AFTER DELETE ON frames BEGIN
+            DELETE FROM activity_search_documents WHERE source_type = 'frame' AND source_row_id = old.id;
+         END",
+        "CREATE TRIGGER IF NOT EXISTS events_activity_search_ai AFTER INSERT ON ui_events BEGIN
+            INSERT OR REPLACE INTO activity_search_documents(source_type, source_row_id, timestamp, app_name, window_name, browser_url, text)
+            SELECT 'event', new.id, new.timestamp, new.app_name, new.window_title, new.browser_url,
+                trim(coalesce(new.text_content, '') || ' ' || coalesce(new.element_name, '') || ' ' || coalesce(new.element_value, '') || ' ' || coalesce(new.element_description, ''))
+            WHERE trim(coalesce(new.text_content, '') || coalesce(new.element_name, '') || coalesce(new.element_value, '') || coalesce(new.element_description, '')) <> '';
+         END",
+        "CREATE TRIGGER IF NOT EXISTS events_activity_search_au AFTER UPDATE ON ui_events BEGIN
+            DELETE FROM activity_search_documents WHERE source_type = 'event' AND source_row_id = new.id;
+            INSERT INTO activity_search_documents(source_type, source_row_id, timestamp, app_name, window_name, browser_url, text)
+            SELECT 'event', new.id, new.timestamp, new.app_name, new.window_title, new.browser_url,
+                trim(coalesce(new.text_content, '') || ' ' || coalesce(new.element_name, '') || ' ' || coalesce(new.element_value, '') || ' ' || coalesce(new.element_description, ''))
+            WHERE trim(coalesce(new.text_content, '') || coalesce(new.element_name, '') || coalesce(new.element_value, '') || coalesce(new.element_description, '')) <> '';
+         END",
+        "CREATE TRIGGER IF NOT EXISTS events_activity_search_ad AFTER DELETE ON ui_events BEGIN
+            DELETE FROM activity_search_documents WHERE source_type = 'event' AND source_row_id = old.id;
+         END",
+    ] {
+        sqlx::query(statement).execute(&mut *tx).await?;
+    }
+    // Backfill databases created before the search projection was introduced.
+    sqlx::query(
+        "INSERT OR IGNORE INTO activity_search_documents(source_type, source_row_id, timestamp, app_name, window_name, browser_url, text)
+         SELECT 'frame', id, timestamp, app_name, window_name, browser_url, frame_text
+         FROM frames WHERE trim(coalesce(frame_text, '')) <> ''",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT OR IGNORE INTO activity_search_documents(source_type, source_row_id, timestamp, app_name, window_name, browser_url, text)
+         SELECT 'event', id, timestamp, app_name, window_title, browser_url,
+             trim(coalesce(text_content, '') || ' ' || coalesce(element_name, '') || ' ' || coalesce(element_value, '') || ' ' || coalesce(element_description, ''))
+         FROM ui_events
+         WHERE trim(coalesce(text_content, '') || coalesce(element_name, '') || coalesce(element_value, '') || coalesce(element_description, '')) <> ''",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS work_card_evidence (
+            card_id TEXT NOT NULL REFERENCES work_cards(window_id) ON DELETE CASCADE,
+            source_type TEXT NOT NULL CHECK (source_type IN ('frame', 'event')),
+            source_row_id INTEGER NOT NULL,
+            occurred_at TEXT NOT NULL,
+            PRIMARY KEY (card_id, source_type, source_row_id)
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_work_card_evidence_card ON work_card_evidence(card_id, occurred_at)",
+    )
+    .execute(&mut *tx)
+    .await?;
     // Collaboration state is local UI/audit state. It intentionally contains
     // only exchanged derived answers, never raw accessibility evidence.
     sqlx::query(
@@ -305,6 +421,28 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
     )
     .execute(&mut *tx)
     .await?;
+    // Only non-secret BYOK metadata belongs in SQLite. The API key is held by
+    // the operating-system credential store under this profile ID.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS ai_provider_profiles (
+            id TEXT PRIMARY KEY,
+            provider_kind TEXT NOT NULL CHECK (provider_kind IN ('openai_compatible')),
+            endpoint TEXT NOT NULL,
+            chat_model TEXT NOT NULL,
+            work_card_model TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_provider_profiles_active
+         ON ai_provider_profiles(active) WHERE active = 1",
+    )
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -326,7 +464,9 @@ pub fn get_or_create_machine_id(data_dir: impl AsRef<Path>) -> Result<String, St
 
 #[cfg(test)]
 mod tests {
-    use super::{initialize_capture_schema, open_capture_database};
+    use super::{
+        get_activity_context, initialize_capture_schema, open_capture_database, search_activity,
+    };
     use sqlx::sqlite::SqlitePoolOptions;
     use tempfile::tempdir;
 
@@ -371,5 +511,39 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn indexes_activity_and_keeps_context_bounded() {
+        let directory = tempdir().unwrap();
+        let pool = open_capture_database(directory.path().join("capture.sqlite"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO frames(timestamp, app_name, window_name, frame_text)
+             VALUES ('2026-07-17T09:00:00Z', 'VS Code', 'Dystil', 'Implemented bounded retrieval ledger')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO ui_events(timestamp, event_type, text_content, app_name, window_title)
+             VALUES ('2026-07-17T09:01:00Z', 'text', 'Reviewed retrieval tests', 'VS Code', 'Dystil')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let matches = search_activity(&pool, "bounded retrieval", 10)
+            .await
+            .unwrap();
+        assert!(matches.iter().any(|record| record.source_id == "frame:1"));
+        let context = get_activity_context(&pool, "frame:1", 60, 60, 10)
+            .await
+            .unwrap();
+        assert_eq!(context.len(), 2);
+        assert!(context
+            .iter()
+            .all(|record| !record.text.contains("accessibility_tree")));
     }
 }

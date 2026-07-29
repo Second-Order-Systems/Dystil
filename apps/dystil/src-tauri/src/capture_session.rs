@@ -63,6 +63,7 @@ pub struct CaptureSession {
     ax_capture_handle: Option<DystilAxCaptureHandle>,
     linker_runtime: Option<DystilLinkerRuntime>,
     redaction_worker: Option<dystil_capture::redaction_worker::RedactionWorker>,
+    redactor_load_task: Option<tokio::task::JoinHandle<()>>,
     // Own the trigger bus independently of Dystil's legacy visual loop.
     _capture_trigger_bus: TriggerBus<CaptureTriggerMessage>,
 }
@@ -88,11 +89,18 @@ impl CaptureSession {
 
         let capture_trigger_bus = TriggerBus::<CaptureTriggerMessage>::new(TRIGGER_CHANNEL_BUFFER);
         let linker_runtime = DystilLinkerRuntime::start(server.db.pool.clone());
-        let text_model = load_text_redactor().await;
-        let redaction_worker = Some(dystil_capture::redaction_worker::RedactionWorker::start(
-            server.db.pool.clone(),
-            text_model,
-        ));
+        // Deterministic redaction happens before every SQLite write, so the
+        // model-backed NER pass must never delay first capture. The worker
+        // starts safely in regex mode and reads this shared slot per batch.
+        let redaction_worker =
+            dystil_capture::redaction_worker::RedactionWorker::start(server.db.pool.clone(), None);
+        let redactor_model = redaction_worker.model_handle();
+        let redactor_load_task = Some(tokio::spawn(async move {
+            if let Some(model) = load_text_redactor().await {
+                *redactor_model.write().await = Some(model);
+                info!("ONNX text redactor is now available to the background worker");
+            }
+        }));
 
         // Both channels are session-owned. UI recording produces activity
         // triggers; Dystil owns all evidence capture for every platform.
@@ -237,7 +245,8 @@ impl CaptureSession {
             ui_recorder_handle,
             ax_capture_handle,
             linker_runtime: Some(linker_runtime),
-            redaction_worker,
+            redaction_worker: Some(redaction_worker),
+            redactor_load_task,
             _capture_trigger_bus: capture_trigger_bus,
         })
     }
@@ -279,6 +288,11 @@ impl CaptureSession {
         // events can still be paired with their final persisted frame.
         if let Some(linker_runtime) = self.linker_runtime.take() {
             linker_runtime.shutdown().await;
+        }
+
+        if let Some(task) = self.redactor_load_task.take() {
+            task.abort();
+            let _ = task.await;
         }
 
         // Redaction worker runs independently; stop it last so it can process

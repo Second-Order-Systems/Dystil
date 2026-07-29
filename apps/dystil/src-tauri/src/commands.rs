@@ -928,6 +928,99 @@ pub async fn get_onboarding_status(
     OnboardingStore::get(&app_handle).map(|o| o.unwrap_or_default())
 }
 
+#[derive(Debug, Clone, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OnboardingAiSetup {
+    pub choice: String,
+    pub enable_local_processing: bool,
+}
+
+/// Persist the final onboarding choice. Local enrichment starts in the
+/// background so a first-run model download never traps a user in setup.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_onboarding_ai_setup(
+    app_handle: tauri::AppHandle,
+    state: State<'_, RecordingState>,
+    setup: OnboardingAiSetup,
+) -> Result<OnboardingStore, String> {
+    if !matches!(setup.choice.as_str(), "codex" | "claude" | "byok" | "local") {
+        return Err("invalid AI setup choice".into());
+    }
+
+    OnboardingStore::update(&app_handle, |onboarding| {
+        onboarding.ai_setup_choice = Some(setup.choice.clone());
+        onboarding.local_processing_enabled = setup.enable_local_processing;
+    })?;
+
+    set_local_processing(&app_handle, &state, setup.enable_local_processing).await;
+
+    OnboardingStore::get(&app_handle).map(|value| value.unwrap_or_default())
+}
+
+async fn set_local_processing(
+    app_handle: &tauri::AppHandle,
+    state: &RecordingState,
+    enabled: bool,
+) {
+    std::env::set_var(
+        "DYSTIL_LOCAL_PROCESSING_ENABLED",
+        if enabled { "1" } else { "0" },
+    );
+    let server = state.server.clone();
+    let app_for_task = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = match server.lock().await.as_mut() {
+            Some(server) => server.set_local_processing_enabled(enabled).await,
+            None => Ok(()),
+        };
+        let payload = match result {
+            Ok(()) => serde_json::json!({"state": if enabled { "ready" } else { "disabled" }}),
+            Err(error) => serde_json::json!({"state": "failed", "error": error}),
+        };
+        let _ = app_for_task.emit("local-processing-status", payload);
+    });
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalProcessingStatusView {
+    pub enabled: bool,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_local_processing_status(
+    app_handle: tauri::AppHandle,
+    state: State<'_, RecordingState>,
+) -> Result<LocalProcessingStatusView, String> {
+    let persisted = OnboardingStore::get(&app_handle)?
+        .unwrap_or_default()
+        .local_processing_enabled;
+    let enabled = state
+        .server
+        .lock()
+        .await
+        .as_ref()
+        .map(|server| server.local_processing_requested())
+        .unwrap_or(persisted);
+    Ok(LocalProcessingStatusView { enabled })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_local_processing_enabled(
+    app_handle: tauri::AppHandle,
+    state: State<'_, RecordingState>,
+    enabled: bool,
+) -> Result<LocalProcessingStatusView, String> {
+    OnboardingStore::update(&app_handle, |onboarding| {
+        onboarding.local_processing_enabled = enabled
+    })?;
+    set_local_processing(&app_handle, &state, enabled).await;
+    Ok(LocalProcessingStatusView { enabled })
+}
+
 /// Read local cloud-sync consent. Defaults are fail-closed for both new and
 /// existing installations because `syncConsent` is serde-defaulted.
 #[tauri::command]

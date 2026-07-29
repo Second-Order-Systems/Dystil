@@ -6,8 +6,8 @@
 use chrono::{Duration as ChronoDuration, Utc};
 use dystil_ai::{ContextBundle, ContextCard};
 use dystil_protocol::agent_mailbox::{
-    AgentErrorBody, AgentEvidenceLabel, AgentMessage, AgentMessagePayload,
-    AgentResponseBody, AgentStage, AgentStatusBody,
+    AgentErrorBody, AgentEvidenceLabel, AgentMessage, AgentMessagePayload, AgentResponseBody,
+    AgentStage, AgentStatusBody,
 };
 use futures::{SinkExt, StreamExt};
 use std::str::FromStr;
@@ -40,10 +40,14 @@ async fn run_connection(app: &AppHandle) -> Result<(), String> {
     sync_and_process(app, &pool).await?;
     let (_, base, token) = agent_mailbox::cloud_client().await?;
     let url = agent_mailbox::websocket_url(&base)?;
-    let mut request = url.as_str().into_client_request().map_err(|error| error.to_string())?;
+    let mut request = url
+        .as_str()
+        .into_client_request()
+        .map_err(|error| error.to_string())?;
     request.headers_mut().insert(
         "Authorization",
-        HeaderValue::from_str(&agent_mailbox::websocket_authorization(&token)).map_err(|error| error.to_string())?,
+        HeaderValue::from_str(&agent_mailbox::websocket_authorization(&token))
+            .map_err(|error| error.to_string())?,
     );
     request.headers_mut().insert(
         "x-dystil-sync-capabilities",
@@ -120,13 +124,23 @@ async fn process_request_inner(
     .await
     .map_err(|error| error.to_string())?;
     if cards.is_empty() {
-        return send_error(pool, request, "no_relevant_work", "Dystil found no relevant local work.").await;
+        return send_error(
+            pool,
+            request,
+            "no_relevant_work",
+            "Dystil found no relevant local work.",
+        )
+        .await;
     }
+    let timezone = ai::local_timezone_offset();
     let bundle = ContextBundle {
         schema_version: dystil_ai::CONTEXT_SCHEMA_VERSION.into(),
         task: "answer_teammate_question".into(),
-        timezone: "UTC".into(),
-        range: dystil_ai::ContextRange { start: start.to_rfc3339(), end: end.to_rfc3339() },
+        timezone: timezone.clone(),
+        range: dystil_ai::ContextRange {
+            start: start.to_rfc3339(),
+            end: end.to_rfc3339(),
+        },
         coverage: dystil_ai::ContextCoverage {
             card_count: cards.len(),
             first_observation: cards.last().map(|card| card.start_time.clone()),
@@ -138,11 +152,38 @@ async fn process_request_inner(
     let (provider, model) = agent_mailbox::preferences(pool).await?;
     let runtime = match ai::provider_kind(&provider).and_then(ai::provider_runtime) {
         Ok(runtime) => runtime,
-        Err(_) => return send_error(pool, request, "provider_not_ready", "This Dystil has no AI provider ready.").await,
+        Err(_) => {
+            return send_error(
+                pool,
+                request,
+                "provider_not_ready",
+                "This Dystil has no AI provider ready.",
+            )
+            .await
+        }
     };
     if !runtime.authenticated().await.unwrap_or(false) {
-        return send_error(pool, request, "provider_not_ready", "This Dystil has no AI provider ready.").await;
+        return send_error(
+            pool,
+            request,
+            "provider_not_ready",
+            "This Dystil has no AI provider ready.",
+        )
+        .await;
     }
+    let state = app.state::<crate::recording::RecordingState>();
+    let runtime = match ai::internal_mcp_server(app, &state, &timezone).await {
+        Ok(mcp) => runtime.with_mcp_server(mcp),
+        Err(_) => {
+            return send_error(
+                pool,
+                request,
+                "mcp_not_ready",
+                "Dystil's local retrieval sidecar is unavailable.",
+            )
+            .await
+        }
+    };
     send_status(pool, request, AgentStage::Generating).await?;
     let answer = match runtime
         .run_teammate_answer_with_model(
@@ -154,23 +195,62 @@ async fn process_request_inner(
         .await
     {
         Ok(answer) => answer,
-        Err(dystil_ai::AiError::Timeout) => return send_error(pool, request, "provider_timeout", "The local AI provider timed out.").await,
-        Err(dystil_ai::AiError::InvalidOutput(_)) => return send_error(pool, request, "provider_invalid_output", "The local AI provider returned an invalid answer.").await,
-        Err(_) => return send_error(pool, request, "internal_error", "Dystil could not generate an answer.").await,
+        Err(dystil_ai::AiError::Timeout) => {
+            return send_error(
+                pool,
+                request,
+                "provider_timeout",
+                "The local AI provider timed out.",
+            )
+            .await
+        }
+        Err(dystil_ai::AiError::InvalidOutput(_)) => {
+            return send_error(
+                pool,
+                request,
+                "provider_invalid_output",
+                "The local AI provider returned an invalid answer.",
+            )
+            .await
+        }
+        Err(_) => {
+            return send_error(
+                pool,
+                request,
+                "internal_error",
+                "Dystil could not generate an answer.",
+            )
+            .await
+        }
     };
-    let evidence = answer.answer.evidence.into_iter().filter_map(|claim| {
-        let card_id = claim.card_ids.first()?;
-        let card = bundle.cards.iter().find(|card| &card.id == card_id)?;
-        Some(AgentEvidenceLabel {
-            label: card.title.clone(),
-            local_date: card.start.get(..10).unwrap_or(&card.start).to_string(),
-        })
-    }).collect();
-    let input = agent_mailbox::new_reply(request, AgentMessagePayload::Response(AgentResponseBody {
-        answer: answer.answer.answer,
-        evidence,
-        uncertainties: answer.answer.uncertainties,
-    }));
+    let mut evidence = Vec::new();
+    for claim in &answer.answer.evidence {
+        let Some(card_id) = claim.card_ids.first() else {
+            continue;
+        };
+        if let Some(card) = bundle.cards.iter().find(|card| &card.id == card_id) {
+            evidence.push(AgentEvidenceLabel {
+                label: card.title.clone(),
+                local_date: ai::local_date_for_timestamp(&card.start, &timezone),
+            });
+        } else if let Some(card) = dystil_storage::get_work_card(pool, card_id)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            evidence.push(AgentEvidenceLabel {
+                label: card.title,
+                local_date: ai::local_date_for_timestamp(&card.start_time, &timezone),
+            });
+        }
+    }
+    let input = agent_mailbox::new_reply(
+        request,
+        AgentMessagePayload::Response(AgentResponseBody {
+            answer: answer.answer.answer,
+            evidence,
+            uncertainties: answer.answer.uncertainties,
+        }),
+    );
     let sent = agent_mailbox::send(&input).await?;
     agent_mailbox::persist_outgoing(pool, &sent).await?;
     agent_mailbox::set_local_status(pool, &request.message_id, "responded").await?;
@@ -178,16 +258,32 @@ async fn process_request_inner(
     Ok(())
 }
 
-async fn send_status(pool: &sqlx::SqlitePool, request: &AgentMessage, stage: AgentStage) -> Result<(), String> {
-    let input = agent_mailbox::new_reply(request, AgentMessagePayload::Status(AgentStatusBody { stage }));
+async fn send_status(
+    pool: &sqlx::SqlitePool,
+    request: &AgentMessage,
+    stage: AgentStage,
+) -> Result<(), String> {
+    let input = agent_mailbox::new_reply(
+        request,
+        AgentMessagePayload::Status(AgentStatusBody { stage }),
+    );
     let sent = agent_mailbox::send(&input).await?;
     agent_mailbox::persist_outgoing(pool, &sent).await
 }
 
-async fn send_error(pool: &sqlx::SqlitePool, request: &AgentMessage, code: &str, message: &str) -> Result<(), String> {
-    let input = agent_mailbox::new_reply(request, AgentMessagePayload::Error(AgentErrorBody {
-        code: code.into(), message: message.into(),
-    }));
+async fn send_error(
+    pool: &sqlx::SqlitePool,
+    request: &AgentMessage,
+    code: &str,
+    message: &str,
+) -> Result<(), String> {
+    let input = agent_mailbox::new_reply(
+        request,
+        AgentMessagePayload::Error(AgentErrorBody {
+            code: code.into(),
+            message: message.into(),
+        }),
+    );
     let sent = agent_mailbox::send(&input).await?;
     agent_mailbox::persist_outgoing(pool, &sent).await?;
     agent_mailbox::set_local_status(pool, &request.message_id, "responded").await

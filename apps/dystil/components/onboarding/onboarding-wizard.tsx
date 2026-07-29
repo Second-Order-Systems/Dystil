@@ -3,11 +3,16 @@
 import { startTransition, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useRouter } from "next/navigation";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowRight,
   Check,
   ChevronLeft,
   Circle,
+  Loader2,
+  Sparkles,
 } from "lucide-react";
 
 import {
@@ -25,9 +30,12 @@ import { cn, unflattenObject } from "@/lib/utils";
 import { commands } from "@/lib/utils/tauri";
 import { getAuthState, subscribeAuthState, type DystilAuthState } from "@/lib/auth-store";
 import { Button } from "@/components/ui/button";
+import { ToastAction } from "@/components/ui/toast";
+import { toast } from "@/components/ui/use-toast";
 import { OnboardingPermissionsStep } from "@/components/onboarding/onboarding-permissions-step";
 import { OnboardingEducationStep } from "@/components/onboarding/onboarding-education-step";
 import { OnboardingTopbar } from "@/components/onboarding/onboarding-topbar";
+import { OnboardingAiSetupStep } from "@/components/onboarding/onboarding-ai-setup-step";
 import {
   Card,
   CardContent,
@@ -52,11 +60,143 @@ type OnboardingAnswers = Record<string, OnboardingAnswerValue | undefined>;
 const onboardingFields = onboardingSteps.flatMap((step) => step.fields);
 const MACOS_PERMISSION_STEP_ID = "macos-permissions";
 const EDUCATION_STEP_ID = "privacy-education";
+const AI_SETUP_STEP_ID = "ai-setup";
+type ManagedProvider = "codex" | "claude";
+type ProviderStatus = { state: string; authenticated?: boolean | null };
+
+const managedProviderName = (provider: ManagedProvider) =>
+  provider === "codex" ? "ChatGPT Plus" : "Claude Pro";
+
+function providerSetupTitle(provider: ManagedProvider, stage: string, working = false) {
+  return <span className="flex items-center gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-foreground text-background">{working ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}</span><span className="grid gap-0.5"><span className="text-sm font-semibold leading-none">{managedProviderName(provider)}</span><span className="text-xs font-normal leading-none text-muted-foreground">{stage}</span></span></span>;
+}
+
+function providerSetupError(error: unknown) {
+  const detail = error instanceof Error
+    ? error.message
+    : typeof error === "string"
+      ? error
+      : "";
+  return detail.trim() || "Dystil could not prepare the official provider CLI. Check your connection and try again.";
+}
+
+async function focusCurrentDystilWindow() {
+  const window = getCurrentWindow();
+  await window.show().catch(() => undefined);
+  await window.setFocus().catch(() => undefined);
+}
+
+function setUpManagedProvider(provider: ManagedProvider) {
+  const name = managedProviderName(provider);
+  let stopConnectionWatch: (() => void) | undefined;
+  const notice = toast({
+    title: providerSetupTitle(provider, "Preparing connection", true),
+    description: "Preparing the private Dystil connection. You can keep working while this finishes.",
+    showWhenNotificationsDisabled: true,
+    persistent: true,
+  });
+
+  const startSignIn = async () => {
+    notice.update({
+      id: notice.id,
+      title: providerSetupTitle(provider, "Opening sign-in", true),
+      description: "Opening your browser…",
+      action: undefined,
+      persistent: true,
+      open: true,
+    });
+    try {
+      stopConnectionWatch = await listen("ai-provider-login-updated", async () => {
+        const status = await invoke<ProviderStatus>("ai_provider_status", { provider }).catch(() => null);
+        if (status?.state !== "ready" || status.authenticated !== true) return;
+        stopConnectionWatch?.();
+        notice.update({
+          id: notice.id,
+          title: providerSetupTitle(provider, "Connected"),
+          description: "Ask Your Work is ready to use this connection.",
+          action: undefined,
+          persistent: false,
+          open: true,
+        });
+        window.setTimeout(notice.dismiss, 5000);
+      });
+      const loginMode = await invoke<string>("ai_provider_login", { provider });
+      if (provider === "claude" && loginMode === "codeRequired") {
+        notice.update({
+          id: notice.id,
+          title: providerSetupTitle(provider, "Finish sign-in"),
+          description: "Complete the browser flow, then paste the authorization code in Settings to connect Claude.",
+          persistent: true,
+          open: true,
+        });
+        return;
+      }
+      notice.update({
+        id: notice.id,
+        title: providerSetupTitle(provider, "Sign-in is open"),
+        description: "Finish in your browser. Dystil will recognize the connection when you return.",
+        persistent: true,
+        open: true,
+      });
+    } catch (error) {
+      stopConnectionWatch?.();
+      notice.update({
+        id: notice.id,
+        title: providerSetupTitle(provider, "Sign-in needs attention"),
+        description: providerSetupError(error),
+        variant: "destructive",
+        persistent: true,
+        open: true,
+      });
+    }
+  };
+
+  void (async () => {
+    try {
+      const status = await invoke<ProviderStatus>("ai_provider_status", { provider });
+      if (status.state !== "ready") {
+        notice.update({
+          id: notice.id,
+          title: providerSetupTitle(provider, "Installing privately", true),
+          description: undefined,
+          persistent: true,
+          open: true,
+        });
+        await invoke("ai_provider_install", { provider });
+      }
+      await invoke("agent_set_preferences", { provider, model: "default" });
+      // Installation can finish after onboarding has navigated away or while
+      // Dystil is behind another app. Bring the app back only for the explicit
+      // sign-in decision, never while package installation is still running.
+      await focusCurrentDystilWindow();
+      notice.update({
+        id: notice.id,
+        title: providerSetupTitle(provider, "Ready to connect"),
+        description: "Sign in when you are ready to use Ask Your Work.",
+        action: <ToastAction altText={`Sign in to ${name}`} onClick={() => void startSignIn()}>Sign in</ToastAction>,
+        persistent: true,
+        open: true,
+      });
+    } catch (error) {
+      notice.update({
+        id: notice.id,
+        title: providerSetupTitle(provider, "Setup needs attention"),
+        description: providerSetupError(error),
+        variant: "destructive",
+        action: <ToastAction altText={`Retry ${name} setup`} className="border-current bg-transparent text-current hover:bg-background/15" onClick={() => setUpManagedProvider(provider)}>Retry setup</ToastAction>,
+        persistent: true,
+        open: true,
+      });
+    }
+  })();
+}
+
 function getOnboardingStepIds(showPermissionStep: boolean) {
   return [
     ...onboardingSteps.map((step) => step.id),
     EDUCATION_STEP_ID,
     ...(showPermissionStep ? [MACOS_PERMISSION_STEP_ID] : []),
+    AI_SETUP_STEP_ID,
   ];
 }
 
@@ -238,6 +378,8 @@ export function OnboardingWizard() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [permissionsReady, setPermissionsReady] = useState(false);
+  const [aiSetupReady, setAiSetupReady] = useState(false);
+  const [aiSetup, setAiSetup] = useState<{ choice: "codex" | "claude" | "byok" | "local"; enableLocalProcessing: boolean } | null>(null);
   const [hasRestoredStoredStep, setHasRestoredStoredStep] = useState(false);
   const [authState, setAuthState] = useState<DystilAuthState>(() => getAuthState());
   const { apps: installedApps } = useInstalledApps();
@@ -251,14 +393,14 @@ export function OnboardingWizard() {
 
   const showPermissionStep = isMac;
   const stepIds = getOnboardingStepIds(showPermissionStep);
-  const isPermissionStep =
-    showPermissionStep && currentStepIndex === onboardingSteps.length + 1;
-  const isEducationStep = currentStepIndex === onboardingSteps.length;
-  const currentStep = isPermissionStep || isEducationStep ? null : onboardingSteps[currentStepIndex];
+  const currentStepId = stepIds[currentStepIndex] ?? null;
+  const isPermissionStep = currentStepId === MACOS_PERMISSION_STEP_ID;
+  const isEducationStep = currentStepId === EDUCATION_STEP_ID;
+  const isAiSetupStep = currentStepId === AI_SETUP_STEP_ID;
+  const currentStep = isPermissionStep || isEducationStep || isAiSetupStep ? null : onboardingSteps[currentStepIndex];
   const visibleFields = currentStep
     ? currentStep.fields.filter((field) => isFieldVisible(field, answers))
     : [];
-  const currentStepId = stepIds[currentStepIndex] ?? null;
 
   const resolveMultiSelectField = (field: OnboardingMultiSelectField) => {
     if (field.optionsSource !== "installed_apps") {
@@ -387,7 +529,7 @@ export function OnboardingWizard() {
   };
 
   const finishOnboarding = async () => {
-    if (isPermissionStep && !permissionsReady) return;
+    if ((isPermissionStep && !permissionsReady) || (isAiSetupStep && !aiSetupReady) || (isAiSetupStep && !aiSetup)) return;
     setAttemptedAdvance(true);
     if (Object.keys(stepErrors).length > 0) return;
 
@@ -403,6 +545,9 @@ export function OnboardingWizard() {
     setSubmitError(null);
 
     try {
+      if (aiSetup) {
+        await invoke("set_onboarding_ai_setup", { setup: aiSetup });
+      }
       const capturePolicy = await commands.applyOnboardingCapturePolicy(
         selectedWorkApps,
       );
@@ -423,6 +568,9 @@ export function OnboardingWizard() {
         );
       }
 
+      if (aiSetup?.choice === "codex" || aiSetup?.choice === "claude") {
+        setUpManagedProvider(aiSetup.choice);
+      }
       router.replace("/home");
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : String(error));
@@ -432,15 +580,11 @@ export function OnboardingWizard() {
   };
 
   const continueFromEducation = () => {
-    if (showPermissionStep) {
-      goForward();
-      return;
-    }
-    void finishOnboarding();
+    goForward();
   };
 
   if (isEducationStep) {
-    return <OnboardingEducationStep onContinue={continueFromEducation} onBack={goBack} />;
+    return <OnboardingEducationStep onContinue={continueFromEducation} onBack={goBack} currentStep={currentStepIndex} totalSteps={stepIds.length} />;
   }
 
   return (
@@ -454,7 +598,7 @@ export function OnboardingWizard() {
 
       <div className="relative mx-auto w-full max-w-4xl">
         <div className="w-full space-y-6">
-          <OnboardingTopbar currentStep={isPermissionStep ? 2 : 0} />
+          <OnboardingTopbar currentStep={currentStepIndex} totalSteps={stepIds.length} />
           {/* <div className="flex items-center gap-3 rounded-[24px] border border-border/70 bg-background/75 px-4 py-3 backdrop-blur sm:px-5"> */}
           {/*   <Badge variant="outline" className="rounded-full px-3 py-1"> */}
           {/*     Guided setup */}
@@ -472,7 +616,7 @@ export function OnboardingWizard() {
             <CardHeader className="space-y-3 px-[22px] pb-0 pt-7 sm:px-10 sm:pt-[38px]">
               <div className="flex items-center justify-between gap-4">
                 <CardTitle className="text-[30px] font-bold leading-[1.15] normal-case tracking-[-.02em]">
-                  {isPermissionStep ? "Let’s switch these on together." : currentStep?.id === "identity" ? <>Tell us about <span className="text-primary">yourself.</span></> : currentStep?.title}
+                  {isPermissionStep ? "Let’s switch these on together." : isAiSetupStep ? "Choose how Dystil helps you return to your work." : currentStep?.id === "identity" ? <>Tell us about <span className="text-primary">yourself.</span></> : currentStep?.title}
                 </CardTitle>
               </div>
               <CardDescription className="max-w-[52ch] text-base leading-[1.6]">
@@ -494,6 +638,8 @@ export function OnboardingWizard() {
                 >
                   {isPermissionStep ? (
                     <OnboardingPermissionsStep onReadyChange={setPermissionsReady} />
+                  ) : isAiSetupStep ? (
+                    <OnboardingAiSetupStep onReadyChange={setAiSetupReady} onSetupChange={setAiSetup} />
                   ) : visibleFields.map((field) => {
                     const error = attemptedAdvance ? stepErrors[field.id] : null;
                     const value = answers[field.id];
@@ -608,7 +754,8 @@ export function OnboardingWizard() {
                       onClick={finishOnboarding}
                       disabled={
                         isSubmitting ||
-                        (isPermissionStep && !permissionsReady)
+                        (isPermissionStep && !permissionsReady) ||
+                        (isAiSetupStep && (!aiSetupReady || !aiSetup))
                       }
                       className="h-10 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-[0_6px_18px_hsl(var(--primary)/.28)] hover:bg-primary-hover"
                     >

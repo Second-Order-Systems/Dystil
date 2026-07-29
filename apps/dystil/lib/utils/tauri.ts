@@ -65,6 +65,18 @@ async aiGenerateDailyUpdate(provider: string, localDate: string, timezone: strin
 }
 },
 /**
+ * Pass Claude Code the short-lived authorization code shown by its provider
+ * page. The code remains in memory and is never persisted by Dystil.
+ */
+async aiProviderCompleteClaudeLogin(authorizationCode: string) : Promise<Result<AiProviderStatusView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ai_provider_complete_claude_login", { authorizationCode }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Install the official CLI privately with Dystil's bundled Bun.
  */
 async aiProviderInstall(provider: string) : Promise<Result<AiProviderStatusView, string>> {
@@ -78,9 +90,21 @@ async aiProviderInstall(provider: string) : Promise<Result<AiProviderStatusView,
 /**
  * Start the provider-owned browser sign-in. No OAuth token passes through Dystil.
  */
-async aiProviderLogin(provider: string) : Promise<Result<null, string>> {
+async aiProviderLogin(provider: string) : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("ai_provider_login", { provider }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * List models exposed by the managed provider. Codex is discovered from the
+ * signed-in account; Claude Code exposes its provider-maintained aliases.
+ */
+async aiProviderModels(provider: string) : Promise<Result<AiProviderModelView[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ai_provider_models", { provider }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -192,6 +216,30 @@ async authSignOut() : Promise<Result<DystilAuthState, string>> {
 async authStoreSession(token: string) : Promise<Result<DystilAuthState, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("auth_store_session", { token }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async byokDeleteProfile(profileId: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("byok_delete_profile", { profileId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async byokListProfiles() : Promise<Result<ByokProfileView[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("byok_list_profiles") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async byokSaveProfile(endpoint: string, chatModel: string, workCardModel: string, apiKey: string) : Promise<Result<ByokProfileView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("byok_save_profile", { endpoint, chatModel, workCardModel, apiKey }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -365,12 +413,25 @@ async ensureWebviewFocus() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Register Dystil's read-only stdio sidecar in the user's own Codex CLI or
+ * Claude Code configuration. This is intentionally separate from Dystil's
+ * managed chat runtime and is only called after explicit UI consent.
+ */
+async externalMcpAdd(client: string) : Promise<Result<ExternalMcpSetupView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("external_mcp_add", { client }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async focusExistingWindow() : Promise<void> {
     await TAURI_INVOKE("focus_existing_window");
 },
 /**
- * Generate closed local work windows through an explicitly configured local
- * llama.cpp endpoint. No cloud request is made.
+ * Generate closed activity windows using the active AI choice. Evidence is
+ * sanitized before it reaches a connected provider.
  */
 async generateWorkCardsNow() : Promise<Result<WorkCardGenerationReport, string>> {
     try {
@@ -465,6 +526,14 @@ async getInstalledBrowsers() : Promise<string[]> {
 async getKeychainStatus() : Promise<Result<KeychainStatus, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_keychain_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getLocalProcessingStatus() : Promise<Result<LocalProcessingStatusView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_local_processing_status") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -853,9 +922,29 @@ async setCloudToken(token: string | null) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async setLocalProcessingEnabled(enabled: boolean) : Promise<Result<LocalProcessingStatusView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_local_processing_enabled", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async setNativeTheme(theme: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_native_theme", { theme }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Persist the final onboarding choice. Local enrichment starts in the
+ * background so a first-run model download never traps a user in setup.
+ */
+async setOnboardingAiSetup(setup: OnboardingAiSetup) : Promise<Result<OnboardingStore, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_onboarding_ai_setup", { setup }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1076,6 +1165,7 @@ export type AgentMessageView = { messageId: string; conversationId: string; peer
 export type AgentPeerView = { userId: string; displayName: string | null; email: string; agentStatus: string }
 export type AgentPreferencesView = { provider: string; model: string }
 export type AiDailyUpdateView = { provider: string; runtimeVersion: string | null; elapsedMs: number; update: JsonValue }
+export type AiProviderModelView = { id: string; displayName: string; description: string; isDefault: boolean }
 export type AiProviderStatusView = { provider: string; state: string; installedVersion: string | null; authenticated: boolean | null; detail: string | null }
 export type AuthMode = "individual" | "workspace"
 export type BootPhaseSnapshot = {
@@ -1104,6 +1194,7 @@ sinceEpochSecs: number }
 export type BrowserAutomationStatus = { name: string; status: string; running: boolean }
 export type BrowserLogEntry = { level: string; message: string }
 export type BuildCapabilities = { cloudAvailable: boolean; authMode: AuthMode; cloudBaseUrl: string | null; officialBuild: boolean }
+export type ByokProfileView = { id: string; providerKind: string; endpoint: string; chatModel: string; workCardModel: string; active: boolean; credentialPresent: boolean }
 export type CacheFile = { path: string; label: string; size_bytes: number }
 export type CaptureHealth = { status: string; status_code: number; last_frame_timestamp: string | null; last_ui_timestamp: string | null; frame_status: string; ui_status: string; message: string }
 export type Credits = { amount: number }
@@ -1111,11 +1202,13 @@ export type DystilAuthState = { status: string; session: DystilUserSession | nul
 export type DystilUserOrg = { id: string; name: string | null; slug: string | null; roles: string[] }
 export type DystilUserProfile = { id: string; email: string | null; name: string | null; image: string | null; org: DystilUserOrg | null }
 export type DystilUserSession = { session_token: string | null; expires_at: string | null }
+export type ExternalMcpSetupView = { client: string; detail: string }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: number; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
 export type LocalChatMessageView = { id: string; sessionId: string; role: string; mode: string; question: string | null; answer: string | null; status: string; selectedCardsJson: string | null; citationsJson: string | null; provider: string | null; model: string | null; elapsedMs: number | null; errorCode: string | null; createdAt: string }
 export type LocalChatSessionView = { id: string; title: string; updatedAt: string }
+export type LocalProcessingStatusView = { enabled: boolean }
 export type LogFile = { name: string; path: string; modified_at: number }
 export type McpConnectionStatus = { connected: boolean; detail: string }
 export type MonitorDevice = { id: number; stableId: string; name: string; isDefault: boolean; width: number; height: number }
@@ -1124,12 +1217,23 @@ export type OAuthStatus = { connected: boolean; display_name: string | null; nee
 export type OSPermission = "screenRecording" | "accessibility" | "automation" | "inputMonitoring" | "calendar"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; accessibility: OSPermissionStatus }
+export type OnboardingAiSetup = { choice: string; enableLocalProcessing: boolean }
 export type OnboardingStore = { isCompleted: boolean; completedAt: string | null;
 /**
  * Current step in onboarding flow (login, intro, usecases, status)
  * Used to resume after app restart (e.g., after granting permissions)
  */
-currentStep?: string | null }
+currentStep?: string | null;
+/**
+ * The capability selected in the final onboarding step. This records a
+ * local preference only; provider credentials live in their own stores.
+ */
+aiSetupChoice?: string | null;
+/**
+ * Local enrichment is deliberately opt-in because its generated activity
+ * summaries are experimental and it requires a sizeable model download.
+ */
+localProcessingEnabled?: boolean }
 /**
  * A single schedule rule: a day-of-week + time range + what to record.
  */
