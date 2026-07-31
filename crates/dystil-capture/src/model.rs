@@ -21,6 +21,10 @@ pub struct AccessibilityLine {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AccessibilityNode {
+    #[serde(default)]
+    pub node_id: u32,
+    #[serde(default)]
+    pub parent_node_id: Option<u32>,
     pub role: String,
     pub text: String,
     pub depth: u8,
@@ -35,6 +39,10 @@ pub struct AccessibilityNode {
     pub placeholder: Option<String>,
     pub role_description: Option<String>,
     pub subrole: Option<String>,
+    #[serde(default)]
+    pub dom_identifier: Option<String>,
+    #[serde(default)]
+    pub dom_classes: Option<String>,
     pub is_enabled: Option<bool>,
     pub is_focused: Option<bool>,
     pub is_selected: Option<bool>,

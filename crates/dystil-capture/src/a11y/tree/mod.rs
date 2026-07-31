@@ -65,6 +65,14 @@ pub struct LineSpan {
 /// A single node extracted from the accessibility tree, preserving role and hierarchy.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AccessibilityTreeNode {
+    /// Stable identity within this snapshot. This is the platform walk index,
+    /// not an OS-global identifier.
+    #[serde(default)]
+    pub node_id: u32,
+    /// Parent identity within this snapshot. Unlike `depth`, this remains
+    /// unambiguous when intermediate structural nodes are retained.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub parent_node_id: Option<u32>,
     pub role: String,
     pub text: String,
     pub depth: u8,
@@ -134,6 +142,12 @@ pub struct AccessibilityTreeNode {
     /// Fine-grained role classification. macOS: AXSubrole.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subrole: Option<String>,
+    /// Browser/Electron DOM identity exposed through macOS AX.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub dom_identifier: Option<String>,
+    /// Space-delimited DOM class list exposed through macOS AX.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub dom_classes: Option<String>,
     /// Whether element is interactive/enabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_enabled: Option<bool>,
@@ -164,6 +178,8 @@ impl AccessibilityTreeNode {
     /// Create a node with only the core fields; all automation properties default to None.
     pub fn new(role: String, text: String, depth: u8, bounds: Option<NodeBounds>) -> Self {
         Self {
+            node_id: 0,
+            parent_node_id: None,
             role,
             text,
             depth,
@@ -177,6 +193,8 @@ impl AccessibilityTreeNode {
             placeholder: None,
             role_description: None,
             subrole: None,
+            dom_identifier: None,
+            dom_classes: None,
             is_enabled: None,
             is_focused: None,
             is_selected: None,

@@ -69,6 +69,8 @@ pub fn convert_tree_snapshot(snapshot: TreeSnapshot) -> AccessibilitySnapshot {
 
 fn convert_node(node: AccessibilityTreeNode) -> AccessibilityNode {
     AccessibilityNode {
+        node_id: node.node_id,
+        parent_node_id: node.parent_node_id,
         role: node.role,
         text: node.text,
         depth: node.depth,
@@ -85,6 +87,8 @@ fn convert_node(node: AccessibilityTreeNode) -> AccessibilityNode {
         placeholder: node.placeholder,
         role_description: node.role_description,
         subrole: node.subrole,
+        dom_identifier: node.dom_identifier,
+        dom_classes: node.dom_classes,
         is_enabled: node.is_enabled,
         is_focused: node.is_focused,
         is_selected: node.is_selected,
@@ -141,6 +145,8 @@ mod tests {
             window_name: "matcher.rs".to_string(),
             text_content: "focused content".to_string(),
             nodes: vec![AccessibilityTreeNode {
+                node_id: 7,
+                parent_node_id: Some(3),
                 role: "TextField".to_string(),
                 text: "query".to_string(),
                 depth: 3,
@@ -169,6 +175,8 @@ mod tests {
                 placeholder: Some("Find".to_string()),
                 role_description: Some("edit".to_string()),
                 subrole: Some("search".to_string()),
+                dom_identifier: Some("search-input".to_string()),
+                dom_classes: Some("composer active".to_string()),
                 is_enabled: Some(true),
                 is_focused: Some(true),
                 is_selected: Some(false),
@@ -204,9 +212,12 @@ mod tests {
         assert_eq!(converted.max_depth_reached, 9);
 
         let node = &converted.nodes[0];
+        assert_eq!(node.node_id, 7);
+        assert_eq!(node.parent_node_id, Some(3));
         assert_eq!(node.automation_id.as_deref(), Some("search"));
         assert_eq!(node.help_text.as_deref(), Some("Search"));
         assert_eq!(node.role_description.as_deref(), Some("edit"));
+        assert_eq!(node.dom_identifier.as_deref(), Some("search-input"));
         assert_eq!(node.is_keyboard_focusable, Some(true));
         assert_eq!(node.accelerator_key.as_deref(), Some("Ctrl+F"));
         assert_eq!(node.lines.as_ref().unwrap()[0].char_count, 4);

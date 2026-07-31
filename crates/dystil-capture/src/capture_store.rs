@@ -172,18 +172,24 @@ async fn insert_accessibility_elements(
     frame_id: i64,
     nodes: &[AccessibilityNode],
 ) -> Result<(), sqlx::Error> {
+    let mut inserted_ids = std::collections::HashMap::<u32, i64>::new();
     let mut depth_stack: Vec<(u8, i64)> = Vec::new();
     for (sort_order, node) in nodes.iter().enumerate() {
         let depth = node.depth as i32;
-        let parent_id = (depth > 0)
-            .then(|| {
-                depth_stack
-                    .iter()
-                    .rev()
-                    .find(|(node_depth, _)| *node_depth as i32 == depth - 1)
-                    .map(|(_, id)| *id)
-            })
-            .flatten();
+        let parent_id = node
+            .parent_node_id
+            .and_then(|parent_node_id| inserted_ids.get(&parent_node_id).copied())
+            .or_else(|| {
+                (node.node_id == 0 && depth > 0)
+                    .then(|| {
+                        depth_stack
+                            .iter()
+                            .rev()
+                            .find(|(node_depth, _)| *node_depth as i32 == depth - 1)
+                            .map(|(_, id)| *id)
+                    })
+                    .flatten()
+            });
         let (left, top, width, height) = match &node.bounds {
             Some(bounds) => (
                 Some(bounds.left as f64),
@@ -214,13 +220,17 @@ async fn insert_accessibility_elements(
         .execute(pool)
         .await?;
 
+        let database_id = result.last_insert_rowid();
+        if node.node_id != 0 {
+            inserted_ids.insert(node.node_id, database_id);
+        }
         while depth_stack
             .last()
             .is_some_and(|(node_depth, _)| *node_depth as i32 >= depth)
         {
             depth_stack.pop();
         }
-        depth_stack.push((node.depth, result.last_insert_rowid()));
+        depth_stack.push((node.depth, database_id));
     }
     Ok(())
 }
@@ -236,6 +246,8 @@ fn accessibility_properties(node: &AccessibilityNode) -> Option<String> {
         ("placeholder", &node.placeholder),
         ("role_description", &node.role_description),
         ("subrole", &node.subrole),
+        ("dom_identifier", &node.dom_identifier),
+        ("dom_classes", &node.dom_classes),
         ("accelerator_key", &node.accelerator_key),
         ("access_key", &node.access_key),
     ] {
@@ -332,6 +344,8 @@ fn sanitize_nodes(nodes: &[AccessibilityNode]) -> Vec<AccessibilityNode> {
                 &mut node.placeholder,
                 &mut node.role_description,
                 &mut node.subrole,
+                &mut node.dom_identifier,
+                &mut node.dom_classes,
                 &mut node.accelerator_key,
                 &mut node.access_key,
             ] {
@@ -476,6 +490,8 @@ mod tests {
             .unwrap()
             .nodes
             .push(AccessibilityNode {
+                node_id: 1,
+                parent_node_id: None,
                 role: "text".to_string(),
                 text: "phone +1-234-567-8901".to_string(),
                 depth: 0,
@@ -490,6 +506,8 @@ mod tests {
                 placeholder: None,
                 role_description: None,
                 subrole: None,
+                dom_identifier: None,
+                dom_classes: None,
                 is_enabled: None,
                 is_focused: None,
                 is_selected: None,
@@ -525,6 +543,8 @@ mod tests {
         let mut value = observation(None);
         value.accessibility.as_mut().unwrap().nodes = vec![
             AccessibilityNode {
+                node_id: 10,
+                parent_node_id: None,
                 role: "window".to_string(),
                 text: "root".to_string(),
                 depth: 0,
@@ -539,6 +559,8 @@ mod tests {
                 placeholder: None,
                 role_description: None,
                 subrole: None,
+                dom_identifier: None,
+                dom_classes: None,
                 is_enabled: None,
                 is_focused: None,
                 is_selected: None,
@@ -549,6 +571,8 @@ mod tests {
                 access_key: None,
             },
             AccessibilityNode {
+                node_id: 20,
+                parent_node_id: Some(10),
                 role: "text".to_string(),
                 text: "person@example.com".to_string(),
                 depth: 1,
@@ -563,6 +587,8 @@ mod tests {
                 placeholder: None,
                 role_description: None,
                 subrole: None,
+                dom_identifier: None,
+                dom_classes: None,
                 is_enabled: None,
                 is_focused: None,
                 is_selected: None,

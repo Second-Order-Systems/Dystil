@@ -13,6 +13,53 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 use tracing::debug;
 
+// macOS AX normally performs one cross-process call per attribute. Fetch the
+// core attributes as one parallel array so the deadline is spent traversing
+// nodes rather than waiting on repeated XPC round trips.
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C-unwind" {
+    fn AXUIElementCopyMultipleAttributeValues(
+        element: &ax::UiElement,
+        attributes: &cf::ArrayOf<ax::Attr>,
+        options: u32,
+        values: *mut Option<arc::R<cf::ArrayOf<cf::Type>>>,
+    ) -> ax::Error;
+}
+
+thread_local! {
+    static CORE_ATTR_NAMES: arc::R<cf::ArrayOf<ax::Attr>> = {
+        let dom_identifier = cf::String::from_str("AXDOMIdentifier");
+        let dom_classes = cf::String::from_str("AXDOMClassList");
+        let names: [&ax::Attr; 10] = [
+            ax::attr::role(),
+            ax::attr::value(),
+            ax::attr::title(),
+            ax::attr::desc(),
+            ax::attr::pos(),
+            ax::attr::size(),
+            ax::attr::id(),
+            ax::attr::subrole(),
+            ax::Attr::with_string(&dom_identifier),
+            ax::Attr::with_string(&dom_classes),
+        ];
+        cf::ArrayOf::from_slice(&names)
+    };
+
+    static ENRICHMENT_ATTR_NAMES: arc::R<cf::ArrayOf<ax::Attr>> = {
+        let names: [&ax::Attr; 8] = [
+            ax::attr::role_desc(),
+            ax::attr::help(),
+            ax::attr::placeholder_value(),
+            ax::attr::url(),
+            ax::attr::enabled(),
+            ax::attr::focused(),
+            ax::attr::selected(),
+            ax::attr::expanded(),
+        ];
+        cf::ArrayOf::from_slice(&names)
+    };
+}
+
 /// Known browser app names (lowercase). Matches vision crate's list.
 const BROWSER_NAMES: &[&str] = &[
     "chrome",
@@ -499,7 +546,10 @@ impl MacosTreeWalker {
         }
 
         // Walk the accessibility tree
-        walk_element(window, 0, &mut state);
+        walk_element(window, 0, None, &mut state);
+        // Core traversal owns the deadline. Only after it has completed do we
+        // spend any remaining time on automation properties and line geometry.
+        state.enrich_with_remaining_budget();
 
         // If a browser extension popup matching an ignored window was detected,
         // skip the entire capture — including the screenshot — to prevent the
@@ -638,6 +688,7 @@ fn is_vscode_terminal_list_role(role_str: &str, depth: usize, app: &AppState) ->
 struct WalkState {
     text_buffer: String,
     nodes: Vec<AccessibilityTreeNode>,
+    pending_enrichment: Vec<PendingEnrichment>,
     node_count: usize,
     max_depth: usize,
     max_nodes: usize,
@@ -689,6 +740,7 @@ impl WalkState {
         Self {
             text_buffer: String::with_capacity(4096),
             nodes: Vec::with_capacity(256),
+            pending_enrichment: Vec::with_capacity(128),
             node_count: 0,
             max_depth: config.max_depth,
             max_nodes: config.effective_max_nodes(),
@@ -754,6 +806,49 @@ impl WalkState {
         }
         false
     }
+
+    fn has_remaining_walk_budget(&self) -> bool {
+        self.node_count < self.max_nodes && self.start.elapsed() < self.walk_timeout
+    }
+
+    fn remaining_walk_budget(&self) -> Duration {
+        self.walk_timeout.saturating_sub(self.start.elapsed())
+    }
+
+    fn enrich_with_remaining_budget(&mut self) {
+        let pending = std::mem::take(&mut self.pending_enrichment);
+        for item in pending {
+            if !self.has_remaining_walk_budget() {
+                break;
+            }
+            let remaining = self.remaining_walk_budget();
+            let _ = item
+                .elem
+                .set_messaging_timeout_secs(remaining.as_secs_f32().min(self.element_timeout_secs));
+            if let Some(values) = read_enrichment_attrs(&item.elem) {
+                if let Some(node) = self.nodes.get_mut(item.node_index) {
+                    apply_enrichment_attrs(node, &item.role, &values);
+                }
+            }
+            if !self.has_remaining_walk_budget() || item.text.is_empty() {
+                continue;
+            }
+            let lines =
+                capture_lines_for_node(&item.elem, &item.text, &item.bounds, item.on_screen, self);
+            if let Some(node) = self.nodes.get_mut(item.node_index) {
+                node.lines = lines;
+            }
+        }
+    }
+}
+
+struct PendingEnrichment {
+    elem: Retained<ax::UiElement>,
+    node_index: usize,
+    role: String,
+    text: String,
+    bounds: Option<super::NodeBounds>,
+    on_screen: Option<bool>,
 }
 
 /// Roles to skip entirely (decorative or irrelevant).
@@ -1007,8 +1102,112 @@ fn parse_xterm_bare_desc(val: &str) -> Option<String> {
     }
 }
 
+struct NodeAttrs {
+    role: Option<String>,
+    value: Option<String>,
+    title: Option<String>,
+    desc: Option<String>,
+    frame: Option<(f64, f64, f64, f64)>,
+    identifier: Option<String>,
+    subrole: Option<String>,
+    dom_identifier: Option<String>,
+    dom_classes: Option<String>,
+}
+
+fn batch_string(entry: &cf::Type) -> Option<String> {
+    if entry.get_type_id() != cf::String::type_id() {
+        return None;
+    }
+    let value: &cf::String = unsafe { std::mem::transmute(entry) };
+    Some(value.to_string())
+}
+
+fn batch_string_list(entry: &cf::Type) -> Option<String> {
+    if let Some(value) = batch_string(entry) {
+        return Some(value);
+    }
+    if entry.get_type_id() != cf::Array::type_id() {
+        return None;
+    }
+    let values: &cf::ArrayOf<cf::Type> = unsafe { std::mem::transmute(entry) };
+    let joined = values
+        .iter()
+        .filter_map(batch_string)
+        .filter(|value| !value.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!joined.is_empty()).then_some(joined)
+}
+
+fn batch_point(entry: &cf::Type) -> Option<(f64, f64)> {
+    if entry.get_type_id() != ax::Value::type_id() {
+        return None;
+    }
+    let value: &ax::Value = unsafe { std::mem::transmute(entry) };
+    value.cg_point().map(|point| (point.x, point.y))
+}
+
+fn batch_size(entry: &cf::Type) -> Option<(f64, f64)> {
+    if entry.get_type_id() != ax::Value::type_id() {
+        return None;
+    }
+    let value: &ax::Value = unsafe { std::mem::transmute(entry) };
+    value.cg_size().map(|size| (size.width, size.height))
+}
+
+fn batch_bool(entry: &cf::Type) -> Option<bool> {
+    if entry.get_type_id() != cf::Boolean::type_id() {
+        return None;
+    }
+    let value: &cf::Boolean = unsafe { std::mem::transmute(entry) };
+    Some(value.value())
+}
+
+fn read_node_attrs(elem: &ax::UiElement) -> Option<NodeAttrs> {
+    let mut out: Option<arc::R<cf::ArrayOf<cf::Type>>> = None;
+    let status = CORE_ATTR_NAMES
+        .with(|names| unsafe { AXUIElementCopyMultipleAttributeValues(elem, names, 0, &mut out) });
+    if !status.is_ok() {
+        return None;
+    }
+    let values = out?;
+    if values.len() < 10 {
+        return None;
+    }
+    let frame = match (batch_point(&values[4]), batch_size(&values[5])) {
+        (Some((x, y)), Some((width, height))) => Some((x, y, width, height)),
+        _ => None,
+    };
+    Some(NodeAttrs {
+        role: batch_string(&values[0]),
+        value: batch_string(&values[1]),
+        title: batch_string(&values[2]),
+        desc: batch_string(&values[3]),
+        frame,
+        identifier: batch_string(&values[6]),
+        subrole: batch_string(&values[7]),
+        dom_identifier: batch_string(&values[8]),
+        dom_classes: batch_string_list(&values[9]),
+    })
+}
+
+fn read_enrichment_attrs(elem: &ax::UiElement) -> Option<arc::R<cf::ArrayOf<cf::Type>>> {
+    let mut out: Option<arc::R<cf::ArrayOf<cf::Type>>> = None;
+    let status = ENRICHMENT_ATTR_NAMES
+        .with(|names| unsafe { AXUIElementCopyMultipleAttributeValues(elem, names, 0, &mut out) });
+    if !status.is_ok() {
+        return None;
+    }
+    out.filter(|values| values.len() >= 8)
+}
+
 /// Recursively walk an AX element and its children.
-fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
+fn walk_element(
+    elem: &ax::UiElement,
+    depth: usize,
+    parent_node_id: Option<u32>,
+    state: &mut WalkState,
+) {
     if state.should_stop() || depth >= state.max_depth {
         return;
     }
@@ -1024,13 +1223,17 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
         std::thread::yield_now();
     }
 
-    // Set a per-element timeout to prevent IPC hangs
+    // Set a per-element timeout to prevent IPC hangs. Core attributes below
+    // are fetched in one XPC round trip.
     let _ = elem.set_messaging_timeout_secs(state.element_timeout_secs);
 
-    // Get the role
-    let role_str = match elem.role() {
-        Ok(role) => role.to_string(),
-        Err(_) => return,
+    let attrs = match read_node_attrs(elem) {
+        Some(attrs) => attrs,
+        None => return,
+    };
+    let role_str = match attrs.role.as_deref() {
+        Some(role) => role.to_owned(),
+        None => return,
     };
 
     // Skip decorative/irrelevant roles
@@ -1066,8 +1269,12 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
         return; // prune entire terminal subtree — no children walked, no text emitted
     }
 
-    // Extract text from this element.
-    // In VS Code terminal mode, suppress text outside the terminal AXList subtree.
+    let node_id = state.node_count.min(u32::MAX as usize) as u32;
+
+    // Extract text from this element. Every other non-decorative element is
+    // still retained as a structural node so parser-relevant containment is
+    // never reconstructed from a flattened text list.
+    let mut emitted_text_node = false;
     if should_extract_text(&role_str) {
         let emit = match state.app {
             AppState::VsCode {
@@ -1078,7 +1285,15 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
             _ => true,
         };
         if emit {
-            extract_text(elem, &role_str, depth, state);
+            emitted_text_node = extract_text(
+                elem,
+                &role_str,
+                depth,
+                node_id,
+                parent_node_id,
+                &attrs,
+                state,
+            );
         }
     } else if role_str == "AXWebArea" {
         // Browser extension popup detection: AXWebArea nodes inside Chrome/Arc/Edge
@@ -1093,7 +1308,7 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
                 let lower = val.to_lowercase();
                 window_pattern::matches_any(&state.ignored_patterns, app_lc, &lower)
             };
-            if get_string_attr(elem, ax::attr::title()).is_some_and(|t| matches(&t))
+            if attrs.title.as_deref().is_some_and(matches)
                 || get_string_attr(elem, ax::attr::url()).is_some_and(|u| matches(&u))
             {
                 state.hit_ignored_extension = true;
@@ -1101,18 +1316,30 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
             }
         }
         // Groups and web areas: only extract if they have a direct value
-        if let Some(val) = get_string_attr(elem, ax::attr::value()) {
+        if let Some(val) = attrs.value.as_deref() {
             if !val.is_empty() {
                 append_text(&mut state.text_buffer, &val);
             }
         }
     } else if role_str == "AXGroup" {
         // Groups: only extract if they have a direct value
-        if let Some(val) = get_string_attr(elem, ax::attr::value()) {
+        if let Some(val) = attrs.value.as_deref() {
             if !val.is_empty() {
                 append_text(&mut state.text_buffer, &val);
             }
         }
+    }
+
+    if !emitted_text_node {
+        capture_structural_node(
+            elem,
+            &role_str,
+            depth,
+            node_id,
+            parent_node_id,
+            &attrs,
+            state,
+        );
     }
 
     if state.should_stop() {
@@ -1157,7 +1384,7 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
             if state.should_stop() {
                 break;
             }
-            walk_element(&children[i], next_depth, state);
+            walk_element(&children[i], next_depth, Some(node_id), state);
         }
         if let AppState::VsCode {
             in_terminal_subtree,
@@ -1169,95 +1396,114 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
     }
 }
 
-/// Extract text attributes from an element, append to the buffer, and collect a structured node.
-fn extract_text(elem: &ax::UiElement, role_str: &str, depth: usize, state: &mut WalkState) {
-    // Read element bounds once (used for all text extraction paths). The
-    // raw screen-absolute frame is also passed to is_on_screen() so we
-    // know whether the captured screenshot actually shows this element —
-    // see issue #2436 for the search-hits-off-screen-text bug this fixes.
-    let frame = get_element_frame(elem);
+/// Extract text using the already-batched core attributes.
+fn extract_text(
+    elem: &ax::UiElement,
+    role_str: &str,
+    depth: usize,
+    node_id: u32,
+    parent_node_id: Option<u32>,
+    attrs: &NodeAttrs,
+    state: &mut WalkState,
+) -> bool {
+    let frame = attrs.frame;
     let bounds = frame.and_then(|(x, y, w, h)| normalize_bounds(x, y, w, h, state));
     let on_screen = frame.and_then(|(x, y, w, h)| is_on_screen(x, y, w, h, state));
 
-    // For text fields / text areas, prefer value (the actual content)
-    if role_str == "AXTextField" || role_str == "AXTextArea" || role_str == "AXComboBox" {
-        if let Some(val) = get_string_attr(elem, ax::attr::value()) {
-            if !val.is_empty() {
-                append_text(&mut state.text_buffer, &val);
-                let trimmed = val.trim().to_string();
-                let mut node = AccessibilityTreeNode::new(
-                    role_str.to_string(),
-                    trimmed.clone(),
-                    depth.min(255) as u8,
-                    bounds.clone(),
-                );
-                node.on_screen = on_screen;
-                node.value = Some(trimmed.clone());
-                fill_ax_props(&mut node, elem, role_str);
-                // AXTextArea is the multi-line case (textarea, rich text views);
-                // the gate naturally skips single-line AXTextField/AXComboBox.
-                if role_str == "AXTextArea" {
-                    node.lines = capture_lines_for_node(elem, &trimmed, &bounds, on_screen, state);
-                }
-                state.nodes.push(node);
-                return;
-            }
-        }
-    }
+    let value_first = matches!(
+        role_str,
+        "AXTextField" | "AXTextArea" | "AXComboBox" | "AXStaticText"
+    );
+    let text = value_first
+        .then_some(attrs.value.as_deref())
+        .flatten()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            attrs
+                .title
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .or_else(|| {
+            attrs
+                .desc
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+        });
+    let Some(text) = text else {
+        return false;
+    };
 
-    // For static text, value is the text content
-    if role_str == "AXStaticText" {
-        if let Some(val) = get_string_attr(elem, ax::attr::value()) {
-            if !val.is_empty() {
-                append_text(&mut state.text_buffer, &val);
-                let trimmed = val.trim().to_string();
-                let mut node = AccessibilityTreeNode::new(
-                    role_str.to_string(),
-                    trimmed.clone(),
-                    depth.min(255) as u8,
-                    bounds.clone(),
-                );
-                node.on_screen = on_screen;
-                fill_ax_props(&mut node, elem, role_str);
-                node.lines = capture_lines_for_node(elem, &trimmed, &bounds, on_screen, state);
-                state.nodes.push(node);
-                return;
-            }
-        }
+    append_text(&mut state.text_buffer, text);
+    let trimmed = text.trim().to_owned();
+    let mut node = AccessibilityTreeNode::new(
+        role_str.to_owned(),
+        trimmed.clone(),
+        depth.min(255) as u8,
+        bounds.clone(),
+    );
+    node.node_id = node_id;
+    node.parent_node_id = parent_node_id;
+    node.on_screen = on_screen;
+    if matches!(role_str, "AXTextField" | "AXTextArea" | "AXComboBox") {
+        node.value = Some(trimmed.clone());
     }
+    apply_core_attrs(&mut node, attrs);
+    state.nodes.push(node);
+    state.pending_enrichment.push(PendingEnrichment {
+        elem: elem.retained(),
+        node_index: state.nodes.len() - 1,
+        role: role_str.to_owned(),
+        text: trimmed,
+        bounds,
+        on_screen,
+    });
+    true
+}
 
-    // Fall back to title
-    if let Some(title) = get_string_attr(elem, ax::attr::title()) {
-        if !title.is_empty() {
-            append_text(&mut state.text_buffer, &title);
-            let mut node = AccessibilityTreeNode::new(
-                role_str.to_string(),
-                title.trim().to_string(),
-                depth.min(255) as u8,
-                bounds,
-            );
-            node.on_screen = on_screen;
-            fill_ax_props(&mut node, elem, role_str);
-            state.nodes.push(node);
-            return;
-        }
+fn capture_structural_node(
+    elem: &ax::UiElement,
+    role_str: &str,
+    depth: usize,
+    node_id: u32,
+    parent_node_id: Option<u32>,
+    attrs: &NodeAttrs,
+    state: &mut WalkState,
+) {
+    let bounds = attrs
+        .frame
+        .and_then(|(x, y, width, height)| normalize_bounds(x, y, width, height, state));
+    let on_screen = attrs
+        .frame
+        .and_then(|(x, y, width, height)| is_on_screen(x, y, width, height, state));
+    let mut node = AccessibilityTreeNode::new(
+        role_str.to_owned(),
+        String::new(),
+        depth.min(255) as u8,
+        bounds.clone(),
+    );
+    node.node_id = node_id;
+    node.parent_node_id = parent_node_id;
+    node.on_screen = on_screen;
+    apply_core_attrs(&mut node, attrs);
+    state.nodes.push(node);
+    if is_interactive_role(role_str) {
+        state.pending_enrichment.push(PendingEnrichment {
+            elem: elem.retained(),
+            node_index: state.nodes.len() - 1,
+            role: role_str.to_owned(),
+            text: String::new(),
+            bounds,
+            on_screen,
+        });
     }
+}
 
-    // Fall back to description
-    if let Some(desc) = get_string_attr(elem, ax::attr::desc()) {
-        if !desc.is_empty() {
-            append_text(&mut state.text_buffer, &desc);
-            let mut node = AccessibilityTreeNode::new(
-                role_str.to_string(),
-                desc.trim().to_string(),
-                depth.min(255) as u8,
-                bounds,
-            );
-            node.on_screen = on_screen;
-            fill_ax_props(&mut node, elem, role_str);
-            state.nodes.push(node);
-        }
-    }
+fn apply_core_attrs(node: &mut AccessibilityTreeNode, attrs: &NodeAttrs) {
+    node.automation_id = attrs.identifier.clone();
+    node.subrole = attrs.subrole.clone();
+    node.dom_identifier = attrs.dom_identifier.clone();
+    node.dom_classes = attrs.dom_classes.clone();
 }
 
 /// Append text to the buffer with a newline separator.
@@ -1617,21 +1863,22 @@ fn capture_lines_for_node(
     macos_lines::capture_line_spans(elem, text, &refs, budget, max_per_node)
 }
 
-/// Fill automation properties on an AccessibilityTreeNode from an AX element.
-/// Only fetches bool states for interactive elements to limit IPC overhead.
-fn fill_ax_props(node: &mut AccessibilityTreeNode, elem: &ax::UiElement, role_str: &str) {
-    node.automation_id = get_string_attr(elem, ax::attr::id());
-    node.subrole = get_string_attr(elem, ax::attr::subrole());
-    node.role_description = get_string_attr(elem, ax::attr::role_desc());
-    node.help_text = get_string_attr(elem, ax::attr::help());
-    // Bool states and extra string attrs only for interactive elements (limits IPC calls)
+/// Apply the optional, post-traversal attribute batch. Core identity and
+/// structure were already captured in the primary per-node batch.
+fn apply_enrichment_attrs(
+    node: &mut AccessibilityTreeNode,
+    role_str: &str,
+    values: &cf::ArrayOf<cf::Type>,
+) {
+    node.role_description = batch_string(&values[0]);
+    node.help_text = batch_string(&values[1]);
     if is_interactive_role(role_str) {
-        node.placeholder = get_string_attr(elem, ax::attr::placeholder_value());
-        node.url = get_string_attr(elem, ax::attr::url());
-        node.is_enabled = get_bool_attr(elem, ax::attr::enabled());
-        node.is_focused = get_bool_attr(elem, ax::attr::focused());
-        node.is_selected = get_bool_attr(elem, ax::attr::selected());
-        node.is_expanded = get_bool_attr(elem, ax::attr::expanded());
+        node.placeholder = batch_string(&values[2]);
+        node.url = batch_string(&values[3]);
+        node.is_enabled = batch_bool(&values[4]);
+        node.is_focused = batch_bool(&values[5]);
+        node.is_selected = batch_bool(&values[6]);
+        node.is_expanded = batch_bool(&values[7]);
     }
 }
 
