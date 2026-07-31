@@ -6,13 +6,14 @@
 
 use crate::a11y::config::UiCaptureConfig;
 use crate::a11y::events::{AccessibilityNode, ElementBounds, ElementContext, WindowTreeSnapshot};
+use crate::a11y::tree::TruncationReason;
 use chrono::Utc;
 use crossbeam_channel::Sender;
 use parking_lot::Mutex;
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tracing::{debug, error, trace, warn};
 
@@ -85,6 +86,95 @@ pub struct ClickElementRequest {
     pub x: i32,
     pub y: i32,
     pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+const DEFAULT_TREE_CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A captured UIA tree plus the first budget limit reached, if any.
+pub(crate) struct CapturedTree {
+    pub root: AccessibilityNode,
+    pub truncation: TruncationReason,
+}
+
+/// Shared node and deadline budget for one UIA traversal. Cached subtrees use
+/// only the node cap because their single COM call has already materialized
+/// the data; the deadline is for the per-element TreeWalker fallback.
+struct TreeBudget {
+    max_elements: usize,
+    deadline: Option<Instant>,
+    count: usize,
+    truncation: TruncationReason,
+}
+
+impl TreeBudget {
+    fn timed(max_elements: usize, deadline: Instant) -> Self {
+        Self {
+            max_elements,
+            deadline: Some(deadline),
+            count: 0,
+            truncation: TruncationReason::None,
+        }
+    }
+
+    fn node_capped(max_elements: usize) -> Self {
+        Self {
+            max_elements,
+            deadline: None,
+            count: 0,
+            truncation: TruncationReason::None,
+        }
+    }
+
+    fn exhausted(&mut self) -> bool {
+        if self.count >= self.max_elements {
+            if self.truncation == TruncationReason::None {
+                self.truncation = TruncationReason::MaxNodes;
+            }
+            return true;
+        }
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            if self.truncation == TruncationReason::None {
+                self.truncation = TruncationReason::Timeout;
+            }
+            return true;
+        }
+        false
+    }
+}
+
+const WALKER_FALLBACK_MEMO_TTL: Duration = Duration::from_secs(300);
+
+fn walker_fallback_memo() -> &'static Mutex<HashMap<isize, Instant>> {
+    static MEMO: OnceLock<Mutex<HashMap<isize, Instant>>> = OnceLock::new();
+    MEMO.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn needs_walker_fallback(hwnd: HWND) -> bool {
+    let mut memo = walker_fallback_memo().lock();
+    let key = hwnd.0 as isize;
+    match memo.get(&key) {
+        Some(seen) if seen.elapsed() < WALKER_FALLBACK_MEMO_TTL => true,
+        Some(_) => {
+            memo.remove(&key);
+            false
+        }
+        None => false,
+    }
+}
+
+fn remember_walker_fallback(hwnd: HWND) {
+    let mut memo = walker_fallback_memo().lock();
+    if memo.len() >= 64 {
+        memo.retain(|_, seen| seen.elapsed() < WALKER_FALLBACK_MEMO_TTL);
+    }
+    memo.insert(hwnd.0 as isize, Instant::now());
+}
+
+fn forget_walker_fallback(hwnd: HWND) {
+    walker_fallback_memo().lock().remove(&(hwnd.0 as isize));
 }
 
 /// UIA context holding COM objects (single-thread only, not Send)
@@ -173,33 +263,71 @@ impl UiaContext {
         hwnd: HWND,
         max_elements: usize,
     ) -> Option<AccessibilityNode> {
+        self.capture_window_tree_bounded(hwnd, max_elements, DEFAULT_TREE_CAPTURE_TIMEOUT)
+            .map(|captured| captured.root)
+    }
+
+    /// Capture a window tree with a deadline on the per-element fallback.
+    /// `ElementFromHandleBuildCache` itself is one synchronous COM call and
+    /// cannot be interrupted; once it returns, its subtree is local and is
+    /// therefore constrained only by the node cap.
+    pub(crate) fn capture_window_tree_bounded(
+        &self,
+        hwnd: HWND,
+        max_elements: usize,
+        timeout: Duration,
+    ) -> Option<CapturedTree> {
+        let deadline = Instant::now() + timeout;
+
+        if needs_walker_fallback(hwnd) {
+            let mut walker_budget = TreeBudget::timed(max_elements, deadline);
+            if let Some(root) = self.capture_window_tree_walker(hwnd, &mut walker_budget) {
+                return Some(CapturedTree {
+                    root,
+                    truncation: walker_budget.truncation,
+                });
+            }
+        }
+
         unsafe {
             let element = self
                 .automation
                 .ElementFromHandleBuildCache(hwnd, &self.cache_request)
                 .ok()?;
 
-            let mut count = 0;
-            let root = self.build_node(&element, max_elements, &mut count);
+            let mut cached_budget = TreeBudget::node_capped(max_elements);
+            let root = self.build_node(&element, &mut cached_budget);
+            let cached_count = cached_budget.count;
 
             // Some UIA providers (notably Chromium/Electron) don't populate the
             // cached subtree via ElementFromHandleBuildCache, returning only a
             // handful of titlebar nodes. When this happens, fall back to
             // TreeWalker which makes individual COM calls per element.
-            if count <= 10 {
-                if let Some(walker_root) = self.capture_window_tree_walker(hwnd, max_elements) {
+            if cached_count <= 10 {
+                let mut walker_budget = TreeBudget::timed(max_elements, deadline);
+                if let Some(walker_root) = self.capture_window_tree_walker(hwnd, &mut walker_budget)
+                {
                     let walker_count = walker_root.node_count();
-                    if walker_count > count {
+                    if walker_count > cached_count {
                         debug!(
                             "Cache returned {} nodes, walker returned {} - using walker result",
-                            count, walker_count
+                            cached_count, walker_count
                         );
-                        return Some(walker_root);
+                        remember_walker_fallback(hwnd);
+                        return Some(CapturedTree {
+                            root: walker_root,
+                            truncation: walker_budget.truncation,
+                        });
                     }
                 }
+            } else {
+                forget_walker_fallback(hwnd);
             }
 
-            Some(root)
+            Some(CapturedTree {
+                root,
+                truncation: cached_budget.truncation,
+            })
         }
     }
 
@@ -209,7 +337,7 @@ impl UiaContext {
     fn capture_window_tree_walker(
         &self,
         hwnd: HWND,
-        max_elements: usize,
+        budget: &mut TreeBudget,
     ) -> Option<AccessibilityNode> {
         unsafe {
             // Get a live element (required for TreeWalker navigation)
@@ -219,8 +347,7 @@ impl UiaContext {
                 .BuildUpdatedCache(&self.walker_cache_request)
                 .ok()?;
 
-            let mut count = 0;
-            Some(self.build_node_walker(&cached_root, max_elements, &mut count))
+            Some(self.build_node_walker(&cached_root, budget))
         }
     }
 
@@ -230,10 +357,9 @@ impl UiaContext {
     fn build_node_walker(
         &self,
         element: &IUIAutomationElement,
-        max_elements: usize,
-        count: &mut usize,
+        budget: &mut TreeBudget,
     ) -> AccessibilityNode {
-        *count += 1;
+        budget.count += 1;
 
         let control_type = self.get_control_type_name(element);
         let name = self.get_cached_string(element, UIA_NamePropertyId);
@@ -253,23 +379,23 @@ impl UiaContext {
             self.get_cached_string(element, UIA_LocalizedControlTypePropertyId);
 
         let mut children = Vec::new();
-        if *count < max_elements {
+        if !budget.exhausted() {
             unsafe {
                 // Navigate to first child via TreeWalker
                 if let Ok(child) = self
                     .tree_walker
                     .GetFirstChildElementBuildCache(element, &self.walker_cache_request)
                 {
-                    children.push(self.build_node_walker(&child, max_elements, count));
+                    children.push(self.build_node_walker(&child, budget));
                     // Iterate siblings
                     let mut current = child;
-                    while *count < max_elements {
+                    while !budget.exhausted() {
                         match self
                             .tree_walker
                             .GetNextSiblingElementBuildCache(&current, &self.walker_cache_request)
                         {
                             Ok(next) => {
-                                children.push(self.build_node_walker(&next, max_elements, count));
+                                children.push(self.build_node_walker(&next, budget));
                                 current = next;
                             }
                             Err(_) => break,
@@ -304,10 +430,9 @@ impl UiaContext {
     fn build_node(
         &self,
         element: &IUIAutomationElement,
-        max_elements: usize,
-        count: &mut usize,
+        budget: &mut TreeBudget,
     ) -> AccessibilityNode {
-        *count += 1;
+        budget.count += 1;
 
         let control_type = self.get_control_type_name(element);
         let name = self.get_cached_string(element, UIA_NamePropertyId);
@@ -327,17 +452,17 @@ impl UiaContext {
             self.get_cached_string(element, UIA_LocalizedControlTypePropertyId);
 
         let mut children = Vec::new();
-        if *count < max_elements {
+        if !budget.exhausted() {
             unsafe {
                 // Walk cached children (already fetched via TreeScope_Subtree)
                 if let Ok(child_array) = element.GetCachedChildren() {
                     if let Ok(len) = child_array.Length() {
                         for i in 0..len {
-                            if *count >= max_elements {
+                            if budget.exhausted() {
                                 break;
                             }
                             if let Ok(child) = child_array.GetElement(i) {
-                                children.push(self.build_node(&child, max_elements, count));
+                                children.push(self.build_node(&child, budget));
                             }
                         }
                     }
@@ -879,9 +1004,23 @@ fn capture_and_send(
         return;
     }
 
-    // Capture the tree
-    let root = match uia.capture_window_tree(hwnd, config.tree_max_elements) {
-        Some(root) => root,
+    // Bound the per-element Chromium/Electron fallback so a provider cannot
+    // freeze its foreground UI indefinitely.
+    const PERIODIC_TREE_WALK_TIMEOUT: Duration = Duration::from_millis(250);
+    let root = match uia.capture_window_tree_bounded(
+        hwnd,
+        config.tree_max_elements,
+        PERIODIC_TREE_WALK_TIMEOUT,
+    ) {
+        Some(captured) => {
+            if captured.truncation != TruncationReason::None {
+                debug!(
+                    "Tree capture for {} truncated ({:?})",
+                    app_name, captured.truncation
+                );
+            }
+            captured.root
+        }
         None => {
             trace!("Failed to capture tree for hwnd {:?}", hwnd.0);
             return;
@@ -1045,6 +1184,30 @@ fn control_type_id_to_name(id: i32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tree_budget_reports_node_cap() {
+        let mut budget = TreeBudget::node_capped(2);
+        budget.count = 2;
+        assert!(budget.exhausted());
+        assert_eq!(budget.truncation, TruncationReason::MaxNodes);
+    }
+
+    #[test]
+    fn tree_budget_reports_expired_deadline() {
+        let mut budget = TreeBudget::timed(100, Instant::now() - Duration::from_millis(1));
+        assert!(budget.exhausted());
+        assert_eq!(budget.truncation, TruncationReason::Timeout);
+    }
+
+    #[test]
+    fn cached_tree_budget_ignores_wall_clock() {
+        let mut budget = TreeBudget::node_capped(3);
+        budget.count = 2;
+        assert!(!budget.exhausted());
+        budget.count = 3;
+        assert!(budget.exhausted());
+    }
 
     #[test]
     fn test_control_type_names() {

@@ -271,11 +271,17 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             return Ok(TreeWalkResult::NotFound);
         }
 
-        // Capture the accessibility tree
-        let root = match uia.capture_window_tree(hwnd, effective_max_nodes) {
-            Some(tree) => tree,
-            None => return Ok(TreeWalkResult::NotFound),
-        };
+        // The cached UIA path is one synchronous provider call. Chromium and
+        // Electron often require the per-element TreeWalker fallback, which is
+        // bounded by the remaining wall-clock budget inside the traversal.
+        let remaining_budget = effective_timeout.saturating_sub(start.elapsed());
+        let captured =
+            match uia.capture_window_tree_bounded(hwnd, effective_max_nodes, remaining_budget) {
+                Some(captured) => captured,
+                None => return Ok(TreeWalkResult::NotFound),
+            };
+        let root = captured.root;
+        let truncation_reason = captured.truncation;
 
         // Get monitor dimensions for normalizing element bounds to 0-1 coords
         let monitor_rect = get_monitor_rect(hwnd);
@@ -338,7 +344,6 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             walk_duration
         );
 
-        // Windows walker doesn't have timeout-based truncation yet — report as complete
         // Per-app document_path resolution from on-disk state files
         // (Obsidian config + VS Code-fork state.vscdb). Returns None
         // for any unknown app or any failure — never panics.
@@ -356,8 +361,8 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             walk_duration,
             content_hash,
             simhash,
-            truncated: false,
-            truncation_reason: super::TruncationReason::None,
+            truncated: truncation_reason != super::TruncationReason::None,
+            truncation_reason,
             max_depth_reached: 0,
         }))
     }
