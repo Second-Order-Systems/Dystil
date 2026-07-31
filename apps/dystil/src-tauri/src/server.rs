@@ -26,6 +26,18 @@ struct LogEntry {
     timestamp: String,
 }
 
+/// Default port for the app-local focus/notification server.
+pub const DEFAULT_FOCUS_PORT: u16 = 11735;
+
+/// Resolve the focus/notification server port: `DYSTIL_FOCUS_PORT` when set and
+/// parseable, otherwise [`DEFAULT_FOCUS_PORT`].
+pub fn focus_port() -> u16 {
+    std::env::var("DYSTIL_FOCUS_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_FOCUS_PORT)
+}
+
 #[derive(Clone)]
 pub struct ServerState {
     pub app_handle: tauri::AppHandle,
@@ -573,17 +585,17 @@ pub fn spawn_server(app_handle: tauri::AppHandle, port: u16) -> mpsc::Sender<()>
 /*
 
 # Simple notification (just title + body)
-curl -X POST http://localhost:11435/notify \
+curl -X POST http://localhost:11735/notify \
   -H "Content-Type: application/json" \
   -d '{"title": "Test", "body": "This is a test notification"}'
 
 # Markdown body
-curl -X POST http://localhost:11435/notify \
+curl -X POST http://localhost:11735/notify \
   -H "Content-Type: application/json" \
   -d '{"title": "Meeting Summary", "body": "**Q3 Planning**\n- Budget approved\n- Launch date: *Oct 15*\n- [Notes](https://example.com)"}'
 
 # Custom auto-dismiss (5 seconds)
-curl -X POST http://localhost:11435/notify \
+curl -X POST http://localhost:11735/notify \
   -H "Content-Type: application/json" \
   -d '{"title": "Saved", "body": "Note saved to Obsidian", "timeout": 5000}'
 

@@ -210,10 +210,7 @@ pub fn get_app_identifier(app_handle: tauri::AppHandle) -> String {
 #[tauri::command]
 #[specta::specta]
 pub fn get_app_server_config() -> serde_json::Value {
-    let port = std::env::var("DYSTIL_FOCUS_PORT")
-        .ok()
-        .and_then(|v| v.parse::<u16>().ok())
-        .unwrap_or(11435);
+    let port = crate::server::focus_port();
 
     serde_json::json!({ "port": port })
 }

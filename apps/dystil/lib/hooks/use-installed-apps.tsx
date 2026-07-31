@@ -1,9 +1,11 @@
 
 import { useEffect, useState } from "react";
 
+import { appServerUrl } from "@/lib/constants/server";
+
 /**
  * Installed applications on this machine, by display name — independent of
- * whether they've ever been captured. Served by the tauri-app server (11435),
+ * whether they've ever been captured. Served by the tauri-app server,
  * the same host that resolves app icons, so a name returned here is guaranteed
  * to also resolve an icon via `/app-icon?name=`.
  *
@@ -17,7 +19,7 @@ import { useEffect, useState } from "react";
  * backend without the route, offline, etc.) so the UI falls back to
  * captured-only behavior rather than crashing.
  */
-const INSTALLED_APPS_URL = "http://localhost:11435/installed-apps";
+const INSTALLED_APPS_URL = appServerUrl("/installed-apps");
 
 export function useInstalledApps(): { apps: string[]; isLoading: boolean } {
   const [apps, setApps] = useState<string[]>([]);

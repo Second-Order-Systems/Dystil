@@ -39,7 +39,10 @@ pub fn send_typed_with_actions(
     tauri::async_runtime::spawn(async move {
         let client = reqwest::Client::new();
         if let Err(e) = client
-            .post("http://127.0.0.1:11435/notify")
+            .post(format!(
+                "http://127.0.0.1:{}/notify",
+                crate::server::focus_port()
+            ))
             .json(&payload)
             .send()
             .await

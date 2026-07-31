@@ -23,6 +23,7 @@ import {
   type OnboardingOption,
   type OnboardingSelectField,
 } from "@/lib/onboarding-schema";
+import { appServerUrl } from "@/lib/constants/server";
 import { useOnboardingStatus } from "@/lib/hooks/use-onboarding-status";
 import { useInstalledApps } from "@/lib/hooks/use-installed-apps";
 import { usePlatform } from "@/lib/hooks/use-platform";
@@ -426,7 +427,7 @@ export function OnboardingWizard() {
       ...field,
       options: mergedOptions.map((option) => ({
         ...option,
-        iconUrl: `http://localhost:11435/app-icon?name=${encodeURIComponent(option.label)}`,
+        iconUrl: appServerUrl(`/app-icon?name=${encodeURIComponent(option.label)}`),
       })),
     };
   };

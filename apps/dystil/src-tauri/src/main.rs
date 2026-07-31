@@ -339,10 +339,7 @@ async fn main() {
         let args: Vec<String> = std::env::args().collect();
         let deep_link_url = args.iter().find(|a| a.starts_with("dystil://")).cloned();
 
-        let focus_port: u16 = std::env::var("DYSTIL_FOCUS_PORT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(11435);
+        let focus_port: u16 = server::focus_port();
         if let Ok(resp) = reqwest::Client::new()
             .post(format!("http://127.0.0.1:{}/focus", focus_port))
             .timeout(std::time::Duration::from_secs(2))
@@ -662,15 +659,21 @@ async fn main() {
             // Benign noise that swamps real errors in user feedback logs.
             const LOG_FILTER: &str = "info,hyper=error,tower_http=error,ort=warn,xcap::platform::impl_window=off,xcap::platform::impl_monitor=off,xcap::platform::utils=off";
 
+            // `RUST_LOG` wins when set (e.g. `RUST_LOG=debug`, or
+            // `RUST_LOG=info,dystil_capture=trace` to keep the noise down);
+            // otherwise use LOG_FILTER. Built per-layer — EnvFilter isn't Clone.
+            let make_filter =
+                || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(LOG_FILTER));
+
             let file_layer = tracing_subscriber::fmt::layer()
                 .with_writer(file_appender)
                 .with_ansi(false)
-                .with_filter(EnvFilter::new(LOG_FILTER));
+                .with_filter(make_filter());
 
             // Create a custom layer for console logging
             let console_layer = tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stdout)
-                .with_filter(EnvFilter::new(LOG_FILTER));
+                .with_filter(make_filter());
 
             // Initialize the tracing subscriber with file + console layers only.
             let registry = tracing_subscriber::registry()
@@ -761,10 +764,7 @@ async fn main() {
             agent_worker::start(app_handle.clone());
 
             // Initialize the local focus/notification bridge first.
-            let focus_port: u16 = std::env::var("DYSTIL_FOCUS_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(11435);
+            let focus_port: u16 = server::focus_port();
             let server_shutdown_tx = spawn_server(app_handle.clone(), focus_port);
             app.manage(server_shutdown_tx);
             // TODO: vault lock app integration disabled — CLI-only for now
