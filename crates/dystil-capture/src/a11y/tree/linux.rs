@@ -567,7 +567,13 @@ impl WalkState {
 }
 
 /// Recursively walk the AT-SPI2 tree of a given accessible object.
-fn walk_accessible(conn: &Connection, aref: &AccessibleRef, depth: usize, state: &mut WalkState) {
+fn walk_accessible(
+    conn: &Connection,
+    aref: &AccessibleRef,
+    depth: usize,
+    parent_node_id: Option<u32>,
+    state: &mut WalkState,
+) {
     if state.should_stop() || depth >= state.max_depth {
         return;
     }
@@ -587,6 +593,7 @@ fn walk_accessible(conn: &Connection, aref: &AccessibleRef, depth: usize, state:
     if should_skip_role(role) {
         return;
     }
+    let node_id = state.node_count.min(u32::MAX as usize) as u32;
 
     // Browser extension popup detection: DocumentWeb/DocumentFrame nodes in
     // Chromium carry the extension name as their accessible name. If it matches
@@ -602,17 +609,21 @@ fn walk_accessible(conn: &Connection, aref: &AccessibleRef, depth: usize, state:
         }
     }
 
-    // Extract text from text-bearing elements
-    if should_extract_text(role) {
-        extract_text(conn, aref, role, depth, state);
-    } else if role == 39 /* Panel */ || role == 85 /* Section */ || role == 23
-    /* Frame */
-    {
-        // Containers: only extract if they have a direct text value
-        let name = get_accessible_name(conn, aref);
-        if !name.is_empty() && name.len() < 200 {
-            // Only add short names for containers (long ones are usually content)
-        }
+    let emitted_text = should_extract_text(role)
+        && extract_text(conn, aref, role, depth, node_id, parent_node_id, state);
+    if !emitted_text {
+        // Role and object path are already available. Preserve the structural
+        // node without introducing name/state/bounds D-Bus calls.
+        let mut node = AccessibilityTreeNode::new(
+            role_name(role).to_string(),
+            String::new(),
+            depth.min(255) as u8,
+            None,
+        );
+        node.node_id = node_id;
+        node.parent_node_id = parent_node_id;
+        node.automation_id = Some(aref.path.clone());
+        state.nodes.push(node);
     }
 
     if state.should_stop() {
@@ -625,7 +636,7 @@ fn walk_accessible(conn: &Connection, aref: &AccessibleRef, depth: usize, state:
         if state.should_stop() {
             break;
         }
-        walk_accessible(conn, child, depth + 1, state);
+        walk_accessible(conn, child, depth + 1, Some(node_id), state);
     }
 }
 
@@ -652,8 +663,10 @@ fn extract_text(
     aref: &AccessibleRef,
     role: u32,
     depth: usize,
+    node_id: u32,
+    parent_node_id: Option<u32>,
     state: &mut WalkState,
-) {
+) -> bool {
     // Element extents in screen-absolute coords; bounds are normalized
     // for storage, on_screen is the focused-window intersection used by
     // the search filter — see issue #2436.
@@ -670,7 +683,7 @@ fn extract_text(
     if matches!(role, 79 | 61 | 11) {
         let state_set = get_accessible_state(conn, aref);
         if has_state(&state_set, STATE_PASSWORD_TEXT) {
-            return;
+            return false;
         }
         if let Some(text) = get_text_content(conn, aref) {
             append_text(&mut state.text_buffer, &text);
@@ -682,6 +695,9 @@ fn extract_text(
                 bounds.clone(),
             );
             node.on_screen = on_screen;
+            node.node_id = node_id;
+            node.parent_node_id = parent_node_id;
+            node.automation_id = Some(aref.path.clone());
             fill_atspi_state(&mut node, conn, aref);
             // Multi-line Entry / Text widgets (textareas, code editors) get
             // per-line bounds so search highlights pinpoint the matched word.
@@ -689,7 +705,7 @@ fn extract_text(
             // is usually single-line but harmless to gate via the heuristic.
             node.lines = capture_lines_for_node(conn, aref, &trimmed, &bounds, on_screen, state);
             state.nodes.push(node);
-            return;
+            return true;
         }
     }
 
@@ -705,10 +721,13 @@ fn extract_text(
                 bounds.clone(),
             );
             node.on_screen = on_screen;
+            node.node_id = node_id;
+            node.parent_node_id = parent_node_id;
+            node.automation_id = Some(aref.path.clone());
             fill_atspi_state(&mut node, conn, aref);
             node.lines = capture_lines_for_node(conn, aref, &trimmed, &bounds, on_screen, state);
             state.nodes.push(node);
-            return;
+            return true;
         }
     }
 
@@ -723,9 +742,12 @@ fn extract_text(
             bounds,
         );
         node.on_screen = on_screen;
+        node.node_id = node_id;
+        node.parent_node_id = parent_node_id;
+        node.automation_id = Some(aref.path.clone());
         fill_atspi_state(&mut node, conn, aref);
         state.nodes.push(node);
-        return;
+        return true;
     }
 
     // Fall back to Description
@@ -739,9 +761,14 @@ fn extract_text(
             bounds,
         );
         node.on_screen = on_screen;
+        node.node_id = node_id;
+        node.parent_node_id = parent_node_id;
+        node.automation_id = Some(aref.path.clone());
         fill_atspi_state(&mut node, conn, aref);
         state.nodes.push(node);
+        return true;
     }
+    false
 }
 
 /// Capture per-visual-line bounds for an AT-SPI text node when the node
@@ -1083,7 +1110,7 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
         }
 
         // Walk the accessibility tree
-        walk_accessible(conn, &window_ref, 0, &mut state);
+        walk_accessible(conn, &window_ref, 0, None, &mut state);
 
         if state.hit_ignored_extension {
             debug!(

@@ -298,6 +298,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         extract_text_from_tree(
             &root,
             0,
+            None,
             self.config.max_depth,
             &mut text_buffer,
             &mut nodes,
@@ -519,6 +520,7 @@ fn make_tree_node(
 fn extract_text_from_tree(
     node: &AccessibilityNode,
     depth: usize,
+    parent_node_id: Option<u32>,
     max_depth: usize,
     buffer: &mut String,
     nodes: &mut Vec<AccessibilityTreeNode>,
@@ -539,6 +541,9 @@ fn extract_text_from_tree(
     if SKIP_TYPES.iter().any(|&s| ct.eq_ignore_ascii_case(s)) {
         return;
     }
+
+    let output_index = nodes.len();
+    let node_id = (output_index + 1).min(u32::MAX as usize) as u32;
 
     // Normalize bounds from screen pixels to 0-1 monitor-relative coords
     let norm_bounds = monitor_rect
@@ -573,6 +578,8 @@ fn extract_text_from_tree(
                         norm_bounds.clone(),
                         on_screen,
                     ));
+                    nodes[output_index].node_id = node_id;
+                    nodes[output_index].parent_node_id = parent_node_id;
                     // Don't recurse into text controls — their children are sub-elements of the same text
                     return;
                 }
@@ -683,7 +690,7 @@ fn extract_text_from_tree(
                         ct,
                         name.trim(),
                         depth,
-                        norm_bounds,
+                        norm_bounds.clone(),
                         on_screen,
                     ));
                 }
@@ -691,11 +698,21 @@ fn extract_text_from_tree(
         }
     }
 
+    // Preserve every non-decorative Control View node, including empty-text
+    // message/list/group containers. UIA already materialized these nodes, so
+    // retaining them adds no provider calls.
+    if nodes.len() == output_index {
+        nodes.push(make_tree_node(node, ct, "", depth, norm_bounds, on_screen));
+    }
+    nodes[output_index].node_id = node_id;
+    nodes[output_index].parent_node_id = parent_node_id;
+
     // Recurse into children
     for child in &node.children {
         extract_text_from_tree(
             child,
             depth + 1,
+            Some(node_id),
             max_depth,
             buffer,
             nodes,
@@ -825,6 +842,7 @@ mod tests {
         extract_text_from_tree(
             &tree,
             0,
+            None,
             10,
             &mut buf,
             &mut nodes,
@@ -854,6 +872,12 @@ mod tests {
             "Image should be skipped, got: {}",
             buf
         );
+        assert_eq!(nodes.len(), 3);
+        assert_eq!(nodes[0].role, "Window");
+        assert_eq!(nodes[0].node_id, 1);
+        assert_eq!(nodes[0].parent_node_id, None);
+        assert_eq!(nodes[1].parent_node_id, Some(1));
+        assert_eq!(nodes[2].parent_node_id, Some(1));
     }
 
     #[test]
@@ -896,6 +920,7 @@ mod tests {
         extract_text_from_tree(
             &tree,
             0,
+            None,
             30,
             &mut buf,
             &mut nodes,
@@ -989,6 +1014,7 @@ mod tests {
         extract_text_from_tree(
             &bitwarden_popup,
             0,
+            None,
             10,
             &mut buf,
             &mut nodes,

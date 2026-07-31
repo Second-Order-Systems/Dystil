@@ -7,6 +7,8 @@
 - macOS performs automation-property and line-bound enrichment only after core traversal and only while the walk budget remains.
 - Windows UIA keeps its cached-subtree path node-capped and applies a real wall-clock deadline to the per-element Chromium/Electron fallback.
 - Windows remembers windows that require the fallback and reports timeout/node-cap truncation truthfully.
+- Windows retains every non-decorative UIA Control View node with explicit snapshot-local parent IDs without adding provider calls.
+- Linux retains role/object-path structure with explicit snapshot-local parent IDs without adding D-Bus reads for otherwise-empty containers.
 
 ## Not completed
 
@@ -26,17 +28,17 @@ Write a bundle containing the screenshot, production tree, extended tree, traver
 - Verify visible text recall, message-container hierarchy, sender/body association inputs, duration, and truncation.
 - Validate the macOS framework FFI on an actual macOS build runner and the Windows COM behavior on Windows.
 
-### Screenshot and AX coherence
+### Deferred: screenshot and AX coherence
 
-Pair screenshot and accessibility observations with separate timestamps and focused app/window identity before and after acquisition. Mark captures whose context changed during acquisition.
+Deferred until capture completeness is validated. Later, pair screenshot and accessibility observations with separate timestamps and focused app/window identity before and after acquisition. Mark captures whose context changed during acquisition.
 
-### Cross-platform structural fidelity
+### Cross-platform structural enrichment
 
-The new explicit structural IDs are populated by macOS. Windows and Linux still need to retain parser-relevant non-text containers and populate snapshot-local node/parent IDs instead of relying on the legacy depth fallback.
+Core structure and parent IDs are now retained on macOS, Windows, and Linux. Linux intentionally does not fetch bounds, names, descriptions, or states for otherwise-empty containers because each field can add D-Bus calls. Decide whether those attributes are necessary after examining structural fixtures.
 
-### Visibility accuracy
+### Deferred: nested visibility accuracy
 
-Current `on_screen` checks window intersection. It does not yet clip nodes against nested scroll containers, occlusion, or partially hidden application regions.
+Deferred until fixtures demonstrate that it materially affects visible-data accuracy. Current `on_screen` checks window intersection. It does not yet clip nodes against nested scroll containers, occlusion, or partially hidden application regions. Core element bounds remain part of normal capture; precise per-line bounds remain optional enrichment.
 
 ### Adaptive and semantic-guided capture
 
