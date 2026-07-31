@@ -9,6 +9,7 @@
 - Windows remembers windows that require the fallback and reports timeout/node-cap truncation truthfully.
 - Windows retains every non-decorative UIA Control View node with explicit snapshot-local parent IDs without adding provider calls.
 - Linux retains role/object-path structure with explicit snapshot-local parent IDs without adding D-Bus reads for otherwise-empty containers.
+- Production frames persist traversal quality in `ax_capture_diagnostics_json` (`node_count`, duration, truncation status/reason, and maximum depth).
 
 ## Not completed
 

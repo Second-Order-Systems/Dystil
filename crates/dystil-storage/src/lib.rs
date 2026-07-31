@@ -95,6 +95,7 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
             frame_text TEXT,
             text_source TEXT,
             accessibility_tree_json TEXT,
+            ax_capture_diagnostics_json TEXT,
             content_hash INTEGER,
             simhash INTEGER,
             elements_ref_frame_id INTEGER,
@@ -110,6 +111,12 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
         .execute(&mut *tx)
         .await;
     let _ = sqlx::query("ALTER TABLE frames DROP COLUMN full_text")
+        .execute(&mut *tx)
+        .await;
+    // Existing installations predate per-frame accessibility diagnostics.
+    // SQLite has no portable `ADD COLUMN IF NOT EXISTS`, so an already-added
+    // column is intentionally treated as an idempotent no-op here.
+    let _ = sqlx::query("ALTER TABLE frames ADD COLUMN ax_capture_diagnostics_json TEXT")
         .execute(&mut *tx)
         .await;
     sqlx::query(

@@ -11,6 +11,15 @@ use sqlx::SqlitePool;
 
 use crate::{AccessibilityNode, CaptureError, CaptureObservation, CaptureStore, StoredCapture};
 
+#[derive(serde::Serialize)]
+struct AxCaptureDiagnostics {
+    node_count: usize,
+    walk_duration_ms: u64,
+    truncated: bool,
+    truncation_reason: crate::AccessibilityTruncationReason,
+    max_depth_reached: usize,
+}
+
 const SNAPSHOT_QUALITY: u8 = 80;
 const SNAPSHOT_MAX_WIDTH: u32 = 1920;
 
@@ -76,6 +85,17 @@ impl CaptureStore for DystilCaptureStore {
             .map(serde_json::to_string)
             .transpose()
             .map_err(|error| CaptureError::Store(error.to_string()))?;
+        let ax_capture_diagnostics_json = accessibility
+            .map(|snapshot| AxCaptureDiagnostics {
+                node_count: snapshot.node_count,
+                walk_duration_ms: snapshot.walk_duration_ms,
+                truncated: snapshot.truncated,
+                truncation_reason: snapshot.truncation_reason,
+                max_depth_reached: snapshot.max_depth_reached,
+            })
+            .map(|diagnostics| serde_json::to_string(&diagnostics))
+            .transpose()
+            .map_err(|error| CaptureError::Store(error.to_string()))?;
         let text_source = accessibility_text.as_ref().map(|_| "accessibility");
         let content_hash = accessibility.map(|snapshot| snapshot.content_hash as i64);
         let simhash = accessibility.map(|snapshot| snapshot.simhash as i64);
@@ -109,8 +129,9 @@ impl CaptureStore for DystilCaptureStore {
             "INSERT INTO frames (\
                 timestamp, device_name, snapshot_path, app_name, window_name, browser_url, \
                 document_path, focused, capture_trigger, frame_text, text_source, \
-                accessibility_tree_json, content_hash, simhash, elements_ref_frame_id\
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+                accessibility_tree_json, ax_capture_diagnostics_json, content_hash, simhash, \
+                elements_ref_frame_id\
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
         )
         .bind(observation.captured_at.to_rfc3339())
         .bind(device_name)
@@ -124,6 +145,7 @@ impl CaptureStore for DystilCaptureStore {
         .bind(accessibility_text.as_deref())
         .bind(text_source)
         .bind(accessibility_tree_json)
+        .bind(ax_capture_diagnostics_json)
         .bind(content_hash)
         .bind(simhash)
         .execute(&self.pool)
@@ -384,7 +406,8 @@ mod tests {
                 device_name TEXT NOT NULL DEFAULT '', snapshot_path TEXT, app_name TEXT, \
                 window_name TEXT, browser_url TEXT, document_path TEXT, focused BOOLEAN, \
                 capture_trigger TEXT, frame_text TEXT, text_source TEXT, \
-                accessibility_tree_json TEXT, content_hash INTEGER, simhash INTEGER, \
+                accessibility_tree_json TEXT, ax_capture_diagnostics_json TEXT, \
+                content_hash INTEGER, simhash INTEGER, \
                 elements_ref_frame_id INTEGER)",
         )
         .execute(&pool)
@@ -453,6 +476,44 @@ mod tests {
         assert_eq!(row.get::<String, _>("snapshot_path"), "");
         assert_eq!(row.get::<String, _>("frame_text"), "AX content");
         assert_eq!(row.get::<String, _>("text_source"), "accessibility");
+    }
+
+    #[tokio::test]
+    async fn stores_accessibility_diagnostics_as_json_and_leaves_non_ax_frames_null() {
+        let temp = TempDir::new().unwrap();
+        let (pool, store) = test_store(&temp).await;
+        let mut with_ax = observation(None);
+        let snapshot = with_ax.accessibility.as_mut().unwrap();
+        snapshot.node_count = 1_842;
+        snapshot.walk_duration_ms = 250;
+        snapshot.truncated = true;
+        snapshot.truncation_reason = AccessibilityTruncationReason::Timeout;
+        snapshot.max_depth_reached = 27;
+
+        let ax_id = store.persist(with_ax).await.unwrap().frame_id;
+        let diagnostics: String =
+            sqlx::query_scalar("SELECT ax_capture_diagnostics_json FROM frames WHERE id = ?")
+                .bind(ax_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let diagnostics: serde_json::Value = serde_json::from_str(&diagnostics).unwrap();
+        assert_eq!(diagnostics["node_count"], 1_842);
+        assert_eq!(diagnostics["walk_duration_ms"], 250);
+        assert_eq!(diagnostics["truncated"], true);
+        assert_eq!(diagnostics["truncation_reason"], "timeout");
+        assert_eq!(diagnostics["max_depth_reached"], 27);
+
+        let mut without_ax = observation(None);
+        without_ax.accessibility = None;
+        let non_ax_id = store.persist(without_ax).await.unwrap().frame_id;
+        let diagnostics: Option<String> =
+            sqlx::query_scalar("SELECT ax_capture_diagnostics_json FROM frames WHERE id = ?")
+                .bind(non_ax_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(diagnostics.is_none());
     }
 
     #[tokio::test]
