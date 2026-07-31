@@ -707,7 +707,7 @@ impl SafeMonitor {
     pub fn release_capture_stream(&self) {
         #[cfg(target_os = "macos")]
         {
-            crate::stream_invalidation::invalidate_monitor_stream(self.monitor_id);
+            crate::screen::stream_invalidation::invalidate_monitor_stream(self.monitor_id);
         }
         #[cfg(target_os = "windows")]
         {
