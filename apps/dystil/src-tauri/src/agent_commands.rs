@@ -7,8 +7,6 @@ use uuid::Uuid;
 
 use crate::{agent_mailbox, ai, recording::RecordingState};
 
-const MAX_LOCAL_CHAT_CONTEXT_CARDS: usize = 36;
-
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentPeerView {
@@ -41,13 +39,6 @@ pub struct AgentEvidenceView {
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentPreferencesView {
-    pub provider: String,
-    pub model: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
 pub struct LocalChatSessionView {
     pub id: String,
     pub title: String,
@@ -64,7 +55,6 @@ pub struct LocalChatMessageView {
     pub question: Option<String>,
     pub answer: Option<String>,
     pub status: String,
-    pub selected_cards_json: Option<String>,
     pub citations_json: Option<String>,
     pub provider: Option<String>,
     pub model: Option<String>,
@@ -152,40 +142,6 @@ pub async fn agent_list_messages(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn agent_get_preferences(
-    state: State<'_, RecordingState>,
-) -> Result<AgentPreferencesView, String> {
-    let (provider, model) = agent_mailbox::preferences(&pool(&state).await?).await?;
-    Ok(AgentPreferencesView { provider, model })
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn agent_set_preferences(
-    provider: String,
-    model: String,
-    state: State<'_, RecordingState>,
-) -> Result<AgentPreferencesView, String> {
-    let provider_kind = ai::provider_kind(&provider)?;
-    let model = model.trim();
-    if model.is_empty()
-        || model.len() > 80
-        || !model
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-    {
-        return Err("invalid provider model identifier".into());
-    }
-    let pool = pool(&state).await?;
-    agent_mailbox::set_preferences(&pool, provider_kind.slug(), model).await?;
-    Ok(AgentPreferencesView {
-        provider: provider_kind.slug().into(),
-        model: model.into(),
-    })
-}
-
-#[tauri::command]
-#[specta::specta]
 pub async fn local_chat_list_sessions(
     state: State<'_, RecordingState>,
 ) -> Result<Vec<LocalChatSessionView>, String> {
@@ -214,7 +170,7 @@ pub async fn local_chat_get_messages(
 ) -> Result<Vec<LocalChatMessageView>, String> {
     let rows = sqlx::query(
         "SELECT id, session_id, role, mode, question, answer, status,
-                selected_cards_json, citations_json, provider, model, elapsed_ms,
+                citations_json, provider, model, elapsed_ms,
                 error_code, created_at
          FROM local_chat_messages WHERE session_id = ?1
          ORDER BY rowid ASC",
@@ -254,17 +210,10 @@ pub async fn local_chat_send(
     sqlx::query("INSERT INTO local_chat_messages (id, session_id, role, mode, question, status) VALUES (?1, ?2, 'user', 'local', ?3, 'complete')")
         .bind(&user_id).bind(&session_id).bind(&question).execute(&database).await.map_err(|error| error.to_string())?;
 
-    let cards = dystil_storage::search_work_cards(&database, &question, 12)
-        .await
-        .map_err(|error| error.to_string())?;
-    let current_cards = cards
-        .iter()
-        .map(dystil_ai::ContextCard::from)
-        .collect::<Vec<_>>();
-    let context_cards = local_chat_context_cards(&database, &session_id, current_cards).await?;
-    let snapshot = serde_json::to_string(&context_cards).map_err(|error| error.to_string())?;
-    sqlx::query("INSERT INTO local_chat_messages (id, session_id, role, mode, status, selected_cards_json) VALUES (?1, ?2, 'assistant', 'local', 'pending', ?3)")
-        .bind(&assistant_id).bind(&session_id).bind(snapshot).execute(&database).await.map_err(|error| error.to_string())?;
+    // Retrieval is tool-driven. Do not guess context before the runtime has
+    // chosen an overview or exact evidence query.
+    sqlx::query("INSERT INTO local_chat_messages (id, session_id, role, mode, status) VALUES (?1, ?2, 'assistant', 'local', 'pending')")
+        .bind(&assistant_id).bind(&session_id).execute(&database).await.map_err(|error| error.to_string())?;
     sqlx::query("UPDATE local_chat_sessions SET updated_at = datetime('now') WHERE id = ?1")
         .bind(&session_id)
         .execute(&database)
@@ -272,86 +221,36 @@ pub async fn local_chat_send(
         .map_err(|error| error.to_string())?;
 
     let timezone = ai::local_timezone_offset();
-    let bundle = dystil_ai::ContextBundle {
-        schema_version: dystil_ai::CONTEXT_SCHEMA_VERSION.into(),
-        task: "answer_local_question".into(),
-        timezone: timezone.clone(),
-        range: dystil_ai::ContextRange {
-            start: context_cards
-                .iter()
-                .filter(|card| !card.start.is_empty())
-                .map(|card| card.start.clone())
-                .min()
-                .unwrap_or_default(),
-            end: context_cards
-                .iter()
-                .filter(|card| !card.end.is_empty())
-                .map(|card| card.end.clone())
-                .max()
-                .unwrap_or_default(),
-        },
-        coverage: dystil_ai::ContextCoverage {
-            card_count: context_cards.len(),
-            first_observation: context_cards
-                .iter()
-                .filter(|card| !card.start.is_empty())
-                .map(|card| card.start.clone())
-                .min(),
-            last_observation: context_cards
-                .iter()
-                .filter(|card| !card.end.is_empty())
-                .map(|card| card.end.clone())
-                .max(),
-            truncated: context_cards.len() == MAX_LOCAL_CHAT_CONTEXT_CARDS,
-        },
-        cards: context_cards,
-    };
+    let search_end = chrono::Utc::now();
+    let search_start = search_end - chrono::Duration::days(30);
     let provider_question =
         local_chat_question_with_history(&database, &session_id, &user_id, &question).await?;
-    let (provider, model) = agent_mailbox::preferences(&database).await?;
-    let (generated, answer_provider, answer_model) = if let Some(profile) =
-        crate::byok::active_profile(&database).await?
-    {
-        let answer_model = profile.chat_model.clone();
-        (
-            crate::byok::answer_question(&profile, &database, &bundle, &provider_question).await,
-            "byok".to_string(),
-            answer_model,
-        )
-    } else {
-        let runtime = match ai::provider_kind(&provider).and_then(ai::provider_runtime) {
-            Ok(runtime) if runtime.authenticated().await.unwrap_or(false) => runtime,
-            _ => return complete_local_chat_error(&database, &assistant_id, "provider_not_ready", "Connect your AI provider in Settings or add a BYOK profile to answer local questions.").await,
-        };
-        let runtime = match ai::internal_mcp_server(&app, &state, &timezone).await {
-            Ok(mcp) => runtime.with_mcp_server(mcp),
-            Err(error) => {
-                return complete_local_chat_error(
-                    &database,
-                    &assistant_id,
-                    "mcp_not_ready",
-                    &format!("Dystil's local retrieval sidecar is unavailable: {error}"),
-                )
-                .await
-            }
-        };
-        (
-            runtime
-                .run_teammate_answer_with_model(
-                    &bundle,
-                    "you",
-                    &provider_question,
-                    (model != "default").then_some(model.as_str()),
-                )
-                .await
-                .map_err(|error| error.to_string()),
-            provider,
-            model,
-        )
+    let runtime = match crate::ai_runtime::resolve(&app, &state, &database, &timezone).await {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            return complete_local_chat_error(
+                &database,
+                &assistant_id,
+                "provider_not_ready",
+                "Choose and connect an AI preset in Settings to answer local questions.",
+            )
+            .await
+        }
     };
+    let answer_provider = runtime.descriptor().provider_label.clone();
+    let answer_model = runtime.descriptor().model.clone();
+    let generated = runtime
+        .answer(dystil_ai::AiAnswerRequest {
+            requester_name: "you".into(),
+            question: provider_question,
+            search_start: search_start.to_rfc3339(),
+            search_end: search_end.to_rfc3339(),
+            timezone: timezone.clone(),
+        })
+        .await;
     let generated = match generated {
         Ok(value) => value,
-        Err(error) if error.contains("timed out") => {
+        Err(error) if error.code == dystil_ai::AiRuntimeErrorCode::Timeout => {
             return complete_local_chat_error(
                 &database,
                 &assistant_id,
@@ -362,50 +261,61 @@ pub async fn local_chat_send(
         }
         Err(error) => {
             tracing::warn!(reason = %error, "configured AI provider returned an invalid local-chat answer");
-            return complete_local_chat_error(
-                &database,
-                &assistant_id,
-                "provider_invalid_output",
-                "The configured AI provider could not produce a valid answer.",
-            )
-            .await;
+            let (error_code, message) = match error.code {
+                dystil_ai::AiRuntimeErrorCode::InvalidOutput => (
+                    "provider_invalid_output",
+                    "The AI runtime returned an answer Dystil could not validate.",
+                ),
+                dystil_ai::AiRuntimeErrorCode::Authentication => (
+                    "provider_authentication",
+                    "The AI preset needs authentication. Reconnect it in Settings.",
+                ),
+                dystil_ai::AiRuntimeErrorCode::NotReady => (
+                    "provider_not_ready",
+                    "The AI runtime is not ready. Check the active preset in Settings.",
+                ),
+                dystil_ai::AiRuntimeErrorCode::Transport => (
+                    "provider_unreachable",
+                    "Dystil could not reach the configured AI provider. Check that it is running, then retry.",
+                ),
+                _ => (
+                    "provider_failed",
+                    "The configured AI provider could not produce a valid answer.",
+                ),
+            };
+            return complete_local_chat_error(&database, &assistant_id, error_code, message).await;
         }
     };
     let mut citations = Vec::new();
-    let mut cited_card_ids = HashSet::new();
-    let mut persisted_context_cards = bundle.cards.clone();
+    let mut cited_evidence_ids = HashSet::new();
     for claim in &generated.answer.evidence {
-        for card_id in &claim.card_ids {
-            if !cited_card_ids.insert(card_id.clone()) {
+        for evidence_id_text in &claim.evidence_ids {
+            if !cited_evidence_ids.insert(evidence_id_text.clone()) {
                 continue;
             }
-            if let Some(card) = bundle.cards.iter().find(|card| &card.id == card_id) {
-                citations.push(serde_json::json!({
-                    "cardId": card.id,
-                    "label": card.title,
-                    "localDate": ai::local_date_for_timestamp(&card.start, &timezone)
-                }));
-            } else if let Some(card) = dystil_storage::get_work_card(&database, card_id)
-                .await
-                .map_err(|error| error.to_string())?
-            {
-                let context_card = dystil_ai::ContextCard::from(&card);
-                citations.push(serde_json::json!({
-                    "cardId": &card.window_id,
-                    "label": &card.title,
-                    "localDate": ai::local_date_for_timestamp(&card.start_time, &timezone)
-                }));
-                if persisted_context_cards.len() < MAX_LOCAL_CHAT_CONTEXT_CARDS {
-                    persisted_context_cards.push(context_card);
+            if let Ok(evidence_id) = evidence_id_text.parse::<dystil_retrieval::EvidenceId>() {
+                if let Ok(evidence) = dystil_retrieval::RetrievalService::new(database.clone())
+                    .get_source(&evidence_id, Some(500))
+                    .await
+                {
+                    let label = evidence
+                        .window_name
+                        .clone()
+                        .or(evidence.app_name.clone())
+                        .unwrap_or_else(|| evidence.evidence_id.to_string());
+                    citations.push(serde_json::json!({
+                        "evidenceId": evidence.evidence_id.to_string(),
+                        "deepLink": evidence.deep_link,
+                        "label": label,
+                        "localDate": ai::local_date_for_timestamp(&evidence.timestamp, &timezone)
+                    }));
                 }
             }
         }
     }
-    let persisted_snapshot =
-        serde_json::to_string(&persisted_context_cards).map_err(|error| error.to_string())?;
-    sqlx::query("UPDATE local_chat_messages SET status = 'complete', answer = ?1, citations_json = ?2, provider = ?3, model = ?4, elapsed_ms = ?5, selected_cards_json = ?6 WHERE id = ?7")
-        .bind(&generated.answer.answer).bind(serde_json::to_string(&citations).map_err(|error| error.to_string())?).bind(answer_provider).bind(answer_model).bind(generated.elapsed_ms as i64).bind(persisted_snapshot).bind(&assistant_id).execute(&database).await.map_err(|error| error.to_string())?;
-    let row = sqlx::query("SELECT id, session_id, role, mode, question, answer, status, selected_cards_json, citations_json, provider, model, elapsed_ms, error_code, created_at FROM local_chat_messages WHERE id = ?1")
+    sqlx::query("UPDATE local_chat_messages SET status = 'complete', answer = ?1, citations_json = ?2, provider = ?3, model = ?4, elapsed_ms = ?5 WHERE id = ?6")
+        .bind(&generated.answer.answer).bind(serde_json::to_string(&citations).map_err(|error| error.to_string())?).bind(answer_provider).bind(answer_model).bind(generated.elapsed_ms as i64).bind(&assistant_id).execute(&database).await.map_err(|error| error.to_string())?;
+    let row = sqlx::query("SELECT id, session_id, role, mode, question, answer, status, citations_json, provider, model, elapsed_ms, error_code, created_at FROM local_chat_messages WHERE id = ?1")
         .bind(assistant_id).fetch_one(&database).await.map_err(|error| error.to_string())?;
     Ok(local_chat_message_view(row))
 }
@@ -446,52 +356,6 @@ async fn local_chat_question_with_history(
     Ok(turns.join("\n"))
 }
 
-async fn local_chat_context_cards(
-    database: &sqlx::SqlitePool,
-    session_id: &str,
-    current_cards: Vec<dystil_ai::ContextCard>,
-) -> Result<Vec<dystil_ai::ContextCard>, String> {
-    let rows = sqlx::query(
-        "SELECT selected_cards_json FROM local_chat_messages
-         WHERE session_id = ?1 AND role = 'assistant' AND selected_cards_json IS NOT NULL
-         ORDER BY rowid DESC LIMIT 6",
-    )
-    .bind(session_id)
-    .fetch_all(database)
-    .await
-    .map_err(|error| error.to_string())?;
-
-    let mut cards = Vec::new();
-    let mut known = HashSet::new();
-    for card in current_cards {
-        if known.insert(card.id.clone()) {
-            cards.push(card);
-        }
-    }
-    for row in rows {
-        let Some(snapshot) = row
-            .try_get::<Option<String>, _>("selected_cards_json")
-            .ok()
-            .flatten()
-        else {
-            continue;
-        };
-        let Ok(previous_cards) = serde_json::from_str::<Vec<dystil_ai::ContextCard>>(&snapshot)
-        else {
-            continue;
-        };
-        for card in previous_cards {
-            if cards.len() == MAX_LOCAL_CHAT_CONTEXT_CARDS {
-                return Ok(cards);
-            }
-            if known.insert(card.id.clone()) {
-                cards.push(card);
-            }
-        }
-    }
-    Ok(cards)
-}
-
 async fn complete_local_chat_error(
     database: &sqlx::SqlitePool,
     message_id: &str,
@@ -500,7 +364,7 @@ async fn complete_local_chat_error(
 ) -> Result<LocalChatMessageView, String> {
     sqlx::query("UPDATE local_chat_messages SET status = 'failed', answer = ?1, error_code = ?2 WHERE id = ?3")
         .bind(answer).bind(code).bind(message_id).execute(database).await.map_err(|error| error.to_string())?;
-    let row = sqlx::query("SELECT id, session_id, role, mode, question, answer, status, selected_cards_json, citations_json, provider, model, elapsed_ms, error_code, created_at FROM local_chat_messages WHERE id = ?1")
+    let row = sqlx::query("SELECT id, session_id, role, mode, question, answer, status, citations_json, provider, model, elapsed_ms, error_code, created_at FROM local_chat_messages WHERE id = ?1")
         .bind(message_id).fetch_one(database).await.map_err(|error| error.to_string())?;
     Ok(local_chat_message_view(row))
 }
@@ -514,7 +378,6 @@ fn local_chat_message_view(row: sqlx::sqlite::SqliteRow) -> LocalChatMessageView
         question: row.get("question"),
         answer: row.get("answer"),
         status: row.get("status"),
-        selected_cards_json: row.get("selected_cards_json"),
         citations_json: row.get("citations_json"),
         provider: row.get("provider"),
         model: row.get("model"),

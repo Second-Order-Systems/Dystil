@@ -4,7 +4,6 @@
 //! authoritative, so a disconnect can delay but cannot lose a mailbox message.
 
 use chrono::{Duration as ChronoDuration, Utc};
-use dystil_ai::{ContextBundle, ContextCard};
 use dystil_protocol::agent_mailbox::{
     AgentErrorBody, AgentEvidenceLabel, AgentMessage, AgentMessagePayload, AgentResponseBody,
     AgentStage, AgentStatusBody,
@@ -114,43 +113,9 @@ async fn process_request_inner(
 
     let end = Utc::now();
     let start = end - ChronoDuration::days(i64::from(body.search.lookback_days));
-    let cards = dystil_storage::search_work_cards_range(
-        pool,
-        &body.question,
-        &start.to_rfc3339(),
-        &end.to_rfc3339(),
-        u32::from(body.search.max_cards),
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    if cards.is_empty() {
-        return send_error(
-            pool,
-            request,
-            "no_relevant_work",
-            "Dystil found no relevant local work.",
-        )
-        .await;
-    }
     let timezone = ai::local_timezone_offset();
-    let bundle = ContextBundle {
-        schema_version: dystil_ai::CONTEXT_SCHEMA_VERSION.into(),
-        task: "answer_teammate_question".into(),
-        timezone: timezone.clone(),
-        range: dystil_ai::ContextRange {
-            start: start.to_rfc3339(),
-            end: end.to_rfc3339(),
-        },
-        coverage: dystil_ai::ContextCoverage {
-            card_count: cards.len(),
-            first_observation: cards.last().map(|card| card.start_time.clone()),
-            last_observation: cards.first().map(|card| card.end_time.clone()),
-            truncated: false,
-        },
-        cards: cards.iter().map(ContextCard::from).collect(),
-    };
-    let (provider, model) = agent_mailbox::preferences(pool).await?;
-    let runtime = match ai::provider_kind(&provider).and_then(ai::provider_runtime) {
+    let state = app.state::<crate::recording::RecordingState>();
+    let runtime = match crate::ai_runtime::resolve(app, &state, pool, &timezone).await {
         Ok(runtime) => runtime,
         Err(_) => {
             return send_error(
@@ -162,40 +127,19 @@ async fn process_request_inner(
             .await
         }
     };
-    if !runtime.authenticated().await.unwrap_or(false) {
-        return send_error(
-            pool,
-            request,
-            "provider_not_ready",
-            "This Dystil has no AI provider ready.",
-        )
-        .await;
-    }
-    let state = app.state::<crate::recording::RecordingState>();
-    let runtime = match ai::internal_mcp_server(app, &state, &timezone).await {
-        Ok(mcp) => runtime.with_mcp_server(mcp),
-        Err(_) => {
-            return send_error(
-                pool,
-                request,
-                "mcp_not_ready",
-                "Dystil's local retrieval sidecar is unavailable.",
-            )
-            .await
-        }
-    };
     send_status(pool, request, AgentStage::Generating).await?;
     let answer = match runtime
-        .run_teammate_answer_with_model(
-            &bundle,
-            "a teammate",
-            &body.question,
-            (model != "default").then_some(model.as_str()),
-        )
+        .answer(dystil_ai::AiAnswerRequest {
+            requester_name: "a teammate".into(),
+            question: body.question.clone(),
+            search_start: start.to_rfc3339(),
+            search_end: end.to_rfc3339(),
+            timezone: timezone.clone(),
+        })
         .await
     {
         Ok(answer) => answer,
-        Err(dystil_ai::AiError::Timeout) => {
+        Err(error) if error.code == dystil_ai::AiRuntimeErrorCode::Timeout => {
             return send_error(
                 pool,
                 request,
@@ -204,7 +148,7 @@ async fn process_request_inner(
             )
             .await
         }
-        Err(dystil_ai::AiError::InvalidOutput(_)) => {
+        Err(error) if error.code == dystil_ai::AiRuntimeErrorCode::InvalidOutput => {
             return send_error(
                 pool,
                 request,
@@ -225,22 +169,22 @@ async fn process_request_inner(
     };
     let mut evidence = Vec::new();
     for claim in &answer.answer.evidence {
-        let Some(card_id) = claim.card_ids.first() else {
+        let Some(evidence_id_text) = claim.evidence_ids.first() else {
             continue;
         };
-        if let Some(card) = bundle.cards.iter().find(|card| &card.id == card_id) {
-            evidence.push(AgentEvidenceLabel {
-                label: card.title.clone(),
-                local_date: ai::local_date_for_timestamp(&card.start, &timezone),
-            });
-        } else if let Some(card) = dystil_storage::get_work_card(pool, card_id)
-            .await
-            .map_err(|error| error.to_string())?
-        {
-            evidence.push(AgentEvidenceLabel {
-                label: card.title,
-                local_date: ai::local_date_for_timestamp(&card.start_time, &timezone),
-            });
+        if let Ok(evidence_id) = evidence_id_text.parse::<dystil_retrieval::EvidenceId>() {
+            if let Ok(record) = dystil_retrieval::RetrievalService::new(pool.clone())
+                .get_source(&evidence_id, Some(500))
+                .await
+            {
+                evidence.push(AgentEvidenceLabel {
+                    label: record
+                        .window_name
+                        .or(record.app_name)
+                        .unwrap_or_else(|| record.evidence_id.to_string()),
+                    local_date: ai::local_date_for_timestamp(&record.timestamp, &timezone),
+                });
+            }
         }
     }
     let input = agent_mailbox::new_reply(

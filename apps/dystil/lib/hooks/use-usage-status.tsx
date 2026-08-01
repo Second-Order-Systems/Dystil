@@ -9,8 +9,8 @@ import { useSettings } from "@/lib/hooks/use-settings";
  * `query_weight` (exposed on /v1/models) to get "messages left" for that
  * specific model.
  *
- * Null = not fetched yet OR user is on a BYOK provider where the worker
- * is bypassed entirely. UIs should render nothing in either case.
+ * Null means usage has not been fetched or the selected runtime does not
+ * report a quota. UIs should render nothing in either case.
  */
 export interface UsageStatus {
   tier: "anonymous" | "logged_in";

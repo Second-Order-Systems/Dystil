@@ -1,8 +1,10 @@
 use crate::a11y::tree::{
     create_tree_walker, AccessibilityTreeNode, LineSpan, NodeBounds, TreeSnapshot, TreeWalkResult,
-    TreeWalkerConfig, TruncationReason,
+    TreeWalkerConfig, TreeWalkerPlatform, TruncationReason,
 };
 use async_trait::async_trait;
+use std::sync::{Arc, Mutex};
+use tracing::debug;
 
 use crate::{
     AccessibilityLine, AccessibilityNode, AccessibilityProvider, AccessibilitySnapshot,
@@ -12,12 +14,18 @@ use crate::{
 /// Dystil-backed tree walker at the dependency edge of `dystil-capture`.
 /// The blocking platform AX call is isolated from the async capture runtime.
 pub struct DystilAccessibilityProvider {
-    config: TreeWalkerConfig,
+    // Keep the AT-SPI connection and event registration alive. Chromium may
+    // only materialize its accessibility tree while an assistive technology
+    // client remains connected; constructing a fresh walker for every click
+    // made that registration effectively transient.
+    walker: Arc<Mutex<Box<dyn TreeWalkerPlatform>>>,
 }
 
 impl DystilAccessibilityProvider {
     pub fn new(config: TreeWalkerConfig) -> Self {
-        Self { config }
+        Self {
+            walker: Arc::new(Mutex::new(create_tree_walker(config))),
+        }
     }
 }
 
@@ -27,12 +35,21 @@ impl AccessibilityProvider for DystilAccessibilityProvider {
         &self,
         _trigger: &CaptureTrigger,
     ) -> Result<Option<AccessibilitySnapshot>, CaptureError> {
-        let config = self.config.clone();
+        let walker = Arc::clone(&self.walker);
         tokio::task::spawn_blocking(move || {
-            let walker = create_tree_walker(config);
+            let walker = walker.lock().map_err(|error| {
+                CaptureError::Accessibility(format!("accessibility walker lock poisoned: {error}"))
+            })?;
             match walker.walk_focused_window() {
                 Ok(TreeWalkResult::Found(snapshot)) => Ok(Some(convert_tree_snapshot(snapshot))),
-                Ok(TreeWalkResult::Skipped(_)) | Ok(TreeWalkResult::NotFound) => Ok(None),
+                Ok(TreeWalkResult::Skipped(reason)) => {
+                    debug!(?reason, "accessibility capture skipped focused window");
+                    Ok(None)
+                }
+                Ok(TreeWalkResult::NotFound) => {
+                    debug!("accessibility capture found no focused window");
+                    Ok(None)
+                }
                 Err(error) => Err(CaptureError::Accessibility(error.to_string())),
             }
         })

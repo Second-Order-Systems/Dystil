@@ -5,14 +5,6 @@
 
 
 export const commands = {
-async agentGetPreferences() : Promise<Result<AgentPreferencesView, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("agent_get_preferences") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
 async agentListMessages() : Promise<Result<AgentMessageView[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("agent_list_messages") };
@@ -37,14 +29,6 @@ async agentSendQuestion(recipientUserId: string, question: string) : Promise<Res
     else return { status: "error", error: e  as any };
 }
 },
-async agentSetPreferences(provider: string, model: string) : Promise<Result<AgentPreferencesView, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("agent_set_preferences", { provider, model }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
 async agentSyncNow() : Promise<Result<number, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("agent_sync_now") };
@@ -53,12 +37,57 @@ async agentSyncNow() : Promise<Result<number, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-/**
- * Generate a manager-ready daily update from local derived work cards.
- */
-async aiGenerateDailyUpdate(provider: string, localDate: string, timezone: string, model: string | null) : Promise<Result<AiDailyUpdateView, string>> {
+async aiPresetActivate(presetId: string) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("ai_generate_daily_update", { provider, localDate, timezone, model }) };
+    return { status: "ok", data: await TAURI_INVOKE("ai_preset_activate", { presetId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async aiPresetActivateManaged(providerKind: string, model: string) : Promise<Result<AiPresetView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ai_preset_activate_managed", { providerKind, model }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async aiPresetDelete(presetId: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ai_preset_delete", { presetId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async aiPresetDiscoverModels(providerKind: string, endpoint: string | null, apiKey: string | null) : Promise<Result<AiPresetModelsView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ai_preset_discover_models", { providerKind, endpoint, apiKey }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async aiPresetList() : Promise<Result<AiPresetView[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ai_preset_list") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async aiPresetSave(name: string, providerKind: string, endpoint: string | null, model: string, apiKey: string | null) : Promise<Result<AiPresetView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ai_preset_save", { name, providerKind, endpoint, model, apiKey }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async aiPresetTest(presetId: string) : Promise<Result<AiPresetView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ai_preset_test", { presetId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -99,6 +128,18 @@ async aiProviderLogin(provider: string) : Promise<Result<string, string>> {
 }
 },
 /**
+ * Sign out of Dystil's isolated provider session without touching a user's
+ * separately installed global Codex or Claude Code credentials.
+ */
+async aiProviderLogout(provider: string) : Promise<Result<AiProviderStatusView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ai_provider_logout", { provider }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * List models exposed by the managed provider. Codex is discovered from the
  * signed-in account; Claude Code exposes its provider-maintained aliases.
  */
@@ -125,8 +166,8 @@ async aiProviderStatus(provider: string) : Promise<Result<AiProviderStatusView, 
  * Verify the official runtime and its account session without invoking a model.
  *
  * A model request is intentionally not part of setup: remote queue and cold
- * start latency make it a poor connection diagnostic. The daily-update action
- * is the first request that sends derived work cards to the selected provider.
+ * start latency make it a poor connection diagnostic. The first inquiry is
+ * the first request that lets the selected runtime query activity evidence.
  */
 async aiProviderTest(provider: string) : Promise<Result<AiProviderStatusView, string>> {
     try {
@@ -221,25 +262,105 @@ async authStoreSession(token: string) : Promise<Result<DystilAuthState, string>>
     else return { status: "error", error: e  as any };
 }
 },
-async byokDeleteProfile(profileId: string) : Promise<Result<null, string>> {
+async automationCancel(runId: string) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("byok_delete_profile", { profileId }) };
+    return { status: "ok", data: await TAURI_INVOKE("automation_cancel", { runId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
 },
-async byokListProfiles() : Promise<Result<ByokProfileView[], string>> {
+async automationCreate(markdown: string) : Promise<Result<AutomationView, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("byok_list_profiles") };
+    return { status: "ok", data: await TAURI_INVOKE("automation_create", { markdown }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
 },
-async byokSaveProfile(endpoint: string, chatModel: string, workCardModel: string, apiKey: string) : Promise<Result<ByokProfileView, string>> {
+async automationDelete(name: string) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("byok_save_profile", { endpoint, chatModel, workCardModel, apiKey }) };
+    return { status: "ok", data: await TAURI_INVOKE("automation_delete", { name }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async automationDraft(request: string) : Promise<Result<AutomationDraftView[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("automation_draft", { request }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async automationList() : Promise<Result<AutomationView[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("automation_list") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async automationListArtifacts(runId: string | null, limit: number | null) : Promise<Result<AutomationArtifactView[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("automation_list_artifacts", { runId, limit }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async automationListRuns(name: string | null, before: string | null, limit: number | null) : Promise<Result<AutomationRunView[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("automation_list_runs", { name, before, limit }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async automationOpenDefinition(name: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("automation_open_definition", { name }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async automationRevealArtifact(artifactId: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("automation_reveal_artifact", { artifactId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async automationRunEvents(runId: string, beforeId: number | null, limit: number | null) : Promise<Result<AutomationRunEventView[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("automation_run_events", { runId, beforeId, limit }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async automationRunNow(name: string) : Promise<Result<AutomationRunView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("automation_run_now", { name }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async automationSaveDraft(draftId: string) : Promise<Result<AutomationView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("automation_save_draft", { draftId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async automationSetEnabled(name: string, enabled: boolean) : Promise<Result<AutomationView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("automation_set_enabled", { name, enabled }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -341,17 +462,6 @@ async deleteCacheFiles(paths: string[]) : Promise<Result<number, string>> {
 }
 },
 /**
- * Delete one derived work card. Raw capture evidence is not affected.
- */
-async deleteWorkCard(windowId: string) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("delete_work_card", { windowId }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
  * Vault encryption is excluded from the Dystil product — always reports disabled.
  */
 async disableKeychainEncryption() : Promise<Result<KeychainStatus, string>> {
@@ -428,18 +538,6 @@ async externalMcpAdd(client: string) : Promise<Result<ExternalMcpSetupView, stri
 },
 async focusExistingWindow() : Promise<void> {
     await TAURI_INVOKE("focus_existing_window");
-},
-/**
- * Generate closed activity windows using the active AI choice. Evidence is
- * sanitized before it reaches a connected provider.
- */
-async generateWorkCardsNow() : Promise<Result<WorkCardGenerationReport, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("generate_work_cards_now") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
 },
 /**
  * Return the macOS bundle identifier of the running app
@@ -531,14 +629,6 @@ async getKeychainStatus() : Promise<Result<KeychainStatus, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async getLocalProcessingStatus() : Promise<Result<LocalProcessingStatusView, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("get_local_processing_status") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
 async getLogFiles() : Promise<Result<LogFile[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_log_files") };
@@ -617,17 +707,6 @@ async isOverlayClickThrough() : Promise<boolean> {
 async listCacheFiles() : Promise<Result<CacheFile[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("list_cache_files") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * List the newest locally generated work cards.
- */
-async listWorkCards(limit: number | null) : Promise<Result<WorkCardView[], string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("list_work_cards", { limit }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -878,18 +957,6 @@ async resizeSearchWindow(width: number, height: number) : Promise<Result<null, s
     else return { status: "error", error: e  as any };
 }
 },
-/**
- * Search work-card titles, summaries, apps, artifacts, actions, and final state
- * locally through SQLite FTS5. Empty queries return the newest cards.
- */
-async searchWorkCards(query: string, limit: number | null) : Promise<Result<WorkCardView[], string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("search_work_cards", { query, limit }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
 async setAutostart(enabled: boolean) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_autostart", { enabled }) };
@@ -922,14 +989,6 @@ async setCloudToken(token: string | null) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async setLocalProcessingEnabled(enabled: boolean) : Promise<Result<LocalProcessingStatusView, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("set_local_processing_enabled", { enabled }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
 async setNativeTheme(theme: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_native_theme", { theme }) };
@@ -939,8 +998,7 @@ async setNativeTheme(theme: string) : Promise<Result<null, string>> {
 }
 },
 /**
- * Persist the final onboarding choice. Local enrichment starts in the
- * background so a first-run model download never traps a user in setup.
+ * Persist the final onboarding choice.
  */
 async setOnboardingAiSetup(setup: OnboardingAiSetup) : Promise<Result<OnboardingStore, string>> {
     try {
@@ -1163,11 +1221,16 @@ async writeBrowserLogs(entries: BrowserLogEntry[]) : Promise<void> {
 export type AgentEvidenceView = { label: string; localDate: string }
 export type AgentMessageView = { messageId: string; conversationId: string; peerUserId: string; direction: string; kind: string; localStatus: string; text: string; evidence: AgentEvidenceView[]; createdAt: string }
 export type AgentPeerView = { userId: string; displayName: string | null; email: string; agentStatus: string }
-export type AgentPreferencesView = { provider: string; model: string }
-export type AiDailyUpdateView = { provider: string; runtimeVersion: string | null; elapsedMs: number; update: JsonValue }
+export type AiPresetModelsView = { models: string[]; detail: string }
+export type AiPresetView = { id: string; name: string; providerKind: string; endpoint: string | null; model: string; active: boolean; credentialPresent: boolean; validationStatus: string; validationMessage: string | null; validatedAt: string | null }
 export type AiProviderModelView = { id: string; displayName: string; description: string; isDefault: boolean }
 export type AiProviderStatusView = { provider: string; state: string; installedVersion: string | null; authenticated: boolean | null; detail: string | null }
 export type AuthMode = "individual" | "workspace"
+export type AutomationArtifactView = { id: string; runId: string; automationName: string; relativePath: string; sizeBytes: number; mediaType: string; liveView: boolean; outputKind: string; contentJson: string | null; createdAt: string }
+export type AutomationDraftView = { id: string; request: string; markdown: string; automation: AutomationView }
+export type AutomationRunEventView = { id: number; runId: string; kind: string; message: string; createdAt: string }
+export type AutomationRunView = { id: string; automationName: string; status: string; trigger: string; attempt: number; startedAt: string | null; finishedAt: string | null; provider: string | null; model: string | null; output: string | null; errorCategory: string | null; errorMessage: string | null }
+export type AutomationView = { name: string; title: string; description: string | null; enabled: boolean; triggerType: string; triggerDetail: string | null; path: string }
 export type BootPhaseSnapshot = {
 /**
  * One of: idle | starting | migrating_database |
@@ -1194,7 +1257,6 @@ sinceEpochSecs: number }
 export type BrowserAutomationStatus = { name: string; status: string; running: boolean }
 export type BrowserLogEntry = { level: string; message: string }
 export type BuildCapabilities = { cloudAvailable: boolean; authMode: AuthMode; cloudBaseUrl: string | null; officialBuild: boolean }
-export type ByokProfileView = { id: string; providerKind: string; endpoint: string; chatModel: string; workCardModel: string; active: boolean; credentialPresent: boolean }
 export type CacheFile = { path: string; label: string; size_bytes: number }
 export type CaptureHealth = { status: string; status_code: number; last_frame_timestamp: string | null; last_ui_timestamp: string | null; frame_status: string; ui_status: string; message: string }
 export type Credits = { amount: number }
@@ -1206,9 +1268,8 @@ export type ExternalMcpSetupView = { client: string; detail: string }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: number; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
-export type LocalChatMessageView = { id: string; sessionId: string; role: string; mode: string; question: string | null; answer: string | null; status: string; selectedCardsJson: string | null; citationsJson: string | null; provider: string | null; model: string | null; elapsedMs: number | null; errorCode: string | null; createdAt: string }
+export type LocalChatMessageView = { id: string; sessionId: string; role: string; mode: string; question: string | null; answer: string | null; status: string; citationsJson: string | null; provider: string | null; model: string | null; elapsedMs: number | null; errorCode: string | null; createdAt: string }
 export type LocalChatSessionView = { id: string; title: string; updatedAt: string }
-export type LocalProcessingStatusView = { enabled: boolean }
 export type LogFile = { name: string; path: string; modified_at: number }
 export type McpConnectionStatus = { connected: boolean; detail: string }
 export type MonitorDevice = { id: number; stableId: string; name: string; isDefault: boolean; width: number; height: number }
@@ -1217,7 +1278,7 @@ export type OAuthStatus = { connected: boolean; display_name: string | null; nee
 export type OSPermission = "screenRecording" | "accessibility" | "automation" | "inputMonitoring" | "calendar"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; accessibility: OSPermissionStatus }
-export type OnboardingAiSetup = { choice: string; enableLocalProcessing: boolean }
+export type OnboardingAiSetup = { choice: string }
 export type OnboardingStore = { isCompleted: boolean; completedAt: string | null;
 /**
  * Current step in onboarding flow (login, intro, usecases, status)
@@ -1228,12 +1289,7 @@ currentStep?: string | null;
  * The capability selected in the final onboarding step. This records a
  * local preference only; provider credentials live in their own stores.
  */
-aiSetupChoice?: string | null;
-/**
- * Local enrichment is deliberately opt-in because its generated activity
- * summaries are experimental and it requires a sizeable model download.
- */
-localProcessingEnabled?: boolean }
+aiSetupChoice?: string | null }
 /**
  * A single schedule rule: a day-of-week + time range + what to record.
  */
@@ -1536,8 +1592,6 @@ minimizeToTrayOnClose?: boolean }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "PermissionRecovery"
 export type SyncConsent = { segments: boolean; screenshots: boolean }
 export type User = { id: string | null; name: string | null; email: string | null; image: string | null; token: string | null; api_key: string | null; credits: Credits | null; bio: string | null; website: string | null; contact: string | null; credits_balance: number | null }
-export type WorkCardGenerationReport = { candidateWindows: number; generatedCards: number; skippedExisting: number; rejectedCards: number; elapsedMs: number }
-export type WorkCardView = { windowId: string; startTime: string; endTime: string; closeReason: string; title: string; summary: string; applications: string[]; artifacts: JsonValue; actions: JsonValue; lastObservedState: string; status: string; uncertainties: string[]; modelId: string; sourceHash: string; embeddingModelId: string | null; embeddingDimensions: number | null; createdAt: string; updatedAt: string }
 
 /** tauri-specta globals **/
 

@@ -143,8 +143,7 @@ impl DystilEngine {
                 }
             };
 
-            if last_snapshot_cleanup
-                .is_none_or(|last| last.elapsed() >= snapshot_cleanup_interval)
+            if last_snapshot_cleanup.is_none_or(|last| last.elapsed() >= snapshot_cleanup_interval)
             {
                 let db_path = match host.capture_db_path().await {
                     Ok(db_path) => Some(db_path),

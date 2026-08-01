@@ -6,9 +6,11 @@ members = [
     "crates/dystil-capture",
     "crates/dystil-engine",
     "crates/dystil-sync",
-    "crates/dystil-work-cards",
     "crates/dystil-ai",
     "crates/dystil-mcp",
+    "crates/dystil-work-index",
+    "crates/dystil-retrieval",
+    "crates/dystil-automation",
 ]
 resolver = "2"
 

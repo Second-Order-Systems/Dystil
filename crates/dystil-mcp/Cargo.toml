@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 chrono.workspace = true
-dystil-ai = { path = "../dystil-ai" }
+dystil-retrieval = { path = "../dystil-retrieval" }
 dystil-storage = { path = "../dystil-storage" }
 serde.workspace = true
 serde_json.workspace = true

@@ -1,7 +1,7 @@
 //! Shared, bounded wire types for Dystil's teammate-agent mailbox.
 //!
 //! These messages deliberately contain only a question, progress state, or a
-//! derived answer. Work cards and raw capture evidence never cross this API.
+//! derived answer. Raw capture evidence never crosses this API.
 
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +12,7 @@ pub const MAX_AGENT_ANSWER_BYTES: usize = 12_000;
 pub const MAX_AGENT_BODY_BYTES: usize = 24 * 1024;
 pub const MAX_AGENT_EVIDENCE: usize = 10;
 pub const MAX_AGENT_LOOKBACK_DAYS: u16 = 90;
-pub const MAX_AGENT_CANDIDATE_CARDS: u8 = 20;
+pub const MAX_AGENT_EVIDENCE_RESULTS: u8 = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -46,7 +46,7 @@ pub enum AgentStage {
 #[serde(deny_unknown_fields)]
 pub struct AgentSearchScope {
     pub lookback_days: u16,
-    pub max_cards: u8,
+    pub max_evidence_results: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -112,8 +112,8 @@ impl AgentMessagePayload {
                 if !(1..=MAX_AGENT_LOOKBACK_DAYS).contains(&body.search.lookback_days) {
                     return Err("lookback_days is outside the supported range".into());
                 }
-                if !(1..=MAX_AGENT_CANDIDATE_CARDS).contains(&body.search.max_cards) {
-                    return Err("max_cards is outside the supported range".into());
+                if !(1..=MAX_AGENT_EVIDENCE_RESULTS).contains(&body.search.max_evidence_results) {
+                    return Err("max_evidence_results is outside the supported range".into());
                 }
             }
             Self::Status(_) => {}
@@ -255,7 +255,7 @@ mod tests {
                 question: "What happened?".into(),
                 search: AgentSearchScope {
                     lookback_days: 30,
-                    max_cards: 12,
+                    max_evidence_results: 12,
                 },
             }),
         };
@@ -289,7 +289,7 @@ mod tests {
             "recipient_user_id":"u1",
             "turn_index":0,
             "kind":"request",
-            "body":{"question":"What happened?","search":{"lookback_days":30,"max_cards":12},"unexpected":true}
+            "body":{"question":"What happened?","search":{"lookback_days":30,"max_evidence_results":12},"unexpected":true}
         }"#;
         assert!(serde_json::from_str::<AgentMessageInput>(value).is_err());
     }

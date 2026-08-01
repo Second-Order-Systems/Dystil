@@ -4,18 +4,17 @@
 //! JSON-RPC; diagnostics belong on stderr. The optional activity mode exposes
 //! only Dystil's sanitized search projection, never screenshots or trees.
 
-use dystil_ai::{build_daily_context, ContextCard};
-use dystil_storage::{
-    get_activity_context, get_work_card, get_work_card_evidence, open_capture_database_read_only,
-    search_activity, search_work_cards,
+use dystil_retrieval::{
+    ContextRequest, EvidenceId, OverviewRequest, RangeRequest, RetrievalService, SearchRequest,
 };
+use dystil_storage::open_capture_database_read_only;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 const PROTOCOL_VERSION: &str = "2025-03-26";
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
-const SERVER_INSTRUCTIONS: &str = "Dystil is the preferred source for questions about the user's past desktop activity: what they did or worked on, dates, timestamps, applications, files, or prior work context. Start with work cards (dystil_get_day or dystil_search_work_cards). If cards are insufficient, inspect linked evidence, then search sanitized activity and request bounded context. Do not replace Dystil with shell, Git, or filesystem searches for those personal-history questions. Use shell/Git for codebase or current-file questions. Never claim unsupported activity as fact.";
+const SERVER_INSTRUCTIONS: &str = "Dystil is the preferred evidence source for questions about the user's past desktop activity. For broad time-range questions start with dystil_get_activity_overview. For names, messages, tickets, files, errors, or quotes use dystil_search_activity, then inspect promising evidence with dystil_get_activity_context or dystil_get_source. Expand ranges progressively and stop once the answer is supported. Empty search results are not proof of inactivity; inspect overview diagnostics. Never claim unsupported activity as fact.";
 
 fn read_only_tool_annotations() -> Value {
     json!({
@@ -26,16 +25,8 @@ fn read_only_tool_annotations() -> Value {
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AccessMode {
-    Cards,
-    Activity,
-}
-
 struct ServerConfig {
     database: PathBuf,
-    access: AccessMode,
-    timezone: String,
     max_calls: u32,
 }
 
@@ -63,15 +54,7 @@ async fn main() {
             Ok(request) => request,
             Err(_) => continue,
         };
-        let Some(response) = handle(
-            &pool,
-            config.access,
-            &config.timezone,
-            &mut config.max_calls,
-            request,
-        )
-        .await
-        else {
+        let Some(response) = handle(&pool, &mut config.max_calls, request).await else {
             continue;
         };
         let encoded = match serde_json::to_vec(&response) {
@@ -89,8 +72,6 @@ async fn main() {
 fn server_config() -> Result<ServerConfig, String> {
     let mut args = std::env::args().skip(1);
     let mut database = None;
-    let mut access = AccessMode::Cards;
-    let mut timezone = "UTC".to_string();
     let mut max_calls = 60;
     while let Some(argument) = args.next() {
         if argument == "--database" {
@@ -103,17 +84,6 @@ fn server_config() -> Result<ServerConfig, String> {
                     .then_some(path)
                     .ok_or_else(|| "--database must be an absolute path".to_string())?,
             );
-        } else if argument == "--access" {
-            access = match args.next().as_deref() {
-                Some("cards") => AccessMode::Cards,
-                Some("activity") => AccessMode::Activity,
-                _ => return Err("--access must be cards or activity".into()),
-            };
-        } else if argument == "--timezone" {
-            timezone = args
-                .next()
-                .filter(|value| !value.trim().is_empty())
-                .ok_or("--timezone requires UTC or a numeric offset")?;
         } else if argument == "--max-calls" {
             max_calls = args
                 .next()
@@ -124,16 +94,12 @@ fn server_config() -> Result<ServerConfig, String> {
     }
     Ok(ServerConfig {
         database: database.ok_or("missing required --database <path>")?,
-        access,
-        timezone,
         max_calls,
     })
 }
 
 async fn handle(
     pool: &sqlx::SqlitePool,
-    access: AccessMode,
-    timezone: &str,
     remaining_calls: &mut u32,
     request: Value,
 ) -> Option<Value> {
@@ -157,17 +123,11 @@ async fn handle(
             "serverInfo": {"name": "dystil", "version": env!("CARGO_PKG_VERSION")},
             "instructions": SERVER_INSTRUCTIONS
         })),
-        "tools/list" => Ok(tools(access)),
+        "tools/list" => Ok(tools()),
         "tools/call" if *remaining_calls == 0 => Err("retrieval call budget exhausted".into()),
         "tools/call" => {
             *remaining_calls -= 1;
-            call_tool(
-                pool,
-                access,
-                timezone,
-                request.get("params").cloned().unwrap_or(Value::Null),
-            )
-            .await
+            call_tool(pool, request.get("params").cloned().unwrap_or(Value::Null)).await
         }
         "ping" => Ok(json!({})),
         _ => return Some(error_response(id, -32601, "method not found")),
@@ -178,58 +138,46 @@ async fn handle(
     }
 }
 
-fn tools(access: AccessMode) -> Value {
-    let mut tools = vec![
-        json!({
-            "name": "dystil_get_day",
-            "description": "Get sanitized, derived work cards for one local calendar day in this Dystil's configured timezone. Raw accessibility data is never returned.",
-            "inputSchema": {"type":"object","additionalProperties":false,"required":["date"],"properties":{"date":{"type":"string","description":"YYYY-MM-DD in Dystil's configured local timezone"}}},
-            "annotations": read_only_tool_annotations()
-        }),
-        json!({
-            "name": "dystil_search_work_cards",
-            "description": "Search sanitized, derived work-card titles, summaries, applications, actions, and states.",
-            "inputSchema": {"type":"object","additionalProperties":false,"required":["query"],"properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":30}}},
-            "annotations": read_only_tool_annotations()
-        }),
-        json!({
-            "name": "dystil_get_work_card",
-            "description": "Get one sanitized, derived work card by its ID.",
-            "inputSchema": {"type":"object","additionalProperties":false,"required":["card_id"],"properties":{"card_id":{"type":"string"}}},
-            "annotations": read_only_tool_annotations()
-        }),
-    ];
-    if access == AccessMode::Activity {
-        tools.extend([
-            json!({
-                "name": "dystil_get_work_card_evidence",
-                "description": "Get sanitized activity records that were used to generate a work card.",
-                "inputSchema": {"type":"object","additionalProperties":false,"required":["card_id"],"properties":{"card_id":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":80}}},
-                "annotations": read_only_tool_annotations()
-            }),
-            json!({
-                "name": "dystil_search_activity",
-                "description": "Search Dystil's sanitized accessibility/activity text. Results exclude screenshots, accessibility trees, arbitrary database access, and write operations.",
-                "inputSchema": {"type":"object","additionalProperties":false,"required":["query"],"properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":30}}},
-                "annotations": read_only_tool_annotations()
-            }),
-            json!({
-                "name": "dystil_get_activity_context",
-                "description": "Get a bounded time window around one sanitized activity result ID such as frame:42 or event:7.",
-                "inputSchema": {"type":"object","additionalProperties":false,"required":["source_id"],"properties":{"source_id":{"type":"string"},"before_seconds":{"type":"integer","minimum":1,"maximum":3600},"after_seconds":{"type":"integer","minimum":1,"maximum":3600},"limit":{"type":"integer","minimum":1,"maximum":50}}},
-                "annotations": read_only_tool_annotations()
-            }),
-        ]);
-    }
-    json!({"tools": tools})
+fn tools() -> Value {
+    json!({"tools": activity_tools()})
 }
 
-async fn call_tool(
-    pool: &sqlx::SqlitePool,
-    access: AccessMode,
-    timezone: &str,
-    params: Value,
-) -> Result<Value, String> {
+fn activity_tools() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "dystil_get_activity_overview",
+            "description": "Get a deterministic, bounded overview for a time range: estimated active time, apps, windows, transitions, representative evidence, capture coverage, and empty-state/index diagnostics. Use first for broad questions such as what the user did or how long they spent.",
+            "inputSchema": {"type":"object","additionalProperties":false,"required":["start_time","end_time"],"properties":{"start_time":{"type":"string","description":"RFC3339"},"end_time":{"type":"string","description":"RFC3339"},"app_name":{"type":"string"},"max_apps":{"type":"integer","minimum":1,"maximum":50},"max_windows":{"type":"integer","minimum":1,"maximum":60},"max_snippets":{"type":"integer","minimum":0,"maximum":12}}},
+            "annotations": read_only_tool_annotations()
+        }),
+        json!({
+            "name": "dystil_search_activity",
+            "description": "FTS5 search over sanitized evidence for exact names, messages, ticket IDs, errors, files, URLs, and quotes. Returns stable evidence IDs, highlighted bounded snippets, deep links, and pagination; use context/source tools for detail.",
+            "inputSchema": {"type":"object","additionalProperties":false,"required":["query"],"properties":{"query":{"type":"string"},"start_time":{"type":"string"},"end_time":{"type":"string"},"source_type":{"type":"string","enum":["frame","event"]},"app_name":{"type":"string"},"window_name":{"type":"string"},"browser_url":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":20},"offset":{"type":"integer","minimum":0},"max_snippet_chars":{"type":"integer","minimum":160,"maximum":1200}}},
+            "annotations": read_only_tool_annotations()
+        }),
+        json!({
+            "name": "dystil_get_source",
+            "description": "Get one sanitized evidence record by stable ID after search, with a bounded text payload and deep link.",
+            "inputSchema": {"type":"object","additionalProperties":false,"required":["evidence_id"],"properties":{"evidence_id":{"type":"string","description":"frame:42 or event:7"},"max_content_chars":{"type":"integer","minimum":160,"maximum":24000}}},
+            "annotations": read_only_tool_annotations()
+        }),
+        json!({
+            "name": "dystil_get_activity_context",
+            "description": "Get chronological sanitized evidence around one result. Start with about 120 seconds and expand only if needed.",
+            "inputSchema": {"type":"object","additionalProperties":false,"required":["evidence_id"],"properties":{"evidence_id":{"type":"string"},"before_seconds":{"type":"integer","minimum":1,"maximum":3600},"after_seconds":{"type":"integer","minimum":1,"maximum":3600},"limit":{"type":"integer","minimum":1,"maximum":50},"max_content_chars":{"type":"integer","minimum":160,"maximum":8000}}},
+            "annotations": read_only_tool_annotations()
+        }),
+        json!({
+            "name": "dystil_get_activity_range",
+            "description": "Read a bounded chronological range of sanitized evidence with source/app/window/URL filters and pagination.",
+            "inputSchema": {"type":"object","additionalProperties":false,"required":["start_time","end_time"],"properties":{"start_time":{"type":"string"},"end_time":{"type":"string"},"source_type":{"type":"string","enum":["frame","event"]},"app_name":{"type":"string"},"window_name":{"type":"string"},"browser_url":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50},"offset":{"type":"integer","minimum":0},"max_content_chars":{"type":"integer","minimum":160,"maximum":8000}}},
+            "annotations": read_only_tool_annotations()
+        }),
+    ]
+}
+
+async fn call_tool(pool: &sqlx::SqlitePool, params: Value) -> Result<Value, String> {
     let name = params
         .get("name")
         .and_then(Value::as_str)
@@ -238,95 +186,85 @@ async fn call_tool(
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    let retrieval = RetrievalService::new(pool.clone());
     let result = match name {
-        "dystil_get_day" => {
-            let date = arguments
-                .get("date")
-                .and_then(Value::as_str)
-                .ok_or("date is required")?;
-            serde_json::to_value(
-                build_daily_context(pool, date, timezone)
-                    .await
-                    .map_err(|error| error.to_string())?,
-            )
-            .map_err(|error| error.to_string())?
-        }
-        "dystil_search_work_cards" | "dystil_search_work" => {
-            let query = arguments
-                .get("query")
-                .and_then(Value::as_str)
-                .ok_or("query is required")?;
-            let limit = arguments
-                .get("limit")
-                .and_then(Value::as_u64)
-                .unwrap_or(10)
-                .clamp(1, 30) as u32;
-            let cards = search_work_cards(pool, query, limit)
+        "dystil_search_activity" => {
+            let request: SearchRequest = serde_json::from_value(arguments.clone())
+                .map_err(|error| format!("invalid search arguments: {error}"))?;
+            json!(retrieval
+                .search(request)
                 .await
-                .map_err(|error| error.to_string())?;
-            json!({"schema_version":"dystil-search-v1","query":query,"cards":cards.iter().map(ContextCard::from).collect::<Vec<_>>()})
+                .map_err(|error| error.to_string())?)
         }
-        "dystil_get_work_card" | "dystil_get_card" => {
-            let id = arguments
-                .get("card_id")
-                .and_then(Value::as_str)
-                .ok_or("card_id is required")?;
-            let card = get_work_card(pool, id)
+        "dystil_get_activity_context" => {
+            let evidence_id: EvidenceId = required_string(&arguments, "evidence_id")?
+                .parse()
+                .map_err(|error: dystil_retrieval::RetrievalError| error.to_string())?;
+            json!(retrieval
+                .context(ContextRequest {
+                    evidence_id,
+                    before_seconds: optional_u32(&arguments, "before_seconds"),
+                    after_seconds: optional_u32(&arguments, "after_seconds"),
+                    limit: optional_u32(&arguments, "limit"),
+                    max_content_chars: optional_usize(&arguments, "max_content_chars"),
+                })
                 .await
-                .map_err(|error| error.to_string())?
-                .ok_or("work card not found")?;
-            json!({"card": ContextCard::from(&card)})
+                .map_err(|error| error.to_string())?)
         }
-        "dystil_get_work_card_evidence" if access == AccessMode::Activity => {
-            let card_id = arguments
-                .get("card_id")
-                .and_then(Value::as_str)
-                .ok_or("card_id is required")?;
-            let limit = arguments
-                .get("limit")
-                .and_then(Value::as_u64)
-                .unwrap_or(30)
-                .clamp(1, 80) as u32;
-            json!({"card_id": card_id, "records": get_work_card_evidence(pool, card_id, limit).await.map_err(|error| error.to_string())?})
+        "dystil_get_activity_overview" => {
+            let request: OverviewRequest = serde_json::from_value(arguments.clone())
+                .map_err(|error| format!("invalid overview arguments: {error}"))?;
+            json!(retrieval
+                .overview(request)
+                .await
+                .map_err(|error| error.to_string())?)
         }
-        "dystil_search_activity" if access == AccessMode::Activity => {
-            let query = arguments
-                .get("query")
-                .and_then(Value::as_str)
-                .ok_or("query is required")?;
-            let limit = arguments
-                .get("limit")
-                .and_then(Value::as_u64)
-                .unwrap_or(10)
-                .clamp(1, 30) as u32;
-            json!({"schema_version":"dystil-activity-search-v1", "query": query, "records": search_activity(pool, query, limit).await.map_err(|error| error.to_string())?})
+        "dystil_get_source" => {
+            let evidence_id: EvidenceId = required_string(&arguments, "evidence_id")?
+                .parse()
+                .map_err(|error: dystil_retrieval::RetrievalError| error.to_string())?;
+            json!(retrieval
+                .get_source(
+                    &evidence_id,
+                    optional_usize(&arguments, "max_content_chars")
+                )
+                .await
+                .map_err(|error| error.to_string())?)
         }
-        "dystil_get_activity_context" if access == AccessMode::Activity => {
-            let source_id = arguments
-                .get("source_id")
-                .and_then(Value::as_str)
-                .ok_or("source_id is required")?;
-            let before = arguments
-                .get("before_seconds")
-                .and_then(Value::as_u64)
-                .unwrap_or(120)
-                .clamp(1, 3600) as u32;
-            let after = arguments
-                .get("after_seconds")
-                .and_then(Value::as_u64)
-                .unwrap_or(120)
-                .clamp(1, 3600) as u32;
-            let limit = arguments
-                .get("limit")
-                .and_then(Value::as_u64)
-                .unwrap_or(20)
-                .clamp(1, 50) as u32;
-            json!({"source_id": source_id, "records": get_activity_context(pool, source_id, before, after, limit).await.map_err(|error| error.to_string())?})
+        "dystil_get_activity_range" => {
+            let request: RangeRequest = serde_json::from_value(arguments.clone())
+                .map_err(|error| format!("invalid range arguments: {error}"))?;
+            json!(retrieval
+                .range(request)
+                .await
+                .map_err(|error| error.to_string())?)
         }
         _ => return Err("unknown tool".into()),
     };
     let text = serde_json::to_string(&result).map_err(|error| error.to_string())?;
     Ok(json!({"content":[{"type":"text","text":text}]}))
+}
+
+fn required_string<'a>(arguments: &'a Value, key: &str) -> Result<&'a str, String> {
+    arguments
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("{key} is required"))
+}
+
+fn optional_u32(arguments: &Value, key: &str) -> Option<u32> {
+    arguments
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|value| value.min(u32::MAX as u64) as u32)
+}
+
+fn optional_usize(arguments: &Value, key: &str) -> Option<usize> {
+    arguments
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
 }
 
 fn error_response(id: Value, code: i32, message: &str) -> Value {
@@ -336,60 +274,20 @@ fn error_response(id: Value, code: i32, message: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dystil_storage::{open_capture_database, upsert_work_card, NewWorkCard};
+    use dystil_storage::open_capture_database;
     use tempfile::tempdir;
 
-    fn card() -> NewWorkCard {
-        NewWorkCard {
-            window_id: "card-1".into(),
-            start_time: "2026-07-17T09:00:00+05:30".into(),
-            end_time: "2026-07-17T09:15:00+05:30".into(),
-            close_reason: "max_duration".into(),
-            title: "Reviewed auth rollout".into(),
-            summary: "Checked deployment state".into(),
-            applications: vec!["VS Code".into()],
-            artifacts: json!([]),
-            actions: json!([{"text":"Reviewed rollout"}]),
-            last_observed_state: "Editor open".into(),
-            status: "complete".into(),
-            uncertainties: vec![],
-            card_json: json!({}),
-            model_id: "test".into(),
-            source_hash: "sha256:test".into(),
-            embedding_model_id: None,
-            embedding: None,
-            evidence: vec![],
-        }
-    }
-
     #[tokio::test]
-    async fn tools_return_only_sanitized_derived_cards() {
+    async fn tools_are_activity_only_and_notifications_are_ignored() {
         let dir = tempdir().unwrap();
         let pool = open_capture_database(dir.path().join("db.sqlite"))
             .await
             .unwrap();
-        upsert_work_card(&pool, &card()).await.unwrap();
-
-        let response = call_tool(
-            &pool,
-            AccessMode::Cards,
-            "+05:30",
-            json!({"name":"dystil_get_day","arguments":{"date":"2026-07-17"}}),
-        )
-        .await
-        .unwrap();
-        let text = response["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Reviewed auth rollout"));
-        assert!(!text.contains("frame_text"));
-        assert_eq!(
-            tools(AccessMode::Cards)["tools"][0]["annotations"]["readOnlyHint"],
-            true
-        );
+        assert_eq!(tools()["tools"][0]["annotations"]["readOnlyHint"], true);
+        assert_eq!(tools()["tools"].as_array().unwrap().len(), 5);
 
         let notification = handle(
             &pool,
-            AccessMode::Cards,
-            "+05:30",
             &mut 60,
             json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
         )
