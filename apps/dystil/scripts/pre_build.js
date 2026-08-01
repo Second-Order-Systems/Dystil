@@ -269,8 +269,21 @@ async function buildDystilMcpSidecar() {
 
 	console.log(`building Dystil MCP sidecar for ${target}...`);
 	await $`cargo build --manifest-path ${path.join(workspace, 'Cargo.toml')} -p dystil-mcp --release --target ${target}`;
-	await fs.copyFile(source, destination);
-	if (platform !== 'windows') await fs.chmod(destination, 0o755);
+	if (platform === 'windows') {
+		await fs.copyFile(source, destination);
+	} else {
+		// POSIX refuses to overwrite a binary that a previous Dystil process is
+		// still executing (ETXTBSY). Stage a new inode beside it, then atomically
+		// replace the directory entry; the old process can safely keep its inode.
+		const staged = `${destination}.${process.pid}.tmp`;
+		try {
+			await fs.copyFile(source, staged);
+			await fs.chmod(staged, 0o755);
+			await fs.rename(staged, destination);
+		} finally {
+			await fs.rm(staged, { force: true });
+		}
+	}
 	console.log(`Dystil MCP sidecar ready: ${destination}`);
 }
 

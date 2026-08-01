@@ -16,8 +16,8 @@ use std::sync::{
 use std::time::Duration;
 
 use sqlx::{Row, SqlitePool};
-use tokio::task::JoinHandle;
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
 use dystil_redact::{record_state, sanitize_text, RedactionStatus, TextRedactor};

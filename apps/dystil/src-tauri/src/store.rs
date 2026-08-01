@@ -499,10 +499,6 @@ pub struct OnboardingStore {
     /// local preference only; provider credentials live in their own stores.
     #[serde(rename = "aiSetupChoice", default)]
     pub ai_setup_choice: Option<String>,
-    /// Local enrichment is deliberately opt-in because its generated activity
-    /// summaries are experimental and it requires a sizeable model download.
-    #[serde(rename = "localProcessingEnabled", default)]
-    pub local_processing_enabled: bool,
 }
 
 impl Default for OnboardingStore {
@@ -512,7 +508,6 @@ impl Default for OnboardingStore {
             completed_at: None,
             current_step: None,
             ai_setup_choice: None,
-            local_processing_enabled: false,
         }
     }
 }
@@ -569,7 +564,6 @@ impl OnboardingStore {
         self.completed_at = Some(chrono::Utc::now().to_rfc3339());
         self.current_step = None;
         self.ai_setup_choice = None;
-        self.local_processing_enabled = false;
     }
 
     pub fn reset(&mut self) {

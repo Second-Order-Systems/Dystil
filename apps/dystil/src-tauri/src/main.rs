@@ -30,10 +30,12 @@ mod agent_commands;
 mod agent_mailbox;
 mod agent_worker;
 mod ai;
+mod ai_presets;
+mod ai_runtime;
+mod automation_commands;
 mod app_config;
 mod auth;
 mod build_capabilities;
-mod byok;
 mod capture_config;
 mod capture_policy;
 mod capture_session;
@@ -44,7 +46,6 @@ mod dystil_paths;
 mod hardware;
 #[allow(deprecated)]
 mod icons;
-mod local_llm;
 mod oauth;
 mod permissions;
 mod recording;
@@ -66,20 +67,18 @@ mod windows_ca_bundle;
 mod windows_overlay;
 #[cfg(target_os = "windows")]
 mod windows_webview_env;
-mod work_card_worker;
-mod work_cards;
 #[cfg(feature = "cloud-sync")]
 mod work_insights_engine;
 
 pub use agent_commands::*;
 pub use ai::*;
+pub use ai_presets::*;
+pub use automation_commands::*;
 pub use auth::*;
 pub use build_capabilities::*;
-pub use byok::*;
 pub use server::*;
 
 pub use recording::*;
-pub use work_cards::*;
 
 pub use icons::*;
 pub use store::get_store;
@@ -621,6 +620,7 @@ async fn main() {
                 app.deep_link().register_all()?;
             }
             let app_handle = app.handle();
+            automation_commands::start_manager(app_handle.clone());
 
             // Create macOS app menu with Settings
             #[cfg(target_os = "macos")]
@@ -742,9 +742,6 @@ async fn main() {
                 error!("Failed to init onboarding store, using defaults: {}", e);
                 store::OnboardingStore::default()
             });
-            if onboarding_store.local_processing_enabled {
-                std::env::set_var("DYSTIL_LOCAL_PROCESSING_ENABLED", "1");
-            }
             app.manage(onboarding_store.clone());
 
             // Show the main home window for manual launches. OS autostart

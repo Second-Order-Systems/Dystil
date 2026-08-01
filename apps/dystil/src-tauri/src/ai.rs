@@ -5,7 +5,7 @@
 
 use crate::recording::RecordingState;
 use chrono::{DateTime, FixedOffset, Local, Offset};
-use dystil_ai::{build_daily_context, AiError, CliProvider, DailyUpdate, ProviderKind};
+use dystil_ai::{AiError, CliProvider, ProviderKind};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -27,8 +27,8 @@ const DYSTIL_CODEX_GUIDANCE: &str = r#"<!-- dystil-mcp-guidance:start -->
 
 For questions about my past desktop activity—what I did or worked on, dates, timestamps,
 applications, files, or prior work context—use the Dystil MCP tools before shell, Git, or
-filesystem searches. Start with work cards; if they are insufficient, use Dystil's sanitized
-activity search and bounded context. Use shell or Git for explicit codebase or current-file
+filesystem searches. Start with Dystil's activity overview for broad questions, or its exact
+activity search for names, messages, tickets, files, and quotes. Use shell or Git for explicit codebase or current-file
 questions. Ground answers in returned Dystil evidence and say when it is insufficient.
 <!-- dystil-mcp-guidance:end -->"#;
 
@@ -149,15 +149,6 @@ pub struct AiProviderModelView {
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
-pub struct AiDailyUpdateView {
-    pub provider: String,
-    pub runtime_version: Option<String>,
-    pub elapsed_ms: u64,
-    pub update: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
 pub struct McpConnectionStatus {
     pub connected: bool,
     pub detail: String,
@@ -177,7 +168,6 @@ fn provider_error_kind(error: &AiError) -> &'static str {
         AiError::Process(_) => "process_failed",
         AiError::InvalidOutput(_) => "invalid_output",
         AiError::Io(_) => "filesystem",
-        AiError::Date(_) | AiError::NoCards | AiError::Storage(_) => "context",
     }
 }
 
@@ -189,7 +179,7 @@ pub(crate) fn provider_kind(provider: &str) -> Result<ProviderKind, String> {
     }
 }
 
-fn runtime_root() -> Result<PathBuf, String> {
+pub(crate) fn runtime_root() -> Result<PathBuf, String> {
     Ok(crate::dystil_paths::data_dir().join("ai-runtimes"))
 }
 
@@ -212,7 +202,7 @@ fn provider_package(provider: &ProviderKind) -> &'static str {
 
 /// Finds Dystil's bundled Bun sidecar. An override exists solely for local
 /// adapter tests; production never relies on a user-global Bun installation.
-fn bundled_bun() -> Result<PathBuf, String> {
+pub(crate) fn bundled_bun() -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("DYSTIL_AI_BUN_EXECUTABLE").map(PathBuf::from) {
         if path.is_file() {
             return Ok(path);
@@ -573,7 +563,6 @@ pub async fn external_mcp_add(
     };
     let sidecar = mcp_binary(&app_handle)?;
     let database = capture_database_path(&state).await?;
-    let timezone = local_timezone_offset();
     let mut command = Command::new(&client);
     if client == "codex" {
         command.args(["mcp", "add", "dystil", "--"]).arg(&sidecar);
@@ -594,7 +583,6 @@ pub async fn external_mcp_add(
     command
         .arg("--database")
         .arg(&database)
-        .args(["--access", "activity", "--timezone", &timezone])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -667,6 +655,40 @@ pub async fn ai_provider_login(app_handle: AppHandle, provider: String) -> Resul
     }
 }
 
+/// Sign out of Dystil's isolated provider session without touching a user's
+/// separately installed global Codex or Claude Code credentials.
+#[tauri::command]
+#[specta::specta]
+pub async fn ai_provider_logout(
+    app_handle: AppHandle,
+    provider: String,
+) -> Result<AiProviderStatusView, String> {
+    let provider = provider_kind(&provider)?;
+    match provider {
+        ProviderKind::Codex => {
+            if let Some(mut child) = codex_login_process().lock().await.take() {
+                let _ = child.start_kill();
+            }
+        }
+        ProviderKind::Claude => {
+            if let Some(mut child) = claude_login_process().lock().await.take() {
+                let _ = child.start_kill();
+            }
+        }
+    }
+    let runtime = provider_runtime(provider.clone())?;
+    runtime.logout().await.map_err(|error| error.to_string())?;
+    let status = ai_provider_status(provider.slug().into()).await?;
+    if status.authenticated == Some(true) {
+        return Err(format!(
+            "{} still reports an authenticated session after logout",
+            provider.slug()
+        ));
+    }
+    let _ = app_handle.emit("ai-provider-login-updated", &status);
+    Ok(status)
+}
+
 /// Pass Claude Code the short-lived authorization code shown by its provider
 /// page. The code remains in memory and is never persisted by Dystil.
 #[tauri::command]
@@ -721,8 +743,8 @@ pub async fn ai_provider_complete_claude_login(
 /// Verify the official runtime and its account session without invoking a model.
 ///
 /// A model request is intentionally not part of setup: remote queue and cold
-/// start latency make it a poor connection diagnostic. The daily-update action
-/// is the first request that sends derived work cards to the selected provider.
+/// start latency make it a poor connection diagnostic. The first inquiry is
+/// the first request that lets the selected runtime query activity evidence.
 #[tauri::command]
 #[specta::specta]
 pub async fn ai_provider_test(provider: String) -> Result<AiProviderStatusView, String> {
@@ -756,96 +778,6 @@ pub async fn ai_provider_test(provider: String) -> Result<AiProviderStatusView, 
             Err(error.to_string())
         }
     }
-}
-
-/// Generate a manager-ready daily update from local derived work cards.
-#[tauri::command]
-#[specta::specta]
-pub async fn ai_generate_daily_update(
-    provider: String,
-    local_date: String,
-    timezone: String,
-    model: Option<String>,
-    state: State<'_, RecordingState>,
-) -> Result<AiDailyUpdateView, String> {
-    let runtime = provider_runtime(provider_kind(&provider)?)?;
-    let model = model
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if let Some(model) = model {
-        let valid = model.len() <= 80
-            && model
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
-        if !valid {
-            return Err("invalid provider model identifier".into());
-        }
-    }
-    info!(
-        provider = runtime.provider.slug(),
-        local_date,
-        model = model.unwrap_or("provider-default"),
-        "AI daily update requested"
-    );
-    let pool = capture_pool(&state).await.map_err(|error| {
-        warn!(
-            provider = runtime.provider.slug(),
-            reason = "capture_database_unavailable",
-            "AI daily update stopped before provider launch"
-        );
-        error
-    })?;
-    let bundle = build_daily_context(&pool, &local_date, &timezone)
-        .await
-        .map_err(|error| {
-            warn!(
-                provider = runtime.provider.slug(),
-                reason = provider_error_kind(&error),
-                local_date,
-                "AI daily update stopped before provider launch"
-            );
-            error.to_string()
-        })?;
-    info!(
-        provider = runtime.provider.slug(),
-        card_count = bundle.cards.len(),
-        context_bytes = bundle
-            .as_prompt_json()
-            .map(|context| context.len())
-            .unwrap_or_default(),
-        "launching AI provider with derived work cards"
-    );
-    let result = runtime.run_daily_update_with_model(&bundle, model).await;
-    match result {
-        Ok(run) => {
-            info!(
-                provider = run.provider.slug(),
-                elapsed_ms = run.elapsed_ms,
-                "AI daily update completed"
-            );
-            into_view(run)
-        }
-        Err(error) => {
-            // Keep logs privacy-preserving: this deliberately omits the provider's
-            // stderr because it can include user-provided context.
-            warn!(
-                provider = runtime.provider.slug(),
-                reason = provider_error_kind(&error),
-                "AI daily update failed"
-            );
-            Err(error.to_string())
-        }
-    }
-}
-
-fn into_view(run: dystil_ai::ProviderRun) -> Result<AiDailyUpdateView, String> {
-    Ok(AiDailyUpdateView {
-        provider: run.provider.slug().into(),
-        runtime_version: run.runtime_version,
-        elapsed_ms: run.elapsed_ms,
-        update: serde_json::to_value(run.update).map_err(|error| error.to_string())?,
-    })
 }
 
 pub(crate) fn mcp_binary(app: &AppHandle) -> Result<PathBuf, String> {
@@ -926,7 +858,7 @@ pub(crate) fn local_date_for_timestamp(timestamp: &str, timezone: &str) -> Strin
 pub(crate) async fn internal_mcp_server(
     app: &AppHandle,
     state: &RecordingState,
-    timezone: &str,
+    _timezone: &str,
 ) -> Result<dystil_ai::McpServerConfig, String> {
     Ok(dystil_ai::McpServerConfig {
         command: mcp_binary(app)?,
@@ -936,10 +868,6 @@ pub(crate) async fn internal_mcp_server(
                 .await?
                 .to_string_lossy()
                 .into_owned(),
-            "--access".into(),
-            "activity".into(),
-            "--timezone".into(),
-            timezone.into(),
             "--max-calls".into(),
             "6".into(),
         ],

@@ -12,14 +12,17 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use thiserror::Error;
 
+mod activity_overview;
 mod activity_search;
-mod work_cards;
 
-pub use activity_search::{get_activity_context, search_activity, ActivityRecord};
-pub use work_cards::{
-    delete_work_card, get_work_card, get_work_card_evidence, hybrid_search_work_cards,
-    hybrid_search_work_cards_range, list_work_cards, list_work_cards_range, search_work_cards,
-    search_work_cards_range, upsert_work_card, NewWorkCard, StoredWorkCard, WorkCardEvidenceLink,
+pub use activity_overview::{
+    count_activity_in_range, get_activity_overview_raw, ActivityHealthRaw, ActivityOverviewRaw,
+    FrameObservation,
+};
+pub use activity_search::{
+    get_activity_context, get_activity_range, get_activity_source, search_activity,
+    search_activity_filtered, ActivityRangeQuery, ActivityRecord, ActivitySearchQuery,
+    ActivitySearchRecord,
 };
 
 #[derive(Debug, Error)]
@@ -185,52 +188,6 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
     )
     .execute(&mut *tx)
     .await?;
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS work_cards (
-            window_id TEXT PRIMARY KEY,
-            start_time TEXT NOT NULL,
-            end_time TEXT NOT NULL,
-            close_reason TEXT NOT NULL,
-            title TEXT NOT NULL,
-            summary TEXT NOT NULL,
-            applications_json TEXT NOT NULL DEFAULT '[]',
-            artifacts_json TEXT NOT NULL DEFAULT '[]',
-            actions_json TEXT NOT NULL DEFAULT '[]',
-            last_observed_state TEXT NOT NULL,
-            status TEXT NOT NULL,
-            uncertainties_json TEXT NOT NULL DEFAULT '[]',
-            card_json TEXT NOT NULL,
-            model_id TEXT NOT NULL,
-            embedding_model_id TEXT,
-            embedding_dimensions INTEGER,
-            embedding BLOB,
-            source_hash TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        )",
-    )
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_work_cards_time
-         ON work_cards(start_time DESC, window_id)",
-    )
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS work_cards_fts USING fts5(
-            window_id UNINDEXED,
-            title,
-            summary,
-            applications,
-            artifacts,
-            actions,
-            last_observed_state,
-            tokenize = 'unicode61 remove_diacritics 2'
-        )",
-    )
-    .execute(&mut *tx)
-    .await?;
     // A deliberately narrow projection of capture rows for retrieval. This is
     // separate from the raw tables so callers never need arbitrary SQL or an
     // accessibility-tree/screenshot interface.
@@ -252,6 +209,18 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_activity_search_documents_time
          ON activity_search_documents(timestamp, id)",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_activity_search_documents_source_time
+         ON activity_search_documents(source_type, timestamp, id)",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_activity_search_documents_app_time
+         ON activity_search_documents(app_name, timestamp, id)",
     )
     .execute(&mut *tx)
     .await?;
@@ -329,30 +298,12 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
     )
     .execute(&mut *tx)
     .await?;
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS work_card_evidence (
-            card_id TEXT NOT NULL REFERENCES work_cards(window_id) ON DELETE CASCADE,
-            source_type TEXT NOT NULL CHECK (source_type IN ('frame', 'event')),
-            source_row_id INTEGER NOT NULL,
-            occurred_at TEXT NOT NULL,
-            PRIMARY KEY (card_id, source_type, source_row_id)
-        )",
-    )
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_work_card_evidence_card ON work_card_evidence(card_id, occurred_at)",
-    )
-    .execute(&mut *tx)
-    .await?;
     // Collaboration state is local UI/audit state. It intentionally contains
     // only exchanged derived answers, never raw accessibility evidence.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS agent_mailbox_state (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             cursor INTEGER NOT NULL DEFAULT 0,
-            provider TEXT NOT NULL DEFAULT 'codex',
-            model TEXT NOT NULL DEFAULT 'gpt-5.6-luna',
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )",
     )
@@ -383,9 +334,8 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
     )
     .execute(&mut *tx)
     .await?;
-    // Durable, device-local chat state. A message owns the exact derived-card
-    // snapshot and generated answer used for that turn, so reopening chat never
-    // re-runs retrieval or spends provider tokens.
+    // Durable, device-local chat state. Stored answers and citations let a
+    // reopened inquiry render without rerunning retrieval or inference.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS local_chat_sessions (
             id TEXT PRIMARY KEY,
@@ -405,7 +355,6 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
             question TEXT,
             answer TEXT,
             status TEXT NOT NULL CHECK (status IN ('pending', 'complete', 'failed')),
-            selected_cards_json TEXT,
             citations_json TEXT,
             provider TEXT,
             model TEXT,
@@ -428,16 +377,19 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
     )
     .execute(&mut *tx)
     .await?;
-    // Only non-secret BYOK metadata belongs in SQLite. The API key is held by
-    // the operating-system credential store under this profile ID.
+    // Credentials remain in the OS keyring; this table contains routing
+    // metadata only.
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS ai_provider_profiles (
+        "CREATE TABLE IF NOT EXISTS ai_presets (
             id TEXT PRIMARY KEY,
-            provider_kind TEXT NOT NULL CHECK (provider_kind IN ('openai_compatible')),
-            endpoint TEXT NOT NULL,
-            chat_model TEXT NOT NULL,
-            work_card_model TEXT NOT NULL,
+            name TEXT NOT NULL,
+            provider_kind TEXT NOT NULL CHECK (provider_kind IN ('codex', 'claude', 'openai_compatible', 'ollama')),
+            endpoint TEXT,
+            model TEXT NOT NULL,
             active INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)),
+            validation_status TEXT NOT NULL DEFAULT 'unknown' CHECK (validation_status IN ('unknown', 'ready', 'error')),
+            validation_message TEXT,
+            validated_at TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )",
@@ -445,8 +397,8 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_provider_profiles_active
-         ON ai_provider_profiles(active) WHERE active = 1",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_presets_active
+         ON ai_presets(active) WHERE active = 1",
     )
     .execute(&mut *tx)
     .await?;
@@ -497,6 +449,12 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(frame_table_exists, 1);
+        let active_preset_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM ai_presets WHERE active = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(active_preset_count, 0);
     }
 
     #[tokio::test]

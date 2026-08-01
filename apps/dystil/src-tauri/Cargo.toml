@@ -17,6 +17,7 @@ rust-version = "1.92"
 tauri-build = { version = "=2.6.2", features = [] }
 tauri-helper = { git = "https://github.com/divanshu-go/tauri-helper", rev = "e25ff1d2c5026189305a0251a1e06788efe1d2b3" }
 serde_json = "1.0"
+serde_yaml = "0.9"
 url = "2"
 # Used by build.rs on Windows MSVC targets (incl. cross-compiles from
 # Linux/macOS CI runners) to compile c/bswap_shim.c — provides
@@ -116,6 +117,7 @@ futures = "0.3.30"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 
 chrono = "0.4.39"
+cron = "0.15"
 tauri-plugin-opener = "2.5.3"
 uuid = { version = "1.0", features = ["v4"] }
 keyring = "3"
@@ -129,9 +131,10 @@ hostname = "0.4"
 dystil-engine = { path = "../../../crates/dystil-engine", optional = true }
 dystil-sync = { path = "../../../crates/dystil-sync", optional = true }
 dystil-storage = { path = "../../../crates/dystil-storage" }
-dystil-work-cards = { path = "../../../crates/dystil-work-cards" }
+dystil-retrieval = { path = "../../../crates/dystil-retrieval" }
 dystil-ai = { path = "../../../crates/dystil-ai" }
 dystil-protocol = { path = "../../../crates/dystil-protocol" }
+dystil-automation = { path = "../../../crates/dystil-automation" }
 
 dystil-capture = { path = "../../../crates/dystil-capture", features = ["native"] }
 dystil-redact = { path = "../../../crates/dystil-redact" }

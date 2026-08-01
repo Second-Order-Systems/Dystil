@@ -11,7 +11,7 @@ import { signOut } from "@/lib/auth-session";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
-import { commands, type LocalChatMessageView, type WorkCardView } from "@/lib/utils/tauri";
+import { commands, type LocalChatMessageView } from "@/lib/utils/tauri";
 
 type AgentPeer = { userId: string; displayName: string | null; email: string; agentStatus: string };
 type AgentMessage = { messageId: string; peerUserId: string; direction: string; kind: string; localStatus: string; text: string; evidence: Array<{ label: string; localDate: string }> };
@@ -72,8 +72,6 @@ export default function HomePage() {
   const [screenshotBusy, setScreenshotBusy] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [version, setVersion] = useState("");
-  const [cards, setCards] = useState<WorkCardView[]>([]);
-  const [loadingCards, setLoadingCards] = useState(true);
   const [peers, setPeers] = useState<AgentPeer[]>([]);
   const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -170,14 +168,6 @@ export default function HomePage() {
     listen("agent-mailbox-updated", () => void refreshMailbox()).then((dispose) => { unlisten = dispose; }).catch(() => {});
     return () => unlisten?.();
   }, []);
-  useEffect(() => {
-    let cancelled = false; const timer = window.setTimeout(async () => {
-      setLoadingCards(true); const result = await commands.searchWorkCards("", 120);
-      if (!cancelled && result.status === "ok") setCards(result.data);
-      if (!cancelled) setLoadingCards(false);
-    }, 180);
-    return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [captureRunning]);
 
   const toggleCapture = async () => {
     setToggling(true); const target = !recording;
@@ -208,7 +198,7 @@ export default function HomePage() {
   return <ChatShell
     userName={userName} userEmail={userEmail} recording={recording} toggling={toggling} onToggleRecording={() => void toggleCapture()}
     screenshotEnabled={!settings.disableVision} onScreenshotChange={(enabled) => void setScreenshots(enabled)} screenshotBusy={screenshotBusy}
-    peers={peers} agentMessages={agentMessages} cards={cards} loadingCards={loadingCards} sessions={sessions}
+    peers={peers} agentMessages={agentMessages} sessions={sessions}
     onLoadSession={async (sessionId) => {
       const result = await commands.localChatGetMessages(sessionId);
       if (result.status === "error") throw new Error(result.error);

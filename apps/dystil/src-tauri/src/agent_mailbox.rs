@@ -167,29 +167,6 @@ pub(crate) async fn set_local_status(
     Ok(())
 }
 
-pub(crate) async fn preferences(pool: &SqlitePool) -> Result<(String, String), String> {
-    sqlx::query_as::<_, (String, String)>(
-        "SELECT provider, model FROM agent_mailbox_state WHERE id = 1",
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(|error| error.to_string())
-}
-
-pub(crate) async fn set_preferences(
-    pool: &SqlitePool,
-    provider: &str,
-    model: &str,
-) -> Result<(), String> {
-    sqlx::query("UPDATE agent_mailbox_state SET provider = ?1, model = ?2, updated_at = datetime('now') WHERE id = 1")
-        .bind(provider)
-        .bind(model)
-        .execute(pool)
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
 pub(crate) fn new_request(recipient_user_id: String, question: String) -> AgentMessageInput {
     AgentMessageInput {
         schema_version: AGENT_MAILBOX_SCHEMA_VERSION.into(),
@@ -202,7 +179,7 @@ pub(crate) fn new_request(recipient_user_id: String, question: String) -> AgentM
             question,
             search: dystil_protocol::agent_mailbox::AgentSearchScope {
                 lookback_days: 30,
-                max_cards: 12,
+                max_evidence_results: 12,
             },
         }),
     }

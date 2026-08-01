@@ -294,7 +294,36 @@ fn get_accessible_state(conn: &Connection, aref: &AccessibleRef) -> Vec<u32> {
 /// Get children of an accessible object.
 /// Returns a list of (bus_name, object_path) pairs.
 fn get_accessible_children(conn: &Connection, aref: &AccessibleRef) -> Vec<AccessibleRef> {
-    // Use the ChildCount property and GetChildAtIndex method
+    // Prefer the bulk API. Chromium's tree can have a high per-call latency
+    // on AT-SPI2; asking for ChildCount and then issuing one GetChildAtIndex
+    // call per child can exhaust the walk budget before we reach a document's
+    // text nodes. `GetChildren` is part of the required AT-SPI Accessible
+    // interface and returns the same `(bus_name, object_path)` references in
+    // one round trip.
+    if let Ok(reply) = dbus_call(
+        conn,
+        &aref.bus_name,
+        &aref.path,
+        ATSPI_ACCESSIBLE,
+        "GetChildren",
+        &(),
+    ) {
+        let deserialized: Result<Vec<(String, zbus::zvariant::OwnedObjectPath)>, _> =
+            reply.body().deserialize();
+        if let Ok(children) = deserialized {
+            return children
+                .into_iter()
+                .filter(|(bus_name, path)| !bus_name.is_empty() && !path.as_str().is_empty())
+                .map(|(bus_name, path)| AccessibleRef {
+                    bus_name,
+                    path: path.to_string(),
+                })
+                .collect();
+        }
+    }
+
+    // Some older or non-conforming providers do not implement GetChildren.
+    // Retain the indexed path as a compatibility fallback.
     let child_count: i32 = get_property(
         conn,
         &aref.bus_name,

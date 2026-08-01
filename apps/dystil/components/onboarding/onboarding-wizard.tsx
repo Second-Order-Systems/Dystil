@@ -165,7 +165,7 @@ function setUpManagedProvider(provider: ManagedProvider) {
         });
         await invoke("ai_provider_install", { provider });
       }
-      await invoke("agent_set_preferences", { provider, model: "default" });
+      await invoke("ai_preset_activate_managed", { providerKind: provider, model: "default" });
       // Installation can finish after onboarding has navigated away or while
       // Dystil is behind another app. Bring the app back only for the explicit
       // sign-in decision, never while package installation is still running.
@@ -380,7 +380,7 @@ export function OnboardingWizard() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [permissionsReady, setPermissionsReady] = useState(false);
   const [aiSetupReady, setAiSetupReady] = useState(false);
-  const [aiSetup, setAiSetup] = useState<{ choice: "codex" | "claude" | "byok" | "local"; enableLocalProcessing: boolean } | null>(null);
+  const [aiSetup, setAiSetup] = useState<{ choice: "codex" | "claude" | "local" } | null>(null);
   const [hasRestoredStoredStep, setHasRestoredStoredStep] = useState(false);
   const [authState, setAuthState] = useState<DystilAuthState>(() => getAuthState());
   const { apps: installedApps } = useInstalledApps();
