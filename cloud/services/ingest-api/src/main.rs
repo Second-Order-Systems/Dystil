@@ -34,6 +34,7 @@ use work_insights_db::DbError;
 use work_insights_ingest::{process_segment_upload, IngestProcessError};
 
 mod agent_mailbox;
+mod ai_gateway;
 mod auth;
 mod auth_proxy;
 mod memory_proxy;
@@ -43,6 +44,7 @@ pub(crate) struct Config {
     database_url: String,
     bind_addr: SocketAddr,
     auth_internal_url: Option<String>,
+    ai_gateway: Option<ai_gateway::AiGatewayConfig>,
     memory: MemoryServiceConfig,
     storage: StorageConfig,
 }
@@ -78,6 +80,7 @@ impl Config {
             auth_internal_url: std::env::var("AUTH_INTERNAL_URL")
                 .ok()
                 .map(|value| value.trim_end_matches('/').to_string()),
+            ai_gateway: ai_gateway::AiGatewayConfig::from_env()?,
             memory: MemoryServiceConfig::from_env()?,
             storage: StorageConfig::from_env()?,
         })
@@ -289,6 +292,11 @@ fn router(state: AppState) -> Router {
         .route("/devices/register", post(register_device))
         .route("/devices", get(list_devices))
         .route("/devices/:device_id/revoke", post(revoke_device))
+        .route("/v1/models", get(ai_gateway::get_models))
+        .route(
+            "/v1/chat/completions",
+            post(ai_gateway::post_chat_completions),
+        )
         .route("/v1/agent/peers", get(agent_mailbox::get_peers))
         .route(
             "/v1/agent/messages",
@@ -987,6 +995,7 @@ mod tests {
             database_url: database_url.clone(),
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             auth_internal_url: Some(auth_url),
+            ai_gateway: None,
             memory: MemoryServiceConfig {
                 internal_url: memory_url,
                 internal_api_token: internal_token,
@@ -1018,6 +1027,7 @@ mod tests {
                 .build()
                 .unwrap(),
             memory_query_limiter: memory_proxy::MemoryQueryRateLimiter::new(10),
+            agent_connections: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         };
         let (api_url, api_task) = spawn_test_server(router(state)).await;
         let client = reqwest::Client::new();

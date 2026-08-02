@@ -1,0 +1,13 @@
+{
+  "name": "dystil-cloud-scripts",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "aws4fetch": "^1.0.20",
+    "pg": "^8.21.0",
+    "sharp": "^0.33"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.0"
+  }
+}

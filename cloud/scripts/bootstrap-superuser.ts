@@ -2,6 +2,7 @@ import { Pool } from "pg";
 import { scrypt, randomBytes } from "node:crypto";
 import { readFileSync } from "fs";
 import { resolve } from "path";
+import { uploadOrgIcon } from "./upload-org-icon";
 
 interface Args {
   email: string;
@@ -10,6 +11,7 @@ interface Args {
   orgName: string;
   orgSlug: string;
   allowedEmailDomains: string[];
+  iconPath?: string;
 }
 
 function parseArgs(): Args {
@@ -18,11 +20,11 @@ function parseArgs(): Args {
     console.error(
       [
         "Usage: bun run scripts/bootstrap-superuser.ts <email> <password> <name>",
-        "  <org-name> <org-slug> <allowed-email-domains,comma-separated>",
+        "  <org-name> <org-slug> <allowed-email-domains,comma-separated> [icon-path]",
         "",
         "Example:",
         "  bun run scripts/bootstrap-superuser.ts admin@meridian.com s3cret 'Admin User' \\",
-        "    'Meridian Corp' meridian 'meridian.com'",
+        "    'Meridian Corp' meridian 'meridian.com' ./logo.png",
       ].join("\n"),
     );
     process.exit(1);
@@ -37,6 +39,7 @@ function parseArgs(): Args {
       .split(",")
       .map((d) => d.trim().toLowerCase())
       .filter(Boolean),
+    iconPath: args[6]?.trim() || undefined,
   };
 }
 
@@ -103,12 +106,12 @@ async function main() {
   const args = parseArgs();
   const databaseUrl = loadDbUrl();
 
-  console.log(
+    console.log(
     `Bootstrapping superuser...
   Email:     ${args.email}
   Name:      ${args.name}
   Org:       ${args.orgName} (${args.orgSlug})
-  Domains:   ${args.allowedEmailDomains.join(", ") || "(none)"}`,
+  Domains:   ${args.allowedEmailDomains.join(", ") || "(none)"}${args.iconPath ? `\n  Icon:      ${args.iconPath}` : ""}`,
   );
 
   const pool = new Pool({ connectionString: databaseUrl, max: 2 });
@@ -122,6 +125,10 @@ async function main() {
     const orgId = await ensureOrganization(pool, args.orgName, args.orgSlug, args.allowedEmailDomains);
     await setUserOrg(pool, appUserId, orgId);
     await setSuperuser(pool, orgId, appUserId);
+
+    if (args.iconPath) {
+      await uploadOrgIcon(orgId, args.orgSlug, args.iconPath);
+    }
 
     console.log(`\nDone. ${args.email} is superuser of ${args.orgName}.`);
     console.log(`Sign in at: ${args.orgSlug}.dystil.2os.ai`);

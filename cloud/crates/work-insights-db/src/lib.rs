@@ -1,4 +1,5 @@
 pub mod agent_mailbox;
+pub mod ai_gateway;
 pub mod identity;
 pub mod ingest;
 pub mod segments;
