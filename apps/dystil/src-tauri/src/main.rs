@@ -32,9 +32,9 @@ mod agent_worker;
 mod ai;
 mod ai_presets;
 mod ai_runtime;
-mod automation_commands;
 mod app_config;
 mod auth;
+mod automation_commands;
 mod build_capabilities;
 mod capture_config;
 mod capture_policy;
@@ -69,14 +69,17 @@ mod windows_overlay;
 mod windows_webview_env;
 #[cfg(feature = "cloud-sync")]
 mod work_insights_engine;
+mod worth_fixing_commands;
+mod worth_fixing_engine;
 
 pub use agent_commands::*;
 pub use ai::*;
 pub use ai_presets::*;
-pub use automation_commands::*;
 pub use auth::*;
+pub use automation_commands::*;
 pub use build_capabilities::*;
 pub use server::*;
+pub use worth_fixing_commands::*;
 
 pub use recording::*;
 
@@ -611,6 +614,7 @@ async fn main() {
     let app = app.plugin(tauri_nspanel::init());
 
     let app = app.manage(recording_state)
+        .manage(worth_fixing_commands::WorthFixingState::default())
         .invoke_handler(tauri_helper::tauri_collect_commands!())
         .setup(move |app| {
             //deep link register_all
@@ -621,6 +625,7 @@ async fn main() {
             }
             let app_handle = app.handle();
             automation_commands::start_manager(app_handle.clone());
+            worth_fixing_engine::start(app_handle.clone());
 
             // Create macOS app menu with Settings
             #[cfg(target_os = "macos")]

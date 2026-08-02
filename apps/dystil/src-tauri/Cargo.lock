@@ -2265,6 +2265,7 @@ dependencies = [
  "dystil-automation",
  "dystil-capture",
  "dystil-engine",
+ "dystil-insights",
  "dystil-protocol",
  "dystil-redact",
  "dystil-retrieval",
@@ -2421,6 +2422,23 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "dystil-insights"
+version = "0.4.17"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "dystil-ai",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "specta",
+ "sqlx",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]
