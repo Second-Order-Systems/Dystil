@@ -8,7 +8,10 @@ use crate::a11y::tree::macos_lines::{self, NormalizeRefs};
 use crate::window_pattern::{self, WindowPattern};
 use anyhow::Result;
 use chrono::Utc;
-use cidre::{arc::Retained, ax, cf, ns};
+use cidre::{
+    arc::{self, Retained},
+    ax, cf, ns,
+};
 use std::process::Command;
 use std::time::{Duration, Instant};
 use tracing::debug;
