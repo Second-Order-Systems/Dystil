@@ -8,8 +8,8 @@ use tauri::AppHandle;
 
 use dystil_ai::{
     AiAnswerRequest, AiAutomationRequest, AiAutomationRun, AiRuntime, AiRuntimeDescriptor,
-    AiRuntimeError, AiRuntimeErrorCode, AiRuntimeEvent, AiRuntimeKind, CliProvider, ProviderKind,
-    TeammateAnswerRun,
+    AiRuntimeError, AiRuntimeErrorCode, AiRuntimeEvent, AiRuntimeKind, AiStructuredRequest,
+    AiStructuredRun, CliProvider, ProviderKind, TeammateAnswerRun,
 };
 
 use crate::{ai, ai_presets, recording::RecordingState};
@@ -50,6 +50,16 @@ impl AiRuntime for CliRuntimeAdapter {
             .await
             .map_err(Into::into)
     }
+
+    async fn infer_structured(
+        &self,
+        request: AiStructuredRequest,
+    ) -> Result<AiStructuredRun, AiRuntimeError> {
+        self.runtime
+            .run_structured_with_model(request, self.model.as_deref())
+            .await
+            .map_err(Into::into)
+    }
 }
 
 struct PiRuntimeAdapter {
@@ -76,6 +86,15 @@ impl AiRuntime for PiRuntimeAdapter {
         events: tokio::sync::mpsc::Sender<AiRuntimeEvent>,
     ) -> Result<AiAutomationRun, AiRuntimeError> {
         ai_presets::pi_automation(&self.preset, &self.mcp, request, events)
+            .await
+            .map_err(normalize_pi_error)
+    }
+
+    async fn infer_structured(
+        &self,
+        request: AiStructuredRequest,
+    ) -> Result<AiStructuredRun, AiRuntimeError> {
+        ai_presets::pi_structured(&self.preset, request)
             .await
             .map_err(normalize_pi_error)
     }

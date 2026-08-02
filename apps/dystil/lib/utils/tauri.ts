@@ -5,6 +5,14 @@
 
 
 export const commands = {
+async acceptWorthFixingFinding(findingId: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("accept_worth_fixing_finding", { findingId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async agentListMessages() : Promise<Result<AgentMessageView[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("agent_list_messages") };
@@ -414,6 +422,14 @@ async checkPermission(permission: OSPermission) : Promise<OSPermissionStatus> {
 async checkScreenRecordingPermission() : Promise<OSPermissionStatus> {
     return await TAURI_INVOKE("check_screen_recording_permission");
 },
+async cleanupWorthFixingDiagnostics(enhancedDiagnostics: boolean) : Promise<Result<WorthFixingCleanupResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("cleanup_worth_fixing_diagnostics", { enhancedDiagnostics }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async closeWindow(window: ShowRewindWindow) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("close_window", { window }) };
@@ -453,6 +469,14 @@ async copyTextToClipboard(text: string) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async correctWorthFixingFinding(findingId: string, correctionText: string, intent: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("correct_worth_fixing_finding", { findingId, correctionText, intent }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async deleteCacheFiles(paths: string[]) : Promise<Result<number, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("delete_cache_files", { paths }) };
@@ -479,6 +503,14 @@ async disableKeychainEncryption() : Promise<Result<KeychainStatus, string>> {
 async disableOverlayClickThrough() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("disable_overlay_click_through") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async dismissWorthFixingFinding(findingId: string, reason: DispositionKind) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("dismiss_worth_fixing_finding", { findingId, reason }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -667,6 +699,14 @@ async getOnboardingStatus() : Promise<Result<OnboardingStore, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async getOtherWorthFixingFindings(cursor: string | null, limit: number) : Promise<Result<FindingPage, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_other_worth_fixing_findings", { cursor, limit }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Read local cloud-sync consent. Defaults are fail-closed for both new and
  * existing installations because `syncConsent` is serde-defaulted.
@@ -674,6 +714,22 @@ async getOnboardingStatus() : Promise<Result<OnboardingStore, string>> {
 async getSyncConsent() : Promise<Result<SyncConsent, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_sync_consent") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getWorthFixingEvidence(findingId: string) : Promise<Result<WorthFixingEvidenceLine[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_worth_fixing_evidence", { findingId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getWorthFixingSummary() : Promise<Result<WorthFixingSummary, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_worth_fixing_summary") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -871,6 +927,18 @@ async refreshTrayMenu() : Promise<Result<null, string>> {
 }
 },
 /**
+ * Explicit refresh backend boundary. Normal background wakes use the same
+ * durable engine; this command does not bypass admission or the daily cap.
+ */
+async refreshWorthFixing() : Promise<Result<WorthFixingRefreshResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("refresh_worth_fixing") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Request macOS Automation permission for Arc browser.
  * In production: triggers "dystil wants to control Arc" prompt via direct FFI.
  * In dev mode: runs the binary itself via launchctl to trigger the prompt with
@@ -952,6 +1020,14 @@ async resetPermission(permission: OSPermission) : Promise<Result<null, string>> 
 async resizeSearchWindow(width: number, height: number) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("resize_search_window", { width, height }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async saveWorthFixingFinding(findingId: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_worth_fixing_finding", { findingId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1258,13 +1334,17 @@ export type BrowserAutomationStatus = { name: string; status: string; running: b
 export type BrowserLogEntry = { level: string; message: string }
 export type BuildCapabilities = { cloudAvailable: boolean; authMode: AuthMode; cloudBaseUrl: string | null; officialBuild: boolean }
 export type CacheFile = { path: string; label: string; size_bytes: number }
+export type Cadence = "none" | "daily" | "weekly" | "monthly"
 export type CaptureHealth = { status: string; status_code: number; last_frame_timestamp: string | null; last_ui_timestamp: string | null; frame_status: string; ui_status: string; message: string }
 export type Credits = { amount: number }
+export type DispositionKind = "accepted" | "saved" | "not_a_problem" | "leave_it" | "close_but"
 export type DystilAuthState = { status: string; session: DystilUserSession | null; user: DystilUserProfile | null; device_token_present: boolean; error: string | null }
 export type DystilUserOrg = { id: string; name: string | null; slug: string | null; roles: string[] }
 export type DystilUserProfile = { id: string; email: string | null; name: string | null; image: string | null; org: DystilUserOrg | null }
 export type DystilUserSession = { session_token: string | null; expires_at: string | null }
 export type ExternalMcpSetupView = { client: string; detail: string }
+export type FindingPage = { items: WorthFixingCard[]; nextCursor: string | null }
+export type HandoffType = "prompt" | "saved_prompt" | "existing_capability" | "runbook"
 export type HardwareCapability = { hasGpu: boolean; cpuCores: number; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
@@ -1592,6 +1672,11 @@ minimizeToTrayOnClose?: boolean }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "PermissionRecovery"
 export type SyncConsent = { segments: boolean; screenshots: boolean }
 export type User = { id: string | null; name: string | null; email: string | null; image: string | null; token: string | null; api_key: string | null; credits: Credits | null; bio: string | null; website: string | null; contact: string | null; credits_balance: number | null }
+export type WorthFixingCard = { findingId: string; label: string; claim: string; whyWorthFixing: string; handoffType: HandoffType; handoffTitle: string; handoffPreview: string; occurrenceCount: number; cadence: Cadence; evidenceAvailable: boolean }
+export type WorthFixingCleanupResult = { removedFiles: number; removedBytes: number; retainedBytes: number; enhancedDiagnostics: boolean }
+export type WorthFixingEvidenceLine = { evidenceId: string; occurredAt: string; app: string | null; description: string; available: boolean }
+export type WorthFixingRefreshResult = { status: string; jobId: string | null; opportunitiesChanged: number; findingsCreated: number }
+export type WorthFixingSummary = { selected: WorthFixingCard[]; eligibleCount: number; watchingCount: number; pendingObservationCount: number; processing: boolean; staleEvidenceCount: number; providerReady: boolean; lastSuccessfulWakeAt: string | null }
 
 /** tauri-specta globals **/
 

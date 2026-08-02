@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -72,6 +73,24 @@ pub struct AiAutomationRequest {
     pub prompt: String,
     pub working_directory: PathBuf,
     pub timeout: Duration,
+}
+
+#[derive(Debug, Clone)]
+pub struct AiStructuredRequest {
+    /// Stable product purpose such as `worth_fixing_explorer`.
+    pub purpose: String,
+    pub prompt: String,
+    pub output_schema: Value,
+    pub timeout: Duration,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiStructuredRun {
+    pub runtime: AiRuntimeKind,
+    pub runtime_version: Option<String>,
+    pub elapsed_ms: u64,
+    pub output: Value,
+    pub usage: BTreeMap<String, u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,6 +162,11 @@ pub trait AiRuntime: Send + Sync {
         request: AiAutomationRequest,
         events: mpsc::Sender<AiRuntimeEvent>,
     ) -> std::result::Result<AiAutomationRun, AiRuntimeError>;
+
+    async fn infer_structured(
+        &self,
+        request: AiStructuredRequest,
+    ) -> std::result::Result<AiStructuredRun, AiRuntimeError>;
 }
 
 impl ProviderKind {
@@ -313,7 +337,7 @@ impl CliProvider {
         )?;
         let prompt =
             teammate_answer_prompt(requester_name, question, search_start, search_end, timezone);
-        let raw = match self.provider {
+        let (raw, _) = match self.provider {
             ProviderKind::Codex => {
                 self.run_codex(
                     &temp,
@@ -345,6 +369,65 @@ impl CliProvider {
             runtime_version: self.runtime_version.clone(),
             elapsed_ms: started.elapsed().as_millis() as u64,
             answer,
+        })
+    }
+
+    pub async fn run_structured_with_model(
+        &self,
+        request: AiStructuredRequest,
+        model: Option<&str>,
+    ) -> Result<AiStructuredRun> {
+        if request.purpose.trim().is_empty()
+            || request.prompt.trim().is_empty()
+            || request.prompt.len() > 1_000_000
+        {
+            return Err(AiError::InvalidOutput(
+                "structured request purpose or prompt is invalid".into(),
+            ));
+        }
+        let schema = serde_json::to_vec(&request.output_schema)
+            .map_err(|error| AiError::InvalidOutput(error.to_string()))?;
+        if schema.len() > 256 * 1024 {
+            return Err(AiError::InvalidOutput(
+                "structured schema is too large".into(),
+            ));
+        }
+        let started = std::time::Instant::now();
+        let temp = tempfile::tempdir()?;
+        let schema_path = temp.path().join("output-schema.json");
+        fs::write(&schema_path, schema)?;
+        let (raw, provider_usage) = match self.provider {
+            ProviderKind::Codex => {
+                self.run_codex(&temp, &schema_path, &request.prompt, request.timeout, model)
+                    .await?
+            }
+            ProviderKind::Claude => {
+                self.run_claude(&temp, &schema_path, &request.prompt, request.timeout, model)
+                    .await?
+            }
+        };
+        if raw.len() > 2 * 1024 * 1024 {
+            return Err(AiError::InvalidOutput(
+                "structured output is too large".into(),
+            ));
+        }
+        let (output, wrapper_usage) = parse_structured_provider_output(raw.trim())?;
+        let mut usage = provider_usage;
+        for (key, value) in wrapper_usage {
+            usage
+                .entry(key)
+                .and_modify(|stored| *stored = (*stored).max(value))
+                .or_insert(value);
+        }
+        Ok(AiStructuredRun {
+            runtime: match self.provider {
+                ProviderKind::Codex => AiRuntimeKind::Codex,
+                ProviderKind::Claude => AiRuntimeKind::Claude,
+            },
+            runtime_version: self.runtime_version.clone(),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            output,
+            usage,
         })
     }
 
@@ -519,7 +602,7 @@ impl CliProvider {
         prompt: &str,
         limit: Duration,
         model: Option<&str>,
-    ) -> Result<String> {
+    ) -> Result<(String, BTreeMap<String, u64>)> {
         let output_path = temp.path().join("output.json");
         let canonical_executable =
             fs::canonicalize(&self.executable).unwrap_or_else(|_| self.executable.clone());
@@ -585,7 +668,8 @@ impl CliProvider {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         command.kill_on_drop(true);
-        run_command_with_stdin(command, prompt, limit).await?;
+        let events = run_command_with_stdin(command, prompt, limit).await?;
+        let usage = parse_usage_text(&events);
         let output_metadata = fs::metadata(&output_path);
         info!(
             output_path = %output_path.display(),
@@ -593,7 +677,7 @@ impl CliProvider {
             output_bytes = output_metadata.as_ref().map(|value| value.len()).unwrap_or_default(),
             "AI provider output file ready"
         );
-        fs::read_to_string(output_path).map_err(Into::into)
+        Ok((fs::read_to_string(output_path)?, usage))
     }
 
     async fn run_claude(
@@ -603,7 +687,7 @@ impl CliProvider {
         prompt: &str,
         limit: Duration,
         model: Option<&str>,
-    ) -> Result<String> {
+    ) -> Result<(String, BTreeMap<String, u64>)> {
         let schema = fs::read_to_string(schema_path)?;
         let mut command = self.command();
         command
@@ -639,7 +723,9 @@ impl CliProvider {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         command.kill_on_drop(true);
-        run_command(command, limit).await
+        let raw = run_command(command, limit).await?;
+        let usage = parse_usage_text(&raw);
+        Ok((raw, usage))
     }
 
     pub async fn authenticated(&self) -> Result<bool> {
@@ -881,7 +967,11 @@ fn toml_array(values: &[String]) -> String {
     )
 }
 
-async fn run_command_with_stdin(mut command: Command, input: &str, limit: Duration) -> Result<()> {
+async fn run_command_with_stdin(
+    mut command: Command,
+    input: &str,
+    limit: Duration,
+) -> Result<String> {
     let mut child = command.spawn()?;
     let pid = child.id();
     let started = std::time::Instant::now();
@@ -993,11 +1083,81 @@ async fn run_command_with_stdin(mut command: Command, input: &str, limit: Durati
         "AI provider process exited"
     );
     if status.success() {
-        Ok(())
+        String::from_utf8(stdout).map_err(|error| AiError::InvalidOutput(error.to_string()))
     } else {
         let detail = if stderr.is_empty() { &stdout } else { &stderr };
         Err(AiError::Process(bounded_stderr(detail)))
     }
+}
+
+fn normalized_usage_key(key: &str) -> Option<&'static str> {
+    match key {
+        "input_tokens" | "inputTokens" => Some("input_tokens"),
+        "cached_input_tokens" | "cachedInputTokens" | "cache_read_input_tokens" => {
+            Some("cached_input_tokens")
+        }
+        "output_tokens" | "outputTokens" => Some("output_tokens"),
+        "reasoning_output_tokens" | "reasoningOutputTokens" => Some("reasoning_output_tokens"),
+        _ => None,
+    }
+}
+
+fn collect_usage(value: &Value, usage: &mut BTreeMap<String, u64>) {
+    match value {
+        Value::Object(values) => {
+            for (key, value) in values {
+                if let (Some(normalized), Some(count)) = (normalized_usage_key(key), value.as_u64())
+                {
+                    usage
+                        .entry(normalized.into())
+                        .and_modify(|stored| *stored = (*stored).max(count))
+                        .or_insert(count);
+                }
+                collect_usage(value, usage);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_usage(value, usage);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn parse_usage_text(raw: &str) -> BTreeMap<String, u64> {
+    let mut usage = BTreeMap::new();
+    if let Ok(value) = serde_json::from_str::<Value>(raw) {
+        collect_usage(&value, &mut usage);
+        return usage;
+    }
+    for line in raw.lines() {
+        if let Ok(value) = serde_json::from_str::<Value>(line) {
+            collect_usage(&value, &mut usage);
+        }
+    }
+    usage
+}
+
+fn parse_structured_provider_output(raw: &str) -> Result<(Value, BTreeMap<String, u64>)> {
+    let value: Value =
+        serde_json::from_str(raw).map_err(|error| AiError::InvalidOutput(error.to_string()))?;
+    let mut usage = BTreeMap::new();
+    collect_usage(&value, &mut usage);
+    if let Some(output) = value.get("structured_output") {
+        return Ok((output.clone(), usage));
+    }
+    if let Some(result) = value.get("result") {
+        if let Some(result) = result.as_str() {
+            let output = serde_json::from_str(result)
+                .map_err(|error| AiError::InvalidOutput(error.to_string()))?;
+            return Ok((output, usage));
+        }
+        if result.is_object() || result.is_array() {
+            return Ok((result.clone(), usage));
+        }
+    }
+    Ok((value, usage))
 }
 
 async fn drain_provider_stream<R>(
@@ -1128,6 +1288,22 @@ mod tests {
 
         let progress = br#"{"type":"turn.started"}"#;
         assert_eq!(terminal_provider_error(progress), None);
+    }
+
+    #[test]
+    fn structured_provider_output_normalizes_usage_and_wrappers() {
+        let raw = r#"{"structured_output":{"schema_version":1},"usage":{"input_tokens":120,"cache_read_input_tokens":80,"output_tokens":9}}"#;
+        let (output, usage) = parse_structured_provider_output(raw).unwrap();
+        assert_eq!(output["schema_version"], 1);
+        assert_eq!(usage.get("input_tokens"), Some(&120));
+        assert_eq!(usage.get("cached_input_tokens"), Some(&80));
+        assert_eq!(usage.get("output_tokens"), Some(&9));
+
+        let ndjson = "{\"type\":\"turn.started\"}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"cached_input_tokens\":4,\"output_tokens\":2}}\n";
+        assert_eq!(
+            parse_usage_text(ndjson).get("cached_input_tokens"),
+            Some(&4)
+        );
     }
 
     #[test]

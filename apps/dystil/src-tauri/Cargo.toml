@@ -133,6 +133,7 @@ dystil-sync = { path = "../../../crates/dystil-sync", optional = true }
 dystil-storage = { path = "../../../crates/dystil-storage" }
 dystil-retrieval = { path = "../../../crates/dystil-retrieval" }
 dystil-ai = { path = "../../../crates/dystil-ai" }
+dystil-insights = { path = "../../../crates/dystil-insights" }
 dystil-protocol = { path = "../../../crates/dystil-protocol" }
 dystil-automation = { path = "../../../crates/dystil-automation" }
 

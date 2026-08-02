@@ -7,6 +7,7 @@ use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::Row;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -27,11 +28,45 @@ struct PiRpcAccumulator {
     streamed_text: String,
     final_text: Option<String>,
     provider_error: Option<String>,
+    usage: BTreeMap<String, u64>,
     settled: bool,
 }
 
 impl PiRpcAccumulator {
     fn observe(&mut self, event: &Value) {
+        fn collect(value: &Value, usage: &mut BTreeMap<String, u64>) {
+            match value {
+                Value::Object(values) => {
+                    for (key, value) in values {
+                        let normalized = match key.as_str() {
+                            "input_tokens" | "inputTokens" | "input" => Some("input_tokens"),
+                            "cached_input_tokens" | "cachedInputTokens" | "cacheRead" => {
+                                Some("cached_input_tokens")
+                            }
+                            "output_tokens" | "outputTokens" | "output" => Some("output_tokens"),
+                            "reasoning_output_tokens" | "reasoningOutputTokens" => {
+                                Some("reasoning_output_tokens")
+                            }
+                            _ => None,
+                        };
+                        if let (Some(normalized), Some(count)) = (normalized, value.as_u64()) {
+                            usage
+                                .entry(normalized.into())
+                                .and_modify(|stored| *stored = (*stored).max(count))
+                                .or_insert(count);
+                        }
+                        collect(value, usage);
+                    }
+                }
+                Value::Array(values) => {
+                    for value in values {
+                        collect(value, usage);
+                    }
+                }
+                _ => {}
+            }
+        }
+        collect(event, &mut self.usage);
         if event.get("type").and_then(Value::as_str) == Some("message_update")
             && event
                 .pointer("/assistantMessageEvent/type")
@@ -684,6 +719,99 @@ pub(crate) async fn pi_answer(
     })
 }
 
+pub(crate) async fn pi_structured(
+    preset: &ActiveAiPreset,
+    request: dystil_ai::AiStructuredRequest,
+) -> Result<dystil_ai::AiStructuredRun, String> {
+    let executable = pi_executable()?;
+    if !executable.is_file() {
+        return Err(
+            "Pi is not installed for this preset. Open Settings and choose Check connection first."
+                .into(),
+        );
+    }
+    if request.purpose.trim().is_empty()
+        || request.prompt.trim().is_empty()
+        || request.prompt.len() > 1_000_000
+    {
+        return Err("structured request purpose or prompt is invalid".into());
+    }
+    let schema =
+        serde_json::to_string(&request.output_schema).map_err(|error| error.to_string())?;
+    if schema.len() > 256 * 1024 {
+        return Err("structured schema is too large".into());
+    }
+    let agent_dir = write_pi_models(preset)?;
+    let provider = if preset.provider_kind == "ollama" {
+        "ollama"
+    } else {
+        "custom"
+    };
+    let prompt = format!(
+        "{}\n\nReturn only JSON matching this schema: {}",
+        request.prompt, schema
+    );
+    let started = Instant::now();
+    let mut child = Command::new(executable)
+        .args([
+            "--mode", "rpc", "--provider", provider, "--model", &preset.model,
+            "--system-prompt", "You are a bounded Dystil structured inference worker. Use only the supplied packet, call no tools, preserve uncertainty, and return exactly the requested JSON.",
+            "--no-builtin-tools", "--tools", "", "--no-extensions", "--no-skills",
+            "--no-prompt-templates", "--no-context-files", "--no-approve", "--no-session", "--offline",
+        ])
+        .env("PI_CODING_AGENT_DIR", &agent_dir)
+        .env("PI_SKIP_VERSION_CHECK", "1")
+        .env("PI_TELEMETRY", "0")
+        .env("CUSTOM_API_KEY", preset.api_key.as_deref().unwrap_or(""))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| format!("Could not start Pi: {error}"))?;
+    let mut stdin = child.stdin.take().ok_or("Pi stdin is unavailable")?;
+    let command = serde_json::to_string(&json!({
+        "type":"prompt", "message":prompt, "id":request.purpose
+    }))
+    .map_err(|error| error.to_string())?;
+    stdin
+        .write_all(format!("{command}\n").as_bytes())
+        .await
+        .map_err(|error| error.to_string())?;
+    stdin.flush().await.map_err(|error| error.to_string())?;
+    let stdout = child.stdout.take().ok_or("Pi stdout is unavailable")?;
+    let mut lines = BufReader::new(stdout).lines();
+    let read = async {
+        let mut result = PiRpcAccumulator::default();
+        while let Some(line) = lines.next_line().await.map_err(|error| error.to_string())? {
+            let Ok(event) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            result.observe(&event);
+            if result.settled {
+                break;
+            }
+        }
+        let usage = result.usage.clone();
+        result.finish().map(|raw| (raw, usage))
+    };
+    let (raw, usage) = timeout(request.timeout, read)
+        .await
+        .map_err(|_| "Pi timed out".to_string())??;
+    let _ = child.kill().await;
+    if raw.len() > 2 * 1024 * 1024 {
+        return Err("structured output is too large".into());
+    }
+    let output = serde_json::from_str(raw.trim()).map_err(|error| error.to_string())?;
+    Ok(dystil_ai::AiStructuredRun {
+        runtime: dystil_ai::AiRuntimeKind::Pi,
+        runtime_version: Some(format!("pi:0.80.6:{}", preset.id)),
+        elapsed_ms: started.elapsed().as_millis() as u64,
+        output,
+        usage,
+    })
+}
+
 pub(crate) async fn pi_automation(
     preset: &ActiveAiPreset,
     mcp: &dystil_ai::McpServerConfig,
@@ -902,5 +1030,17 @@ mod tests {
             result.finish().unwrap_err(),
             "Pi provider failed: Connection error."
         );
+    }
+
+    #[test]
+    fn pi_rpc_normalizes_provider_usage() {
+        let mut result = PiRpcAccumulator::default();
+        result.observe(&json!({
+            "type": "message_end",
+            "message": {"usage": {"input": 40, "cacheRead": 30, "output": 5}}
+        }));
+        assert_eq!(result.usage.get("input_tokens"), Some(&40));
+        assert_eq!(result.usage.get("cached_input_tokens"), Some(&30));
+        assert_eq!(result.usage.get("output_tokens"), Some(&5));
     }
 }
