@@ -115,6 +115,44 @@ Requires R2 env vars: `R2_ACCOUNT_ID`, `R2_PUBLIC_BUCKET`,
 `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and optionally
 `R2_PUBLIC_BASE_URL`.
 
+## Dystil AI Gateway
+
+The ingest API can expose an OpenAI-compatible gateway at `/v1`. Enable it with
+one variable in the API's server-side environment:
+
+```bash
+DYSTIL_OPENAI_API_KEY=sk-...
+```
+
+The compiled-in catalog contains `gpt-5.6-sol`, `gpt-5.6-terra`, and
+`gpt-5.6-luna` with their OpenAI standard short-context prices as checked on
+2026-08-02. Only these models are returned by `GET /v1/models`, and every
+issued key may use all three. Update `default_models` in
+`services/ingest-api/src/ai_gateway.rs` when OpenAI changes its recommended
+models or prices.
+
+`DYSTIL_OPENAI_BASE_URL` is optional and defaults to
+`https://api.openai.com/v1`. The public client endpoint is
+`https://coconut.2os.ai/v1`.
+
+Issue or revoke a key from an admin machine with production database access:
+
+```bash
+cd cloud
+export WORK_INSIGHTS_DATABASE_URL=postgres://...
+cargo run -p work-insights-ingest-api --bin ai_key -- \
+  issue --email person@example.com --limit-usd 10
+cargo run -p work-insights-ingest-api --bin ai_key -- \
+  revoke --key-prefix dst_live_abcd1234
+```
+
+The raw key is printed only when issued. The database stores its SHA-256 hash.
+The gateway checks lifetime spend before each request; a final request may
+cross the limit, and later requests receive `429 insufficient_quota`. The
+gateway removes client `max_completion_tokens` and `max_tokens` values, so
+Dystil adds no output ceiling; the selected model's intrinsic limit still
+applies.
+
 ### R2 Public Bucket Setup (one-time)
 
 1. Create an R2 bucket (e.g. `dystil-public`) in the Cloudflare dashboard
