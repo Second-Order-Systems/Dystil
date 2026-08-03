@@ -16,8 +16,8 @@ mod activity_overview;
 mod activity_search;
 
 pub use activity_overview::{
-    count_activity_in_range, get_activity_overview_raw, ActivityHealthRaw, ActivityOverviewRaw,
-    FrameObservation,
+    count_activity_in_range, get_activity_overview_raw, get_capture_source_usage,
+    ActivityHealthRaw, ActivityOverviewRaw, CaptureSourceUsageRaw, FrameObservation,
 };
 pub use activity_search::{
     get_activity_context, get_activity_range, get_activity_source, search_activity,
@@ -429,7 +429,8 @@ pub fn get_or_create_machine_id(data_dir: impl AsRef<Path>) -> Result<String, St
 #[cfg(test)]
 mod tests {
     use super::{
-        get_activity_context, initialize_capture_schema, open_capture_database, search_activity,
+        get_activity_context, get_capture_source_usage, initialize_capture_schema,
+        open_capture_database, search_activity,
     };
     use sqlx::sqlite::SqlitePoolOptions;
     use tempfile::tempdir;
@@ -556,5 +557,55 @@ mod tests {
         assert!(context
             .iter()
             .all(|record| !record.text.contains("accessibility_tree")));
+    }
+
+    #[tokio::test]
+    async fn capture_source_usage_does_not_drop_the_long_tail() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        initialize_capture_schema(&pool).await.unwrap();
+
+        for index in 0..75 {
+            sqlx::query(
+                "INSERT INTO frames(timestamp, app_name, browser_url)
+                 VALUES (?1, ?2, ?3)",
+            )
+            .bind(format!(
+                "2026-08-01T00:{:02}:{:02}Z",
+                index / 60,
+                index % 60
+            ))
+            .bind(format!("App {index}"))
+            .bind(if index % 2 == 0 {
+                Some(format!("https://site-{index}.example/page"))
+            } else {
+                None
+            })
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let usage = get_capture_source_usage(&pool, "2026-08-01T00:00:00Z", "2026-08-01T00:02:00Z")
+            .await
+            .unwrap();
+
+        assert_eq!(usage.len(), 75);
+        assert!(usage.iter().any(|source| source.app_name == "App 74"));
+        assert!(usage
+            .iter()
+            .any(|source| source.browser_url.as_deref() == Some("https://site-74.example/page")));
+        assert!(
+            (usage
+                .iter()
+                .map(|source| source.active_seconds)
+                .sum::<f64>()
+                - 74.0)
+                .abs()
+                < 0.1
+        );
     }
 }

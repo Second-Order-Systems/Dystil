@@ -12,6 +12,7 @@ export interface MonitorUsage {
 
 export interface DiskUsedByMedia {
   videos_size: string;
+  screenshots_size: string;
   total_media_size: string;
   monitors: MonitorUsage[];
 }
@@ -32,6 +33,8 @@ export interface DiskUsage {
   recording_since: string | null;
   total_data_bytes: number;
   available_space_bytes: number;
+  media_size_bytes: number;
+  database_size_bytes: number;
 }
 
 export function useDiskUsage() {

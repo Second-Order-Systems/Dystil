@@ -50,6 +50,7 @@ mod oauth;
 mod permissions;
 mod recording;
 mod recording_settings;
+mod retention;
 mod secret_store;
 mod secrets;
 mod server;
@@ -82,6 +83,7 @@ pub use server::*;
 pub use worth_fixing_commands::*;
 
 pub use recording::*;
+pub use retention::*;
 
 pub use icons::*;
 pub use store::get_store;
@@ -715,10 +717,17 @@ async fn main() {
             // Note: StoreBuilder handles file creation internally — pre-creating
             // store.bin here caused TOCTOU race conditions ("File exists" os error 17).
             // Use unwrap_or_default to prevent crashes from corrupted stores
-            let store = store::init_store(&app.handle()).unwrap_or_else(|e| {
+            let mut store = store::init_store(&app.handle()).unwrap_or_else(|e| {
                 error!("Failed to init settings store, using defaults: {}", e);
                 store::SettingsStore::default()
             });
+            let pause_before = (store.capture_paused, store.capture_pause_until.clone());
+            let startup_pause_active = recording::normalize_pause_for_startup(&mut store);
+            if pause_before != (store.capture_paused, store.capture_pause_until.clone()) {
+                if let Err(error) = store.save(&app.handle()) {
+                    warn!(%error, "failed to clear expired capture pause at startup");
+                }
+            }
 
             app.manage(store.clone());
 
@@ -791,6 +800,7 @@ async fn main() {
                 let capture_arc = recording_state.capture.clone();
                 let capture_active_arc = recording_state.capture_active.clone();
                 let is_starting_clone = recording_state.is_starting.clone();
+                let startup_pause_active = startup_pause_active;
 
                 std::thread::Builder::new()
                     .name("dystil-capture".to_string())
@@ -814,7 +824,10 @@ async fn main() {
                             // boots the server and AX lane without touching SCK;
                             // CaptureSession enables its provider only after the
                             // existing permission has been observed as granted.
-                            if !disable_vision && !permissions_check.screen_recording.permitted() {
+                            if !startup_pause_active
+                                && !disable_vision
+                                && !permissions_check.screen_recording.permitted()
+                            {
                                 warn!("Screen recording permission not granted: {:?}. FullCapture will not start.", permissions_check.screen_recording);
                                 // Flip the recording state to a terminal Error
                                 // value so the tray stops showing "Starting…"
@@ -859,36 +872,55 @@ async fn main() {
                                 return;
                             }
 
-                            // Phase 2: Start capture session
-                            let capture = match capture_session::CaptureSession::start(&server, &config, true).await {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    error!("Failed to start capture: {}", e);
-                                    crate::health::set_boot_error(&e);
-                                    crate::health::set_recording_status(
-                                        crate::health::RecordingStatus::Error,
-                                    );
-                                    // Store server anyway so pipes/search work
-                                    let mut guard = server_arc.lock().await;
-                                    *guard = Some(server);
-                                    drop(guard);
-                                    is_starting_clone.store(false, std::sync::atomic::Ordering::SeqCst);
-                                    return;
+                            // Retention is owned by the local app, independently of
+                            // cloud sync. The first pass runs immediately, followed
+                            // by one pass per day for the lifetime of this runtime.
+                            retention::start_housekeeping(
+                                app_handle_clone.clone(),
+                                server.db.pool.clone(),
+                                server.data_path.clone(),
+                            );
+
+                            // Phase 2: Start capture unless a persisted privacy
+                            // pause is active. The runtime still starts so local
+                            // retrieval and settings remain available.
+                            let capture = if startup_pause_active {
+                                None
+                            } else {
+                                match capture_session::CaptureSession::start(&server, &config, true).await {
+                                    Ok(c) => Some(c),
+                                    Err(e) => {
+                                        error!("Failed to start capture: {}", e);
+                                        crate::health::set_boot_error(&e);
+                                        crate::health::set_recording_status(
+                                            crate::health::RecordingStatus::Error,
+                                        );
+                                        // Store server anyway so pipes/search work
+                                        let mut guard = server_arc.lock().await;
+                                        *guard = Some(server);
+                                        drop(guard);
+                                        is_starting_clone.store(false, std::sync::atomic::Ordering::SeqCst);
+                                        return;
+                                    }
                                 }
                             };
 
-                            info!("Dystil runtime + capture started successfully");
+                            info!("Dystil runtime started successfully");
                             {
                                 let mut guard = server_arc.lock().await;
                                 *guard = Some(server);
                             }
-                            {
+                            if let Some(capture) = capture {
                                 let mut guard = capture_arc.lock().await;
                                 *guard = Some(capture);
+                                capture_active_arc.store(true, std::sync::atomic::Ordering::SeqCst);
+                                crate::health::set_recording_status(crate::health::RecordingStatus::Recording);
+                            } else {
+                                capture_active_arc.store(false, std::sync::atomic::Ordering::SeqCst);
+                                crate::health::set_recording_status(crate::health::RecordingStatus::Paused);
+                                crate::recording::restore_pause_timer(app_handle_clone.clone(), &store_clone);
                             }
-                            capture_active_arc.store(true, std::sync::atomic::Ordering::SeqCst);
                             is_starting_clone.store(false, std::sync::atomic::Ordering::SeqCst);
-                            crate::health::set_recording_status(crate::health::RecordingStatus::Recording);
                             crate::recording::notify_recording_state_changed(&app_handle_clone);
 
                             // Keep runtime alive as long as server exists

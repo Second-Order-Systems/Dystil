@@ -603,6 +603,18 @@ pub struct SettingsStore {
     pub data_dir: String,
     #[serde(rename = "autoStartEnabled")]
     pub auto_start_enabled: bool,
+    /// Whether capture was explicitly paused by the user. Kept separate from
+    /// the live capture session so a privacy pause survives an app restart.
+    #[serde(rename = "capturePaused", default)]
+    pub capture_paused: bool,
+    /// Absolute UTC deadline for a timed pause. `None` while paused means the
+    /// pause is indefinite and requires an explicit resume.
+    #[serde(rename = "capturePauseUntil", default)]
+    pub capture_pause_until: Option<String>,
+    /// Number of days of raw capture to retain locally. Zero means forever.
+    /// Findings and other derived artifacts are not governed by this setting.
+    #[serde(rename = "retentionDays", default = "default_retention_days")]
+    pub retention_days: u32,
     #[serde(rename = "platform")]
     pub platform: String,
     #[serde(rename = "user", deserialize_with = "deserialize_null_as_default")]
@@ -685,6 +697,10 @@ fn generate_device_id() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_retention_days() -> u32 {
+    90
 }
 
 fn default_ui_theme() -> String {
@@ -821,6 +837,9 @@ impl Default for SettingsStore {
             ocr_engine: "tesseract".to_string(),
             data_dir: "default".to_string(),
             auto_start_enabled: true,
+            capture_paused: false,
+            capture_pause_until: None,
+            retention_days: default_retention_days(),
             platform: "unknown".to_string(),
             user: User::default(),
             sync_consent: SyncConsent::default(),
@@ -860,6 +879,14 @@ impl SettingsStore {
             } else if let Some(v) = obj.remove("enableUiEvents") {
                 obj.insert("enableAccessibility".to_string(), v);
             }
+
+            // These frontend-only fields never controlled backend deletion.
+            // Replace them with the single code-owned retention policy.
+            obj.remove("localRetentionEnabled");
+            obj.remove("localRetentionDays");
+            obj.remove("localRetentionMode");
+            obj.entry("retentionDays".to_string())
+                .or_insert_with(|| Value::from(default_retention_days()));
 
             // Temporary one-time migration: disable restart notifications for all
             // existing users until the stall detector is more reliable. Users can
@@ -1185,6 +1212,20 @@ mod tests {
         let settings: SettingsStore = serde_json::from_value(json!({})).unwrap();
 
         assert!(settings.auto_update);
+    }
+
+    #[test]
+    fn retention_defaults_to_three_months_and_replaces_ghost_fields() {
+        let migrated = SettingsStore::sanitize_legacy_fields(json!({
+            "localRetentionEnabled": true,
+            "localRetentionDays": 14,
+            "localRetentionMode": "media"
+        }));
+        let settings: SettingsStore = serde_json::from_value(migrated.clone()).unwrap();
+
+        assert_eq!(settings.retention_days, 90);
+        assert_eq!(migrated.get("retentionDays"), Some(&json!(90)));
+        assert!(migrated.get("localRetentionDays").is_none());
     }
 
     #[test]

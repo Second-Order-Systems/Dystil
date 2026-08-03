@@ -2298,6 +2298,7 @@ dependencies = [
  "reqwest 0.13.4",
  "resvg",
  "rusqlite",
+ "same-file",
  "security-framework",
  "serde",
  "serde_json",

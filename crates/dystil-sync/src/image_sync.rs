@@ -20,60 +20,7 @@ use crate::types::{
 use crate::utils::sha256_hex;
 
 const MAX_IMAGE_RETRY_COUNT: u8 = 1;
-const SNAPSHOT_MAX_AGE_HOURS: i64 = 2;
-
 impl DystilSync {
-    /// Deletes snapshots that have outlived the local retention window.
-    ///
-    /// This is intentionally independent of cloud-sync state: disk cleanup
-    /// takes priority over eventual image delivery.
-    pub async fn cleanup_expired_snapshots_once(
-        db_path: &std::path::Path,
-    ) -> Result<(), SyncError> {
-        let cutoff = chrono::Utc::now() - Duration::hours(SNAPSHOT_MAX_AGE_HOURS);
-        let db_url = format!("sqlite:{}?mode=ro", db_path.display());
-        let pool = SqlitePool::connect(&db_url).await?;
-        let rows = sqlx::query(
-            r#"
-            SELECT DISTINCT snapshot_path
-            FROM frames
-            WHERE timestamp < ?1
-              AND snapshot_path IS NOT NULL
-              AND snapshot_path != ''
-            "#,
-        )
-        .bind(cutoff.to_rfc3339())
-        .fetch_all(&pool)
-        .await?;
-
-        let mut deleted_count = 0usize;
-        let mut failed_count = 0usize;
-        for row in rows {
-            let snapshot_path: String = row.try_get("snapshot_path")?;
-            match fs::remove_file(&snapshot_path) {
-                Ok(_) => deleted_count += 1,
-                // A previous pass, sync cleanup, or an external cleanup may
-                // have removed it already. It is no longer retained locally.
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    failed_count += 1;
-                    tracing::warn!(
-                        snapshot_path = %snapshot_path,
-                        error = %err,
-                        "dystil-sync: expired snapshot cleanup failed"
-                    );
-                }
-            }
-        }
-        tracing::info!(
-            cutoff = %cutoff.to_rfc3339(),
-            deleted_count,
-            failed_count,
-            "dystil-sync: expired snapshot cleanup completed"
-        );
-        Ok(())
-    }
-
     pub(crate) async fn sync_images(
         &self,
         client: &reqwest::Client,
@@ -682,56 +629,6 @@ impl DystilSync {
         ))
     }
 
-    pub(crate) async fn cleanup_snapshots_before_cursor(
-        pool: &SqlitePool,
-        cache: &ImageSyncCache,
-    ) -> Result<(), SyncError> {
-        let Some(max_cleanup_frame_id) = max_snapshot_cleanup_frame_id(cache) else {
-            return Ok(());
-        };
-        if max_cleanup_frame_id <= 0 {
-            return Ok(());
-        }
-
-        let rows = sqlx::query(
-            r#"
-            SELECT DISTINCT snapshot_path
-            FROM frames
-            WHERE id <= ?1
-              AND snapshot_path IS NOT NULL
-              AND snapshot_path != ''
-            "#,
-        )
-        .bind(max_cleanup_frame_id)
-        .fetch_all(pool)
-        .await?;
-
-        let mut deleted_count = 0usize;
-        let mut failed_count = 0usize;
-        for row in rows {
-            let snapshot_path: String = row.try_get("snapshot_path")?;
-            match fs::remove_file(&snapshot_path) {
-                Ok(_) => deleted_count += 1,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    failed_count += 1;
-                    tracing::warn!(
-                        snapshot_path = %snapshot_path,
-                        error = %err,
-                        "dystil-sync: snapshot cleanup failed"
-                    );
-                }
-            }
-        }
-        tracing::info!(
-            max_cleanup_frame_id,
-            deleted_count,
-            failed_count,
-            "dystil-sync: snapshot cleanup completed"
-        );
-        Ok(())
-    }
-
     async fn prepare_image(
         &self,
         candidate: &ImageCandidate,
@@ -917,26 +814,6 @@ fn jaccard_distance(left: &[u64], right: &[u64]) -> f64 {
         0.0
     } else {
         1.0 - (intersection as f64 / union as f64)
-    }
-}
-
-fn max_snapshot_cleanup_frame_id(cache: &ImageSyncCache) -> Option<i64> {
-    let retry_floor = cache
-        .pending_complete
-        .iter()
-        .flat_map(|pending| pending.item.linked_frame_ids.iter().copied())
-        .chain(
-            cache
-                .pending_upload_retry
-                .iter()
-                .map(|retry| retry.candidate.frame_id),
-        )
-        .min();
-
-    match retry_floor {
-        Some(frame_id) => Some((frame_id - 1).min(cache.last_scanned_frame_id)),
-        None if cache.last_scanned_frame_id > 0 => Some(cache.last_scanned_frame_id),
-        None => None,
     }
 }
 

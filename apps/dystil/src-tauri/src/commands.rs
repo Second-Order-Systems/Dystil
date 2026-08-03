@@ -7,6 +7,102 @@ use crate::{
 use tauri::{Emitter, Manager, State};
 use tracing::{debug, error, info, warn};
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureCategoryView {
+    pub id: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureSourceView {
+    pub id: String,
+    pub kind: String,
+    pub name: String,
+    pub active_minutes: f64,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureVisibilityView {
+    pub categories: Vec<CaptureCategoryView>,
+    pub sources: Vec<CaptureSourceView>,
+    pub sources_error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WhenItRunsView {
+    pub autostart_enabled: bool,
+    pub screenshot_enabled: bool,
+    pub capture_running: bool,
+    pub capture_paused: bool,
+    pub pause_until: Option<String>,
+}
+
+struct CaptureCategoryPolicy {
+    id: &'static str,
+    window_patterns: &'static [&'static str],
+    domains: &'static [&'static str],
+}
+
+const CAPTURE_CATEGORY_POLICIES: &[CaptureCategoryPolicy] = &[
+    CaptureCategoryPolicy {
+        id: "personalMessaging",
+        window_patterns: &[
+            "WhatsApp",
+            "Messages",
+            "iMessage",
+            "Telegram",
+            "Messenger",
+            "Discord",
+        ],
+        domains: &[
+            "whatsapp.com",
+            "telegram.org",
+            "t.me",
+            "messenger.com",
+            "m.me",
+            "discord.com",
+            "discord.gg",
+        ],
+    },
+    CaptureCategoryPolicy {
+        id: "personalEmail",
+        window_patterns: &["Mail"],
+        domains: &[
+            "mail.google.com",
+            "outlook.live.com",
+            "mail.yahoo.com",
+            "proton.me",
+            "mail.proton.me",
+        ],
+    },
+    CaptureCategoryPolicy {
+        id: "jobBoards",
+        window_patterns: &["Indeed", "Greenhouse", "Lever"],
+        domains: &[
+            "indeed.com",
+            "greenhouse.io",
+            "lever.co",
+            "workable.com",
+            "wellfound.com",
+        ],
+    },
+    CaptureCategoryPolicy {
+        id: "hrLegal",
+        window_patterns: &["Workday", "BambooHR", "DocuSign", "Deel"],
+        domains: &["workday.com", "bamboohr.com", "docusign.com", "deel.com"],
+    },
+    CaptureCategoryPolicy {
+        id: "payrollSalary",
+        window_patterns: &["ADP", "Paychex", "Gusto", "Rippling"],
+        domains: &["adp.com", "paychex.com", "gusto.com", "rippling.com"],
+    },
+];
+
 /// Log a `WebviewWindowBuilder::build()` failure with structured context.
 ///
 /// Why: Sentry events for webview build failures currently say only
@@ -1116,6 +1212,339 @@ pub async fn set_screenshot_capture_enabled(
     Ok(())
 }
 
+fn set_filter_value(values: &mut Vec<String>, value: &str, blocked: bool) {
+    values.retain(|existing| !existing.trim().eq_ignore_ascii_case(value.trim()));
+    if blocked {
+        values.push(value.to_string());
+    }
+}
+
+fn normalized_domain(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let parsed = if trimmed.contains("://") {
+        url::Url::parse(trimmed).ok()
+    } else {
+        url::Url::parse(&format!("https://{trimmed}")).ok()
+    }?;
+    parsed.host_str().map(|host| {
+        host.trim_start_matches("www.")
+            .trim_end_matches('.')
+            .to_lowercase()
+    })
+}
+
+fn capture_category_enabled(settings: &SettingsStore, policy: &CaptureCategoryPolicy) -> bool {
+    let ignored = dystil_capture::window_pattern::WindowPattern::parse_list(
+        &settings.recording.ignored_windows,
+    );
+    !policy.window_patterns.iter().any(|pattern| {
+        dystil_capture::window_pattern::matches_any(&ignored, &pattern.to_lowercase(), "")
+    }) && !policy.domains.iter().any(|domain| {
+        dystil_capture::a11y::url_filter::is_url_blocked(domain, &settings.recording.ignored_urls)
+    })
+}
+
+fn capture_source_enabled(settings: &SettingsStore, kind: &str, name: &str) -> bool {
+    if kind == "site" {
+        return !dystil_capture::a11y::url_filter::is_url_blocked(
+            name,
+            &settings.recording.ignored_urls,
+        );
+    }
+    let app = name.to_lowercase();
+    let ignored = dystil_capture::window_pattern::WindowPattern::parse_list(
+        &settings.recording.ignored_windows,
+    );
+    let included = dystil_capture::window_pattern::WindowPattern::parse_list(
+        &settings.recording.included_windows,
+    );
+    !dystil_capture::window_pattern::matches_any(&ignored, &app, "")
+        && dystil_capture::window_pattern::passes_includes(&included, &app, "")
+}
+
+fn remove_matching_app_filters(values: &mut Vec<String>, name: &str) {
+    let app = name.to_lowercase();
+    values.retain(|raw| {
+        dystil_capture::window_pattern::WindowPattern::parse(raw)
+            .map_or(true, |pattern| !pattern.matches(&app, ""))
+    });
+}
+
+fn remove_matching_url_filters(values: &mut Vec<String>, domain: &str) {
+    values.retain(|blocked| {
+        !dystil_capture::a11y::url_filter::is_url_blocked(domain, std::slice::from_ref(blocked))
+    });
+}
+
+#[cfg(test)]
+mod capture_visibility_tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn normalizes_full_urls_to_a_domain() {
+        assert_eq!(
+            normalized_domain("https://www.docs.example.com/a/b"),
+            Some("docs.example.com".to_string())
+        );
+        assert_eq!(
+            normalized_domain("MAIL.EXAMPLE.COM"),
+            Some("mail.example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn source_state_uses_the_capture_engines_matching_rules() {
+        let mut settings = SettingsStore::default();
+        settings.recording.ignored_windows = vec!["Mail".to_string()];
+        settings.recording.ignored_urls = vec!["example.com".to_string()];
+        assert!(!capture_source_enabled(&settings, "app", "Apple Mail"));
+        assert!(!capture_source_enabled(
+            &settings,
+            "site",
+            "docs.example.com"
+        ));
+        assert!(capture_source_enabled(&settings, "app", "Terminal"));
+    }
+
+    #[test]
+    fn category_state_reflects_persisted_filters() {
+        let mut settings = SettingsStore::default();
+        let job_boards = CAPTURE_CATEGORY_POLICIES
+            .iter()
+            .find(|policy| policy.id == "jobBoards")
+            .unwrap();
+        assert!(capture_category_enabled(&settings, job_boards));
+        settings
+            .recording
+            .ignored_urls
+            .push("greenhouse.io".to_string());
+        assert!(!capture_category_enabled(&settings, job_boards));
+    }
+
+    #[test]
+    fn allowing_a_source_removes_the_filter_that_actually_blocks_it() {
+        let mut apps = vec!["Mail".to_string(), "Terminal".to_string()];
+        remove_matching_app_filters(&mut apps, "Apple Mail");
+        assert_eq!(apps, vec!["Terminal"]);
+
+        let mut sites = vec!["example.com".to_string(), "another.test".to_string()];
+        remove_matching_url_filters(&mut sites, "docs.example.com");
+        assert_eq!(sites, vec!["another.test"]);
+    }
+
+    #[test]
+    fn pause_modes_have_distinct_real_deadlines() {
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 8, 3, 14, 25, 0)
+            .single()
+            .unwrap();
+        let one_hour = pause_deadline("oneHour", now).unwrap();
+        assert_eq!(
+            (one_hour - now.with_timezone(&chrono::Utc)).num_minutes(),
+            60
+        );
+
+        let today = pause_deadline("today", now).unwrap();
+        let local_today = today.with_timezone(&chrono::Local);
+        assert_eq!(
+            local_today.date_naive(),
+            now.date_naive().succ_opt().unwrap()
+        );
+        assert_eq!(
+            local_today.time(),
+            chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()
+        );
+        assert!(pause_deadline("later", now).is_err());
+    }
+}
+
+async fn save_capture_filter_change(
+    app_handle: tauri::AppHandle,
+    state: State<'_, RecordingState>,
+    previous: SettingsStore,
+    updated: SettingsStore,
+) -> Result<(), String> {
+    let was_recording = state
+        .capture_active
+        .load(std::sync::atomic::Ordering::SeqCst);
+    updated.save(&app_handle)?;
+    if !was_recording {
+        return Ok(());
+    }
+
+    if let Err(error) = crate::recording::stop_capture(state.clone(), app_handle.clone()).await {
+        let _ = previous.save(&app_handle);
+        return Err(error);
+    }
+    if let Err(error) = crate::recording::start_capture(state.clone(), app_handle.clone()).await {
+        let rollback_save_error = previous.save(&app_handle).err();
+        let rollback_start_error = crate::recording::start_capture(state, app_handle)
+            .await
+            .err();
+        return Err(format!(
+            "Failed to apply capture visibility: {error}. Rollback save: {}. Rollback start: {}",
+            rollback_save_error.as_deref().unwrap_or("ok"),
+            rollback_start_error.as_deref().unwrap_or("ok")
+        ));
+    }
+    Ok(())
+}
+
+/// Return the privacy categories and real apps/sites observed in local capture
+/// for the current calendar month. Durations are estimated from frame gaps and
+/// never leave the device.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_capture_visibility(
+    app_handle: tauri::AppHandle,
+    state: State<'_, RecordingState>,
+) -> Result<CaptureVisibilityView, String> {
+    let settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
+    let categories = CAPTURE_CATEGORY_POLICIES
+        .iter()
+        .map(|policy| CaptureCategoryView {
+            id: policy.id.to_string(),
+            enabled: capture_category_enabled(&settings, policy),
+        })
+        .collect();
+
+    let pool = match crate::ai::capture_pool(&state).await {
+        Ok(pool) => pool,
+        Err(error) => {
+            return Ok(CaptureVisibilityView {
+                categories,
+                sources: Vec::new(),
+                sources_error: Some(error),
+            });
+        }
+    };
+    let usage = match dystil_storage::get_capture_source_usage(
+        &pool,
+        &chrono::Local::now()
+            .format("%Y-%m-01T00:00:00%:z")
+            .to_string(),
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await
+    {
+        Ok(usage) => usage,
+        Err(error) => {
+            return Ok(CaptureVisibilityView {
+                categories,
+                sources: Vec::new(),
+                sources_error: Some(error.to_string()),
+            });
+        }
+    };
+
+    let mut grouped = std::collections::HashMap::<(String, String), f64>::new();
+    for entry in usage {
+        let source = entry
+            .browser_url
+            .as_deref()
+            .and_then(normalized_domain)
+            .map(|domain| ("site".to_string(), domain))
+            .unwrap_or_else(|| ("app".to_string(), entry.app_name.trim().to_string()));
+        if source.1.is_empty() || source.1.eq_ignore_ascii_case("unknown") {
+            continue;
+        }
+        *grouped.entry(source).or_default() += entry.active_seconds / 60.0;
+    }
+
+    let mut sources = grouped
+        .into_iter()
+        .map(|((kind, name), active_minutes)| {
+            let enabled = capture_source_enabled(&settings, &kind, &name);
+            CaptureSourceView {
+                id: format!("{kind}:{name}"),
+                kind,
+                name,
+                active_minutes,
+                enabled,
+            }
+        })
+        .collect::<Vec<_>>();
+    sources.sort_by(|left, right| {
+        right
+            .active_minutes
+            .total_cmp(&left.active_minutes)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+
+    Ok(CaptureVisibilityView {
+        categories,
+        sources,
+        sources_error: None,
+    })
+}
+
+/// Enable or block one sensitive category by updating the capture engine's
+/// real window and URL filters.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_capture_category_enabled(
+    app_handle: tauri::AppHandle,
+    state: State<'_, RecordingState>,
+    category_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let policy = CAPTURE_CATEGORY_POLICIES
+        .iter()
+        .find(|policy| policy.id == category_id)
+        .ok_or_else(|| "Unknown capture category".to_string())?;
+    let previous = SettingsStore::get(&app_handle)?.unwrap_or_default();
+    let mut updated = previous.clone();
+    for pattern in policy.window_patterns {
+        set_filter_value(&mut updated.recording.ignored_windows, pattern, !enabled);
+    }
+    for domain in policy.domains {
+        set_filter_value(&mut updated.recording.ignored_urls, domain, !enabled);
+    }
+    save_capture_filter_change(app_handle, state, previous, updated).await
+}
+
+/// Enable or block one observed application or website from future capture.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_capture_source_enabled(
+    app_handle: tauri::AppHandle,
+    state: State<'_, RecordingState>,
+    source_kind: String,
+    source_name: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let previous = SettingsStore::get(&app_handle)?.unwrap_or_default();
+    let mut updated = previous.clone();
+    match source_kind.as_str() {
+        "app" => {
+            let name = source_name.trim();
+            if name.is_empty() || name.contains("::") {
+                return Err("Invalid application name".to_string());
+            }
+            if enabled {
+                remove_matching_app_filters(&mut updated.recording.ignored_windows, name);
+            } else {
+                set_filter_value(&mut updated.recording.ignored_windows, name, true);
+            }
+        }
+        "site" => {
+            let domain = normalized_domain(&source_name)
+                .ok_or_else(|| "Invalid website domain".to_string())?;
+            if enabled {
+                remove_matching_url_filters(&mut updated.recording.ignored_urls, &domain);
+            } else {
+                set_filter_value(&mut updated.recording.ignored_urls, &domain, true);
+            }
+        }
+        _ => return Err("Unknown capture source type".to_string()),
+    }
+    save_capture_filter_change(app_handle, state, previous, updated).await
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn reset_onboarding(app_handle: tauri::AppHandle) -> Result<(), String> {
@@ -1821,13 +2250,88 @@ fn dir_size(path: &std::path::Path) -> u64 {
 
 #[tauri::command]
 #[specta::specta]
+pub fn get_when_it_runs_settings(
+    app_handle: tauri::AppHandle,
+    state: State<'_, RecordingState>,
+) -> Result<WhenItRunsView, String> {
+    use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
+
+    let settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
+    let autostart_enabled = app_handle
+        .autolaunch()
+        .is_enabled()
+        .unwrap_or(settings.auto_start_enabled);
+    Ok(WhenItRunsView {
+        autostart_enabled,
+        screenshot_enabled: !settings.recording.disable_vision,
+        capture_running: state
+            .capture_active
+            .load(std::sync::atomic::Ordering::SeqCst),
+        capture_paused: settings.capture_paused,
+        pause_until: settings
+            .capture_paused
+            .then_some(settings.capture_pause_until)
+            .flatten(),
+    })
+}
+
+pub(crate) fn pause_deadline(
+    mode: &str,
+    now: chrono::DateTime<chrono::Local>,
+) -> Result<chrono::DateTime<chrono::Utc>, String> {
+    match mode {
+        "oneHour" => Ok((now + chrono::Duration::hours(1)).with_timezone(&chrono::Utc)),
+        "today" => {
+            let tomorrow = now
+                .date_naive()
+                .succ_opt()
+                .and_then(|date| date.and_hms_opt(0, 0, 0))
+                .ok_or_else(|| "Could not calculate tomorrow".to_string())?;
+            tomorrow
+                .and_local_timezone(chrono::Local)
+                .earliest()
+                .map(|value| value.with_timezone(&chrono::Utc))
+                .ok_or_else(|| "Could not calculate local midnight".to_string())
+        }
+        _ => Err("Unknown pause duration".to_string()),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn pause_capture_for(app_handle: tauri::AppHandle, mode: String) -> Result<(), String> {
+    let deadline = pause_deadline(&mode, chrono::Local::now())?;
+    crate::recording::pause_capture_until(app_handle, Some(deadline)).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn resume_capture_now(app_handle: tauri::AppHandle) -> Result<(), String> {
+    crate::recording::resume_capture_from_pause(app_handle).await
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn set_autostart(app_handle: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
     let manager = app_handle.autolaunch();
+    let previous_os_state = manager.is_enabled().unwrap_or(!enabled);
+    let mut settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
+    let previous_setting = settings.auto_start_enabled;
     if enabled {
         manager.enable().map_err(|e| e.to_string())?;
     } else {
         manager.disable().map_err(|e| e.to_string())?;
+    }
+    settings.auto_start_enabled = enabled;
+    if let Err(error) = settings.save(&app_handle) {
+        settings.auto_start_enabled = previous_setting;
+        let _ = if previous_os_state {
+            manager.enable()
+        } else {
+            manager.disable()
+        };
+        return Err(error);
     }
     info!(
         "autostart {}: is_enabled={}",
