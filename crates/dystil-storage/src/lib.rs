@@ -83,6 +83,12 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
     sqlx::query("PRAGMA foreign_keys = ON")
         .execute(&mut *tx)
         .await?;
+    let had_elements_table: bool = sqlx::query_scalar::<_, i64>(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'elements')",
+    )
+    .fetch_one(&mut *tx)
+    .await?
+        != 0;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS frames (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,7 +107,6 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
             ax_capture_diagnostics_json TEXT,
             content_hash INTEGER,
             simhash INTEGER,
-            elements_ref_frame_id INTEGER,
             accessibility_redacted_at INTEGER
         )",
     )
@@ -122,27 +127,26 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
     let _ = sqlx::query("ALTER TABLE frames ADD COLUMN ax_capture_diagnostics_json TEXT")
         .execute(&mut *tx)
         .await;
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS elements (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            frame_id INTEGER NOT NULL,
-            source TEXT NOT NULL,
-            role TEXT NOT NULL,
-            text TEXT,
-            parent_id INTEGER,
-            depth INTEGER NOT NULL,
-            left_bound REAL,
-            top_bound REAL,
-            width_bound REAL,
-            height_bound REAL,
-            confidence REAL,
-            sort_order INTEGER,
-            properties TEXT,
-            on_screen INTEGER
-        )",
+    // The normalized elements projection duplicated the full sanitized tree in
+    // `frames.accessibility_tree_json` and had no production readers. Remove
+    // the legacy projection and its unused frame reference during migration.
+    sqlx::query("DROP INDEX IF EXISTS idx_elements_frame_order")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DROP TABLE IF EXISTS elements")
+        .execute(&mut *tx)
+        .await?;
+    let has_elements_ref: bool = sqlx::query_scalar::<_, i64>(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('frames') WHERE name = 'elements_ref_frame_id')",
     )
-    .execute(&mut *tx)
-    .await?;
+    .fetch_one(&mut *tx)
+    .await?
+        != 0;
+    if has_elements_ref {
+        sqlx::query("ALTER TABLE frames DROP COLUMN elements_ref_frame_id")
+            .execute(&mut *tx)
+            .await?;
+    }
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS ui_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -183,11 +187,6 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_ui_events_timestamp ON ui_events(timestamp, id)")
         .execute(&mut *tx)
         .await?;
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_elements_frame_order ON elements(frame_id, sort_order)",
-    )
-    .execute(&mut *tx)
-    .await?;
     // A deliberately narrow projection of capture rows for retrieval. This is
     // separate from the raw tables so callers never need arbitrary SQL or an
     // accessibility-tree/screenshot interface.
@@ -403,6 +402,12 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    if had_elements_table {
+        // Dropping a table only adds its pages to SQLite's freelist. Compact
+        // once during this migration so existing installations immediately
+        // get the disk space back.
+        sqlx::query("VACUUM").execute(pool).await?;
+    }
     Ok(())
 }
 
@@ -476,6 +481,47 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn migrates_away_the_legacy_elements_projection() {
+        let directory = tempdir().unwrap();
+        let database_path = directory.path().join("capture.sqlite");
+        let pool = open_capture_database(&database_path).await.unwrap();
+        sqlx::query("ALTER TABLE frames ADD COLUMN elements_ref_frame_id INTEGER")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE elements (
+                id INTEGER PRIMARY KEY, frame_id INTEGER NOT NULL, sort_order INTEGER
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("CREATE INDEX idx_elements_frame_order ON elements(frame_id, sort_order)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+
+        let pool = open_capture_database(&database_path).await.unwrap();
+
+        let elements_table: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='elements'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let elements_ref_column: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('frames') WHERE name='elements_ref_frame_id'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(elements_table, 0);
+        assert_eq!(elements_ref_column, 0);
     }
 
     #[tokio::test]
