@@ -535,11 +535,6 @@ export function OnboardingWizard() {
     if (Object.keys(stepErrors).length > 0) return;
 
     const payload = buildOutputPayload(answers);
-    const selectedWorkApps = Array.isArray(answers.work_apps)
-      ? answers.work_apps
-        .map((app) => (typeof app === "string" ? app.trim() : ""))
-        .filter(Boolean)
-      : [];
     console.log("dystil_onboarding_answers", payload);
 
     setIsSubmitting(true);
@@ -550,7 +545,7 @@ export function OnboardingWizard() {
         await invoke("set_onboarding_ai_setup", { setup: aiSetup });
       }
       const capturePolicy = await commands.applyOnboardingCapturePolicy(
-        selectedWorkApps,
+        [],
       );
       if (capturePolicy.status !== "ok") {
         throw new Error(
