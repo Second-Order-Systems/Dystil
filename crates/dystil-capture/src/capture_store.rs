@@ -33,6 +33,7 @@ pub struct DystilCaptureStore {
     pool: SqlitePool,
     snapshot_writer: DystilSnapshotWriter,
     default_device_name: String,
+    queue_ai_redaction: bool,
 }
 
 impl DystilCaptureStore {
@@ -40,11 +41,13 @@ impl DystilCaptureStore {
         pool: SqlitePool,
         snapshots_root: impl Into<PathBuf>,
         default_device_name: impl Into<String>,
+        queue_ai_redaction: bool,
     ) -> Self {
         Self {
             pool,
             snapshot_writer: DystilSnapshotWriter::new(snapshots_root),
             default_device_name: default_device_name.into(),
+            queue_ai_redaction,
         }
     }
 }
@@ -153,22 +156,24 @@ impl CaptureStore for DystilCaptureStore {
 
         let frame_id = result.last_insert_rowid();
         // Deterministic redaction has already happened in this transaction.
-        // Record asynchronous strengthening state separately so model failure
-        // never makes a safe capture unavailable to sync.
-        let state_pool = self.pool.clone();
-        tokio::spawn(async move {
-            let _ = dystil_redact::record_state(
-                &state_pool,
-                "frames",
-                frame_id,
-                "frame_text",
-                dystil_redact::RedactionStatus::Pending,
-                0,
-                None,
-                None,
-            )
-            .await;
-        });
+        // Queue the optional model pass only while the user has opted in; an
+        // opt-out must not accumulate a surprise historical backlog.
+        if self.queue_ai_redaction {
+            let state_pool = self.pool.clone();
+            tokio::spawn(async move {
+                let _ = dystil_redact::record_state(
+                    &state_pool,
+                    "frames",
+                    frame_id,
+                    "frame_text",
+                    dystil_redact::RedactionStatus::Pending,
+                    0,
+                    None,
+                    None,
+                )
+                .await;
+            });
+        }
         Ok(StoredCapture {
             // SQLite returns the row ID from the connection used by this exact
             // statement, so this remains correct with a pooled connection.
@@ -298,7 +303,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let store = DystilCaptureStore::new(pool.clone(), temp.path(), "test_monitor");
+        let store = DystilCaptureStore::new(pool.clone(), temp.path(), "test_monitor", false);
         (pool, store)
     }
 

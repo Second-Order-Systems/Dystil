@@ -42,6 +42,118 @@ pub struct WhenItRunsView {
     pub pause_until: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AiPiiRedactionSettingsView {
+    pub enabled: bool,
+    pub model_downloaded: bool,
+}
+
+fn ai_pii_redaction_settings(settings: &SettingsStore) -> AiPiiRedactionSettingsView {
+    #[cfg(feature = "onnx-cpu")]
+    let model_downloaded =
+        dystil_redact::onnx::OnnxConfig::default().model_files_present();
+    #[cfg(not(feature = "onnx-cpu"))]
+    let model_downloaded = false;
+
+    AiPiiRedactionSettingsView {
+        enabled: settings.recording.async_pii_redaction,
+        model_downloaded,
+    }
+}
+
+async fn settle_existing_ai_pii_queue(state: &RecordingState) {
+    let Ok(pool) = crate::ai::capture_pool(state).await else {
+        return;
+    };
+    if let Err(error) = sqlx::query(
+        "UPDATE dystil_text_redaction_state
+         SET status='deterministic_fallback', backend='deterministic',
+             last_error=NULL, updated_at=datetime('now')
+         WHERE status IN ('pending','processing')",
+    )
+    .execute(&pool)
+    .await
+    {
+        warn!(%error, "could not settle the previous AI PII queue");
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_ai_pii_redaction_settings(
+    app_handle: tauri::AppHandle,
+) -> Result<AiPiiRedactionSettingsView, String> {
+    let settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
+    Ok(ai_pii_redaction_settings(&settings))
+}
+
+/// Persist the explicit AI PII choice. Enabling first downloads and verifies
+/// the local model while capture continues with deterministic redaction. Only
+/// after that succeeds do we restart the short-lived capture session so the
+/// model worker begins processing pending rows.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_ai_pii_redaction_enabled(
+    app_handle: tauri::AppHandle,
+    state: State<'_, RecordingState>,
+    enabled: bool,
+) -> Result<AiPiiRedactionSettingsView, String> {
+    let previous = SettingsStore::get(&app_handle)?.unwrap_or_default();
+
+    if enabled {
+        #[cfg(feature = "onnx-cpu")]
+        dystil_redact::onnx::OnnxConfig::default()
+            .ensure_model_present()
+            .await
+            .map_err(|error| format!("Could not download the local PII model: {error}"))?;
+        #[cfg(not(feature = "onnx-cpu"))]
+        return Err("AI PII removal is not available in this build of Dystil.".to_string());
+    }
+
+    if previous.recording.async_pii_redaction == enabled {
+        return Ok(ai_pii_redaction_settings(&previous));
+    }
+
+    // AI PII is forward-looking. Do not turn captures accumulated while the
+    // feature was off into a surprise CPU-heavy historical sweep.
+    if enabled {
+        settle_existing_ai_pii_queue(&state).await;
+    }
+
+    let was_recording = state
+        .capture_active
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let mut updated = previous.clone();
+    updated.recording.async_pii_redaction = enabled;
+    updated.save(&app_handle)?;
+
+    if was_recording {
+        if let Err(error) = crate::recording::stop_capture(state.clone(), app_handle.clone()).await {
+            let _ = previous.save(&app_handle);
+            return Err(error);
+        }
+        if let Err(error) = crate::recording::start_capture(state.clone(), app_handle.clone()).await {
+            let rollback_save_error = previous.save(&app_handle).err();
+            let rollback_start_error = crate::recording::start_capture(state, app_handle.clone())
+                .await
+                .err();
+            return Err(format!(
+                "Failed to apply AI PII removal: {error}. Rollback save: {}. Rollback start: {}",
+                rollback_save_error.as_deref().unwrap_or("ok"),
+                rollback_start_error.as_deref().unwrap_or("ok")
+            ));
+        }
+    }
+
+    if !enabled {
+        settle_existing_ai_pii_queue(&state).await;
+    }
+
+    let current = SettingsStore::get(&app_handle)?.unwrap_or(updated);
+    Ok(ai_pii_redaction_settings(&current))
+}
+
 struct CaptureCategoryPolicy {
     id: &'static str,
     window_patterns: &'static [&'static str],

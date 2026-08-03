@@ -29,8 +29,8 @@ use dystil_capture::visual_capture::DystilMacosOneShotVisualProvider;
 
 use crate::server_core::ServerCore;
 
-/// Load the Dystil ONNX text model at startup.
-/// Downloads from HuggingFace on first run (~168 MB). Returns `None` if the
+/// Load the opt-in Dystil ONNX text model.
+/// Downloads from HuggingFace on first enable (~168 MB). Returns `None` if the
 /// feature is compiled out or the model is unavailable/offline — the worker
 /// will fall back to regex-only redaction.
 async fn load_text_redactor() -> Option<std::sync::Arc<dyn dystil_redact::TextRedactor>> {
@@ -89,18 +89,27 @@ impl CaptureSession {
 
         let capture_trigger_bus = TriggerBus::<CaptureTriggerMessage>::new(TRIGGER_CHANNEL_BUFFER);
         let linker_runtime = DystilLinkerRuntime::start(server.db.pool.clone());
-        // Deterministic redaction happens before every SQLite write, so the
-        // model-backed NER pass must never delay first capture. The worker
-        // starts safely in regex mode and reads this shared slot per batch.
-        let redaction_worker =
-            dystil_capture::redaction_worker::RedactionWorker::start(server.db.pool.clone(), None);
-        let redactor_model = redaction_worker.model_handle();
-        let redactor_load_task = Some(tokio::spawn(async move {
-            if let Some(model) = load_text_redactor().await {
-                *redactor_model.write().await = Some(model);
-                info!("ONNX text redactor is now available to the background worker");
-            }
-        }));
+        // Deterministic redaction happens before every SQLite write regardless
+        // of this preference. The model, its download, and the async worker are
+        // created only after an explicit opt-in. The worker waits for the model
+        // rather than prematurely completing queued rows with regex alone.
+        let (redaction_worker, redactor_load_task) = if config.async_pii_redaction {
+            let worker = dystil_capture::redaction_worker::RedactionWorker::start(
+                server.db.pool.clone(),
+                None,
+            );
+            let redactor_model = worker.model_handle();
+            let load_task = tokio::spawn(async move {
+                if let Some(model) = load_text_redactor().await {
+                    *redactor_model.write().await = Some(model);
+                    info!("ONNX text redactor is now available to the background worker");
+                }
+            });
+            (Some(worker), Some(load_task))
+        } else {
+            info!("AI PII removal disabled; skipping local model download and worker startup");
+            (None, None)
+        };
 
         // Both channels are session-owned. UI recording produces activity
         // triggers; Dystil owns all evidence capture for every platform.
@@ -148,6 +157,7 @@ impl CaptureSession {
                 server.db.pool.clone(),
                 server.data_path.join("data"),
                 "accessibility",
+                config.async_pii_redaction,
             ));
             #[cfg(target_os = "macos")]
             let visual_provider: Option<Arc<dyn VisualProvider>> =
@@ -245,7 +255,7 @@ impl CaptureSession {
             ui_recorder_handle,
             ax_capture_handle,
             linker_runtime: Some(linker_runtime),
-            redaction_worker: Some(redaction_worker),
+            redaction_worker,
             redactor_load_task,
             _capture_trigger_bus: capture_trigger_bus,
         })

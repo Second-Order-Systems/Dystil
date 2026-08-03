@@ -101,6 +101,14 @@ impl OnnxConfig {
         ),
     ];
 
+    /// Cheap status check for settings UI. Integrity is verified again by
+    /// `ensure_model_present` before the model is loaded.
+    pub fn model_files_present(&self) -> bool {
+        Self::FILES
+            .iter()
+            .all(|(filename, _)| self.model_dir.join(filename).is_file())
+    }
+
     /// Download model files from HuggingFace into `model_dir` if absent.
     /// SHA-256 verified; partial downloads are written to `.partial` and
     /// atomically renamed on success.
