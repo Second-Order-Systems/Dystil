@@ -75,10 +75,20 @@ pub struct AiAutomationRequest {
     pub timeout: Duration,
 }
 
+/// Provider-neutral quality/cost class for bounded structured inference.
+/// Runtime adapters own the concrete provider model mapping.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AiModelTier {
+    Economy,
+    Frontier,
+}
+
 #[derive(Debug, Clone)]
 pub struct AiStructuredRequest {
     /// Stable product purpose such as `worth_fixing_explorer`.
     pub purpose: String,
+    pub model_tier: AiModelTier,
     pub prompt: String,
     pub output_schema: Value,
     pub timeout: Duration,
@@ -88,6 +98,7 @@ pub struct AiStructuredRequest {
 pub struct AiStructuredRun {
     pub runtime: AiRuntimeKind,
     pub runtime_version: Option<String>,
+    pub model: String,
     pub elapsed_ms: u64,
     pub output: Value,
     pub usage: BTreeMap<String, u64>,
@@ -151,6 +162,12 @@ impl From<AiError> for AiRuntimeError {
 #[async_trait::async_trait]
 pub trait AiRuntime: Send + Sync {
     fn descriptor(&self) -> &AiRuntimeDescriptor;
+
+    /// Resolves provider-neutral structured-work policy to the effective model.
+    /// Providers without a model family mapping use their configured model.
+    fn model_for_tier(&self, _tier: AiModelTier) -> String {
+        self.descriptor().model.clone()
+    }
 
     async fn answer(
         &self,
@@ -425,6 +442,7 @@ impl CliProvider {
                 ProviderKind::Claude => AiRuntimeKind::Claude,
             },
             runtime_version: self.runtime_version.clone(),
+            model: model.unwrap_or("provider-default").to_string(),
             elapsed_ms: started.elapsed().as_millis() as u64,
             output,
             usage,

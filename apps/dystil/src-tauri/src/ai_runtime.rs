@@ -7,9 +7,9 @@ use async_trait::async_trait;
 use tauri::AppHandle;
 
 use dystil_ai::{
-    AiAnswerRequest, AiAutomationRequest, AiAutomationRun, AiRuntime, AiRuntimeDescriptor,
-    AiRuntimeError, AiRuntimeErrorCode, AiRuntimeEvent, AiRuntimeKind, AiStructuredRequest,
-    AiStructuredRun, CliProvider, ProviderKind, TeammateAnswerRun,
+    AiAnswerRequest, AiAutomationRequest, AiAutomationRun, AiModelTier, AiRuntime,
+    AiRuntimeDescriptor, AiRuntimeError, AiRuntimeErrorCode, AiRuntimeEvent, AiRuntimeKind,
+    AiStructuredRequest, AiStructuredRun, CliProvider, ProviderKind, TeammateAnswerRun,
 };
 
 use crate::{ai, ai_presets, recording::RecordingState};
@@ -24,6 +24,10 @@ struct CliRuntimeAdapter {
 impl AiRuntime for CliRuntimeAdapter {
     fn descriptor(&self) -> &AiRuntimeDescriptor {
         &self.descriptor
+    }
+
+    fn model_for_tier(&self, tier: AiModelTier) -> String {
+        managed_structured_model(self.descriptor.kind.clone(), tier).into()
     }
 
     async fn answer(&self, request: AiAnswerRequest) -> Result<TeammateAnswerRun, AiRuntimeError> {
@@ -55,10 +59,28 @@ impl AiRuntime for CliRuntimeAdapter {
         &self,
         request: AiStructuredRequest,
     ) -> Result<AiStructuredRun, AiRuntimeError> {
+        let model = self.model_for_tier(request.model_tier);
+        tracing::info!(
+            purpose = %request.purpose,
+            model_tier = ?request.model_tier,
+            model,
+            provider = %self.descriptor.provider_label,
+            "resolved structured inference model tier"
+        );
         self.runtime
-            .run_structured_with_model(request, self.model.as_deref())
+            .run_structured_with_model(request, Some(&model))
             .await
             .map_err(Into::into)
+    }
+}
+
+fn managed_structured_model(kind: AiRuntimeKind, tier: AiModelTier) -> &'static str {
+    match (kind, tier) {
+        (AiRuntimeKind::Codex, AiModelTier::Economy) => "gpt-5.6-luna",
+        (AiRuntimeKind::Codex, AiModelTier::Frontier) => "gpt-5.6-sol",
+        (AiRuntimeKind::Claude, AiModelTier::Economy) => "claude-haiku-4-5",
+        (AiRuntimeKind::Claude, AiModelTier::Frontier) => "opus",
+        (AiRuntimeKind::Pi, _) => unreachable!("Pi does not use the managed CLI adapter"),
     }
 }
 
@@ -72,6 +94,10 @@ struct PiRuntimeAdapter {
 impl AiRuntime for PiRuntimeAdapter {
     fn descriptor(&self) -> &AiRuntimeDescriptor {
         &self.descriptor
+    }
+
+    fn model_for_tier(&self, tier: AiModelTier) -> String {
+        api_model_for_tier(&self.preset.provider_kind, &self.preset.model, tier)
     }
 
     async fn answer(&self, request: AiAnswerRequest) -> Result<TeammateAnswerRun, AiRuntimeError> {
@@ -94,9 +120,19 @@ impl AiRuntime for PiRuntimeAdapter {
         &self,
         request: AiStructuredRequest,
     ) -> Result<AiStructuredRun, AiRuntimeError> {
-        ai_presets::pi_structured(&self.preset, request)
+        let mut preset = self.preset.clone();
+        preset.model = self.model_for_tier(request.model_tier);
+        ai_presets::pi_structured(&preset, request)
             .await
             .map_err(normalize_pi_error)
+    }
+}
+
+fn api_model_for_tier(provider: &str, configured: &str, tier: AiModelTier) -> String {
+    match provider {
+        "anthropic" => managed_structured_model(AiRuntimeKind::Claude, tier).into(),
+        "openai" | "dystil_ai" => managed_structured_model(AiRuntimeKind::Codex, tier).into(),
+        _ => configured.to_string(),
     }
 }
 
@@ -112,9 +148,9 @@ pub(crate) async fn resolve(
     {
         if matches!(
             preset.provider_kind.as_str(),
-            "ollama" | "openai_compatible"
+            "ollama" | "anthropic" | "openai" | "openai_compatible" | "dystil_ai"
         ) {
-            if preset.provider_kind == "openai_compatible" && preset.api_key.is_none() {
+            if preset.provider_kind != "ollama" && preset.api_key.is_none() {
                 return Err(AiRuntimeError::new(
                     AiRuntimeErrorCode::Authentication,
                     "the active AI preset has no credential in the operating-system keyring",
@@ -204,6 +240,46 @@ fn normalize_pi_error(error: String) -> AiRuntimeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_structured_tiers_map_to_provider_models() {
+        assert_eq!(
+            managed_structured_model(AiRuntimeKind::Codex, AiModelTier::Economy),
+            "gpt-5.6-luna"
+        );
+        assert_eq!(
+            managed_structured_model(AiRuntimeKind::Codex, AiModelTier::Frontier),
+            "gpt-5.6-sol"
+        );
+        assert_eq!(
+            managed_structured_model(AiRuntimeKind::Claude, AiModelTier::Economy),
+            "claude-haiku-4-5"
+        );
+        assert_eq!(
+            managed_structured_model(AiRuntimeKind::Claude, AiModelTier::Frontier),
+            "opus"
+        );
+    }
+
+    #[test]
+    fn native_api_presets_share_managed_model_policy() {
+        assert_eq!(
+            api_model_for_tier("anthropic", "ignored", AiModelTier::Economy),
+            "claude-haiku-4-5"
+        );
+        assert_eq!(
+            api_model_for_tier("openai", "ignored", AiModelTier::Frontier),
+            "gpt-5.6-sol"
+        );
+        assert_eq!(
+            api_model_for_tier("dystil_ai", "ignored", AiModelTier::Economy),
+            "gpt-5.6-luna"
+        );
+        assert_eq!(
+            api_model_for_tier("openai_compatible", "my-model", AiModelTier::Frontier),
+            "my-model"
+        );
+    }
 
     #[test]
     fn pi_errors_are_normalized_without_provider_branches_in_callers() {
