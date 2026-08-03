@@ -1967,11 +1967,7 @@ pub async fn hide_notification_panel(app_handle: tauri::AppHandle) -> Result<(),
 #[specta::specta]
 pub async fn copy_deeplink_to_clipboard(frame_id: i64) -> Result<(), String> {
     let link = format!("dystil://frame/{}", frame_id);
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("clipboard error: {}", e))?;
-    clipboard
-        .set_text(link)
-        .map_err(|e| format!("failed to set clipboard: {}", e))?;
-    Ok(())
+    set_clipboard_text(link)
 }
 
 /// Copy arbitrary text to the system clipboard (native API, works in Tauri webview).
@@ -1979,10 +1975,36 @@ pub async fn copy_deeplink_to_clipboard(frame_id: i64) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("clipboard error: {}", e))?;
+    set_clipboard_text(text)
+}
+
+/// Keep the native clipboard handle alive for the lifetime of Dystil. On X11,
+/// dropping the handle immediately after `set_text` can relinquish ownership of
+/// the selection, leaving the clipboard empty even though the write succeeded.
+fn set_clipboard_text(text: String) -> Result<(), String> {
+    static CLIPBOARD: std::sync::OnceLock<std::sync::Mutex<Option<arboard::Clipboard>>> =
+        std::sync::OnceLock::new();
+
+    let clipboard = CLIPBOARD.get_or_init(|| std::sync::Mutex::new(None));
+    let mut clipboard = clipboard
+        .lock()
+        .map_err(|_| "clipboard lock is unavailable".to_string())?;
+    if clipboard.is_none() {
+        *clipboard =
+            Some(arboard::Clipboard::new().map_err(|error| format!("clipboard error: {error}"))?);
+    }
+    let clipboard = clipboard
+        .as_mut()
+        .ok_or_else(|| "clipboard is unavailable".to_string())?;
     clipboard
-        .set_text(text)
-        .map_err(|e| format!("failed to set clipboard: {}", e))?;
+        .set_text(text.clone())
+        .map_err(|error| format!("failed to set clipboard: {error}"))?;
+    let copied = clipboard
+        .get_text()
+        .map_err(|error| format!("failed to verify clipboard: {error}"))?;
+    if copied != text {
+        return Err("clipboard verification failed".to_string());
+    }
     Ok(())
 }
 

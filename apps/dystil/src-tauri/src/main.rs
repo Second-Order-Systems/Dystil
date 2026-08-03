@@ -22,8 +22,6 @@ use tracing_subscriber::EnvFilter;
 
 #[cfg(target_os = "macos")]
 use tracing_oslog::OsLogger;
-#[cfg(feature = "official-build")]
-use updates::start_update_check;
 use window::ShowRewindWindow;
 
 mod agent_commands;
@@ -41,6 +39,7 @@ mod capture_policy;
 mod capture_session;
 #[allow(deprecated)]
 mod commands;
+mod deletion;
 mod disk_usage;
 mod dystil_paths;
 mod hardware;
@@ -48,6 +47,7 @@ mod hardware;
 mod icons;
 mod oauth;
 mod permissions;
+mod ready_to_use_commands;
 mod recording;
 mod recording_settings;
 mod retention;
@@ -60,7 +60,6 @@ mod server_core;
 mod space_monitor;
 mod store;
 mod tray;
-#[cfg(feature = "official-build")]
 mod updates;
 mod window;
 mod windows_ca_bundle;
@@ -79,11 +78,14 @@ pub use ai_presets::*;
 pub use auth::*;
 pub use automation_commands::*;
 pub use build_capabilities::*;
+pub use deletion::*;
 pub use server::*;
 pub use worth_fixing_commands::*;
 
+pub use ready_to_use_commands::*;
 pub use recording::*;
 pub use retention::*;
+pub use updates::*;
 
 pub use icons::*;
 pub use store::get_store;
@@ -939,7 +941,7 @@ async fn main() {
 
             // Community/source builds never poll an update endpoint.
             #[cfg(feature = "official-build")]
-            start_update_check(&app_handle, 5);
+            updates::start_update_check(&app_handle, 5);
 
             // Setup tray
             if let Some(_) = app_handle.tray_by_id("dystil_main") {

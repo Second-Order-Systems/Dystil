@@ -7,12 +7,12 @@ use chrono::{DateTime, FixedOffset, Timelike, Utc};
 use dystil_insights::{
     capture_cursor, cleanup_diagnostics, commit_compaction_checkpoint,
     compact_activity_incremental, enhanced_diagnostics_enabled, known_source_refs,
-    load_compaction_state, mark_source_deleted, normal_wakes_started, pending_explorer_batch_id,
-    pending_observations, record_wake_start, recoverable_explorer_job, recoverable_job,
-    resolve_capture_evidence, run_explorer_batch, run_explorer_batch_with_compaction,
-    run_steward_wake, upsert_evidence, watching_opportunity_count, CaptureAdmissionRules,
-    CompactionConfig, DiagnosticRetention, EvidenceRecord, SourceActivity, WakePolicy, WakeReason,
-    WakeState,
+    last_successful_steward_wake_at, load_compaction_state, mark_source_deleted,
+    pending_explorer_batch_id, pending_observation_stats, record_wake_start,
+    recoverable_explorer_job, recoverable_job, resolve_capture_evidence, run_explorer_batch,
+    run_explorer_batch_with_compaction, run_steward_wake, upsert_evidence, wake_reason_started,
+    CaptureAdmissionRules, CompactionConfig, DiagnosticRetention, EvidenceRecord, SourceActivity,
+    WakePolicy, WakeReason, WakeState,
 };
 use sqlx::{Row, SqlitePool};
 use tauri::{AppHandle, Manager};
@@ -245,20 +245,14 @@ async fn maybe_steward(
     capture: &SqlitePool,
     timezone: &str,
 ) -> Result<(), String> {
-    let pending = pending_observations(insights, 1000)
+    let pending = pending_observation_stats(insights)
         .await
-        .map_err(|e| e.to_string())?
-        .len();
-    let threshold_crossing = pending > 0
-        && watching_opportunity_count(insights)
-            .await
-            .map_err(|e| e.to_string())?
-            > 0;
+        .map_err(|e| e.to_string())?;
     let recovery = recoverable_job(insights)
         .await
         .map_err(|e| e.to_string())?
         .is_some();
-    if pending == 0 && !recovery {
+    if pending.count == 0 && !recovery {
         return Ok(());
     }
     let offset = timezone
@@ -266,9 +260,28 @@ async fn maybe_steward(
         .unwrap_or_else(|_| FixedOffset::east_opt(0).unwrap());
     let local_now = Utc::now().with_timezone(&offset);
     let local_day = local_now.date_naive();
-    let wakes = normal_wakes_started(insights, &local_day.to_string())
+    let now = Utc::now();
+    let oldest_pending_minutes = pending
+        .oldest_admitted_at
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| {
+            now.signed_duration_since(value.with_timezone(&Utc))
+                .num_minutes()
+                .max(0)
+        })
+        .unwrap_or(0);
+    let minutes_since_last_successful_wake = last_successful_steward_wake_at(insights)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| {
+            now.signed_duration_since(value.with_timezone(&Utc))
+                .num_minutes()
+                .max(0)
+        })
+        .unwrap_or(oldest_pending_minutes);
     let provider_ready = crate::ai_presets::active(capture)
         .await
         .map_err(|e| e.to_string())?
@@ -279,26 +292,18 @@ async fn maybe_steward(
         .and_then(|settings| settings.recording.power_mode)
         .as_deref()
         != Some("battery_saver");
-    let last_capture = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT MAX(value) FROM (SELECT MAX(timestamp) value FROM frames UNION ALL SELECT MAX(timestamp) FROM ui_events)",
-    ).fetch_one(capture).await.map_err(|e| e.to_string())?;
-    let idle = last_capture
-        .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
-        .is_some_and(|value| {
-            Utc::now()
-                .signed_duration_since(value.with_timezone(&Utc))
-                .num_minutes()
-                >= 30
-        });
+    let end_of_day = local_now.hour() >= 20
+        && !wake_reason_started(insights, &local_day.to_string(), "end_of_day")
+            .await
+            .map_err(|e| e.to_string())?;
     let state = WakeState {
-        local_day,
-        normal_wakes_started: wakes,
-        pending_observations: pending,
+        pending_observations: pending.count,
+        pending_episode_groups: pending.episode_groups,
+        minutes_since_last_successful_wake,
+        oldest_pending_minutes,
         job_running: false,
-        threshold_crossing,
-        active_period_ended: idle,
         explicit_request: false,
-        end_of_active_day: local_now.hour() >= 20,
+        end_of_active_day: end_of_day,
         recovery_pending: recovery,
         provider_ready,
         resource_permitted,
@@ -315,9 +320,9 @@ async fn maybe_steward(
     .await
     .map_err(|e| e.to_string())?;
     let reason_name = match reason {
-        WakeReason::ObservationThreshold => "observation_threshold",
-        WakeReason::ThresholdCrossing => "threshold_crossing",
-        WakeReason::ActivePeriodEnded => "active_period_ended",
+        WakeReason::ObservationVolume => "observation_volume",
+        WakeReason::ObservationBurst => "observation_burst",
+        WakeReason::PendingDeadline => "pending_deadline",
         WakeReason::ExplicitRequest => "explicit_request",
         WakeReason::EndOfDay => "end_of_day",
         WakeReason::Recovery => "recovery",
@@ -327,7 +332,6 @@ async fn maybe_steward(
         &local_day.to_string(),
         reason_name,
         reason != WakeReason::Recovery,
-        4,
     )
     .await
     .map_err(|e| e.to_string())?;
