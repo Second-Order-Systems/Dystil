@@ -129,9 +129,8 @@ impl CaptureStore for DystilCaptureStore {
             "INSERT INTO frames (\
                 timestamp, device_name, snapshot_path, app_name, window_name, browser_url, \
                 document_path, focused, capture_trigger, frame_text, text_source, \
-                accessibility_tree_json, ax_capture_diagnostics_json, content_hash, simhash, \
-                elements_ref_frame_id\
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+                accessibility_tree_json, ax_capture_diagnostics_json, content_hash, simhash\
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(observation.captured_at.to_rfc3339())
         .bind(device_name)
@@ -170,16 +169,6 @@ impl CaptureStore for DystilCaptureStore {
             )
             .await;
         });
-        if let Some(nodes) = sanitized_nodes.filter(|nodes| !nodes.is_empty()) {
-            let pool = self.pool.clone();
-            // Match the old deferred write: structured elements enrich a frame
-            // after it is searchable, and a missing/legacy elements table must
-            // not make the primary capture write fail.
-            tokio::spawn(async move {
-                let _ = insert_accessibility_elements(&pool, frame_id, &nodes).await;
-            });
-        }
-
         Ok(StoredCapture {
             // SQLite returns the row ID from the connection used by this exact
             // statement, so this remains correct with a pooled connection.
@@ -187,109 +176,6 @@ impl CaptureStore for DystilCaptureStore {
             snapshot_path: (!snapshot_path.is_empty()).then_some(snapshot_path),
         })
     }
-}
-
-async fn insert_accessibility_elements(
-    pool: &SqlitePool,
-    frame_id: i64,
-    nodes: &[AccessibilityNode],
-) -> Result<(), sqlx::Error> {
-    let mut inserted_ids = std::collections::HashMap::<u32, i64>::new();
-    let mut depth_stack: Vec<(u8, i64)> = Vec::new();
-    for (sort_order, node) in nodes.iter().enumerate() {
-        let depth = node.depth as i32;
-        let parent_id = node
-            .parent_node_id
-            .and_then(|parent_node_id| inserted_ids.get(&parent_node_id).copied())
-            .or_else(|| {
-                (node.node_id == 0 && depth > 0)
-                    .then(|| {
-                        depth_stack
-                            .iter()
-                            .rev()
-                            .find(|(node_depth, _)| *node_depth as i32 == depth - 1)
-                            .map(|(_, id)| *id)
-                    })
-                    .flatten()
-            });
-        let (left, top, width, height) = match &node.bounds {
-            Some(bounds) => (
-                Some(bounds.left as f64),
-                Some(bounds.top as f64),
-                Some(bounds.width as f64),
-                Some(bounds.height as f64),
-            ),
-            None => (None, None, None, None),
-        };
-        let properties = accessibility_properties(node);
-        let result = sqlx::query(
-            "INSERT INTO elements (frame_id, source, role, text, parent_id, depth, left_bound, \
-                top_bound, width_bound, height_bound, confidence, sort_order, properties, on_screen) \
-             VALUES (?, 'accessibility', ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
-        )
-        .bind(frame_id)
-        .bind(&node.role)
-        .bind((!node.text.is_empty()).then_some(&node.text))
-        .bind(parent_id)
-        .bind(depth)
-        .bind(left)
-        .bind(top)
-        .bind(width)
-        .bind(height)
-        .bind(sort_order as i32)
-        .bind(properties)
-        .bind(node.on_screen.map(i64::from))
-        .execute(pool)
-        .await?;
-
-        let database_id = result.last_insert_rowid();
-        if node.node_id != 0 {
-            inserted_ids.insert(node.node_id, database_id);
-        }
-        while depth_stack
-            .last()
-            .is_some_and(|(node_depth, _)| *node_depth as i32 >= depth)
-        {
-            depth_stack.pop();
-        }
-        depth_stack.push((node.depth, database_id));
-    }
-    Ok(())
-}
-
-fn accessibility_properties(node: &AccessibilityNode) -> Option<String> {
-    let mut properties = serde_json::Map::new();
-    for (name, value) in [
-        ("automation_id", &node.automation_id),
-        ("class_name", &node.class_name),
-        ("value", &node.value),
-        ("help_text", &node.help_text),
-        ("url", &node.url),
-        ("placeholder", &node.placeholder),
-        ("role_description", &node.role_description),
-        ("subrole", &node.subrole),
-        ("dom_identifier", &node.dom_identifier),
-        ("dom_classes", &node.dom_classes),
-        ("accelerator_key", &node.accelerator_key),
-        ("access_key", &node.access_key),
-    ] {
-        if let Some(value) = value {
-            properties.insert(name.to_string(), serde_json::Value::String(value.clone()));
-        }
-    }
-    for (name, value) in [
-        ("is_enabled", node.is_enabled),
-        ("is_focused", node.is_focused),
-        ("is_selected", node.is_selected),
-        ("is_expanded", node.is_expanded),
-        ("is_password", node.is_password),
-        ("is_keyboard_focusable", node.is_keyboard_focusable),
-    ] {
-        if let Some(value) = value {
-            properties.insert(name.to_string(), serde_json::Value::Bool(value));
-        }
-    }
-    (!properties.is_empty()).then(|| serde_json::Value::Object(properties).to_string())
 }
 
 #[derive(Clone)]
@@ -407,18 +293,7 @@ mod tests {
                 window_name TEXT, browser_url TEXT, document_path TEXT, focused BOOLEAN, \
                 capture_trigger TEXT, frame_text TEXT, text_source TEXT, \
                 accessibility_tree_json TEXT, ax_capture_diagnostics_json TEXT, \
-                content_hash INTEGER, simhash INTEGER, \
-                elements_ref_frame_id INTEGER)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "CREATE TABLE elements (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT, frame_id INTEGER NOT NULL, source TEXT NOT NULL, \
-                role TEXT NOT NULL, text TEXT, parent_id INTEGER, depth INTEGER NOT NULL, \
-                left_bound REAL, top_bound REAL, width_bound REAL, height_bound REAL, \
-                confidence REAL, sort_order INTEGER, properties TEXT, on_screen INTEGER)",
+                content_hash INTEGER, simhash INTEGER)",
         )
         .execute(&pool)
         .await
@@ -595,98 +470,6 @@ mod tests {
         assert!(!row
             .get::<String, _>("accessibility_tree_json")
             .contains("AKIAIOSFODNN7EXAMPLE"));
-    }
-
-    #[tokio::test]
-    async fn materializes_sanitized_accessibility_elements_with_parent_links() {
-        let temp = TempDir::new().unwrap();
-        let (pool, store) = test_store(&temp).await;
-        let mut value = observation(None);
-        value.accessibility.as_mut().unwrap().nodes = vec![
-            AccessibilityNode {
-                node_id: 10,
-                parent_node_id: None,
-                role: "window".to_string(),
-                text: "root".to_string(),
-                depth: 0,
-                bounds: None,
-                on_screen: Some(true),
-                lines: None,
-                automation_id: None,
-                class_name: None,
-                value: None,
-                help_text: None,
-                url: None,
-                placeholder: None,
-                role_description: None,
-                subrole: None,
-                dom_identifier: None,
-                dom_classes: None,
-                is_enabled: None,
-                is_focused: None,
-                is_selected: None,
-                is_expanded: None,
-                is_password: None,
-                is_keyboard_focusable: None,
-                accelerator_key: None,
-                access_key: None,
-            },
-            AccessibilityNode {
-                node_id: 20,
-                parent_node_id: Some(10),
-                role: "text".to_string(),
-                text: "person@example.com".to_string(),
-                depth: 1,
-                bounds: None,
-                on_screen: Some(false),
-                lines: None,
-                automation_id: None,
-                class_name: None,
-                value: None,
-                help_text: None,
-                url: None,
-                placeholder: None,
-                role_description: None,
-                subrole: None,
-                dom_identifier: None,
-                dom_classes: None,
-                is_enabled: None,
-                is_focused: None,
-                is_selected: None,
-                is_expanded: None,
-                is_password: None,
-                is_keyboard_focusable: None,
-                accelerator_key: None,
-                access_key: None,
-            },
-        ];
-        let frame_id = store.persist(value).await.unwrap().frame_id;
-        let elements = tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                let rows = sqlx::query(
-                    "SELECT id, parent_id, text, on_screen FROM elements WHERE frame_id = ? ORDER BY sort_order",
-                )
-                .bind(frame_id)
-                .fetch_all(&pool)
-                .await
-                .unwrap();
-                if rows.len() == 2 {
-                    break rows;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("deferred element insert did not finish");
-        assert_eq!(
-            elements[1].get::<Option<i64>, _>("parent_id"),
-            Some(elements[0].get("id"))
-        );
-        assert!(!elements[1]
-            .get::<String, _>("text")
-            .contains("person@example.com"));
-        assert_eq!(elements[0].get::<i64, _>("on_screen"), 1);
-        assert_eq!(elements[1].get::<i64, _>("on_screen"), 0);
     }
 
     #[test]
