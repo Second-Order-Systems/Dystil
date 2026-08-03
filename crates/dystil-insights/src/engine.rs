@@ -711,6 +711,83 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn explorer_repairs_duplicate_evidence_references() {
+        let dir = tempdir().unwrap();
+        let pool = open_insights_database(dir.path().join("insights.sqlite"))
+            .await
+            .unwrap();
+        let evidence = EvidenceRecord {
+            evidence_id: "allowed:duplicate-check".into(),
+            source_namespace: "fixture".into(),
+            source_id: "duplicate-check".into(),
+            occurred_at: "2026-08-02T10:00:00Z".into(),
+            app: Some("Editor".into()),
+            window: None,
+            excerpt: "Prepared the weekly update".into(),
+            policy_allowed: true,
+            redaction_ready: true,
+            deleted: false,
+            sensitive: false,
+        };
+        let runtime = MockRuntime::new(vec![
+            json!({"schema_version":1,"observations":[{
+                "local_id":"obs_01","statement":"Prepared the weekly update",
+                "certainty":"explicit","occurred_at":"2026-08-02T10:00:00Z",
+                "evidence_ids":["allowed:duplicate-check","allowed:duplicate-check"]
+            }]}),
+            json!({"schema_version":1,"observations":[{
+                "local_id":"obs_01","statement":"Prepared the weekly update",
+                "certainty":"explicit","occurred_at":"2026-08-02T10:00:00Z",
+                "evidence_ids":["allowed:duplicate-check"]
+            }]}),
+        ]);
+
+        let result = run_explorer_batch(
+            &pool,
+            &runtime,
+            "batch_duplicate_check",
+            "Asia/Kolkata",
+            &[evidence],
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(result, ExplorerRunResult::Accepted { .. }));
+        assert_eq!(runtime.calls.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn steward_repairs_duplicate_considered_observations() {
+        let (_dir, pool, observation_id) = fixture().await;
+        let runtime = MockRuntime::new(vec![
+            json!({
+                "schema_version": 1,
+                "considered_observation_ids": [observation_id, observation_id],
+                "opportunities": []
+            }),
+            json!({
+                "schema_version": 1,
+                "considered_observation_ids": [observation_id],
+                "opportunities": []
+            }),
+        ]);
+
+        let result = run_steward_wake(
+            &pool,
+            &runtime,
+            "2026-08-02",
+            "Asia/Kolkata",
+            "threshold",
+            50,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(result, WakeResult::Accepted { .. }));
+        assert_eq!(runtime.calls.lock().unwrap().len(), 2);
+    }
+
     #[test]
     fn production_handoff_schema_cannot_request_automation() {
         let rendered = schema().to_string();
@@ -718,5 +795,73 @@ mod tests {
         assert!(!STEWARD_PROMPT.contains("grounding judge"));
         assert!(!EXPLORER_PROMPT.contains("grounding judge"));
         let _compile_guard = PathBuf::from("provider-neutral");
+    }
+
+    #[test]
+    fn production_schemas_match_the_provider_supported_subset() {
+        fn assert_compatible(schema: &Value, path: &str) {
+            let object = schema
+                .as_object()
+                .unwrap_or_else(|| panic!("schema node at {path} must be an object"));
+            assert!(
+                !object.contains_key("uniqueItems"),
+                "unsupported uniqueItems at {path}"
+            );
+            if object.contains_key("const") || object.contains_key("enum") {
+                assert!(
+                    object.contains_key("type"),
+                    "const/enum schema at {path} must declare its type"
+                );
+            }
+            if object.get("type").and_then(Value::as_str) == Some("object") {
+                assert_eq!(
+                    object.get("additionalProperties"),
+                    Some(&Value::Bool(false)),
+                    "object schema at {path} must forbid additional properties"
+                );
+                let property_names = object
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("object schema at {path} needs properties"))
+                    .keys()
+                    .cloned()
+                    .collect::<std::collections::BTreeSet<_>>();
+                let required_names = object
+                    .get("required")
+                    .and_then(Value::as_array)
+                    .unwrap_or_else(|| panic!("object schema at {path} needs required"))
+                    .iter()
+                    .map(|name| name.as_str().unwrap().to_owned())
+                    .collect::<std::collections::BTreeSet<_>>();
+                assert_eq!(
+                    property_names, required_names,
+                    "every property at {path} must be required"
+                );
+            }
+            if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+                for (name, property) in properties {
+                    assert_compatible(property, &format!("{path}.properties.{name}"));
+                }
+            }
+            if let Some(items) = object.get("items") {
+                assert_compatible(items, &format!("{path}.items"));
+            }
+            if let Some(branches) = object.get("anyOf").and_then(Value::as_array) {
+                for (index, branch) in branches.iter().enumerate() {
+                    assert_compatible(branch, &format!("{path}.anyOf[{index}]"));
+                }
+            }
+        }
+
+        let artifact_schema: Value =
+            serde_json::from_str(include_str!("../resources/artifact_change_schema_v1.json"))
+                .unwrap();
+        for (name, value) in [
+            ("explorer", explorer_schema()),
+            ("steward", schema()),
+            ("artifact_change", artifact_schema),
+        ] {
+            assert_compatible(&value, name);
+        }
     }
 }

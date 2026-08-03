@@ -4,10 +4,9 @@
   "additionalProperties": false,
   "required": ["schema_version", "considered_observation_ids", "opportunities"],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "type": "integer", "const": 1 },
     "considered_observation_ids": {
       "type": "array",
-      "uniqueItems": true,
       "items": { "type": "string" }
     },
     "opportunities": {
@@ -26,7 +25,7 @@
         "properties": {
           "local_id": { "type": "string" },
           "existing_opportunity_id": { "type": ["string", "null"] },
-          "construct": { "enum": ["recognition", "manual_transfer", "unchanged_repetition", "temporal_pattern", "repeated_composition"] },
+          "construct": { "type": "string", "enum": ["recognition", "manual_transfer", "unchanged_repetition", "temporal_pattern", "repeated_composition"] },
           "summary": { "type": "string" },
           "signature": { "type": "string" },
           "occurrences_to_add": {
@@ -38,8 +37,8 @@
               "required": ["local_id", "observation_ids", "evidence_ids", "steps", "distinctness_basis"],
               "properties": {
                 "local_id": { "type": "string" },
-                "observation_ids": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } },
-                "evidence_ids": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } },
+                "observation_ids": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+                "evidence_ids": { "type": "array", "minItems": 1, "items": { "type": "string" } },
                 "steps": { "type": "array", "minItems": 1, "items": { "type": "string" } },
                 "distinctness_basis": { "type": "array", "items": { "type": "string" } }
               }
@@ -49,20 +48,20 @@
           "retire": { "type": "boolean" },
           "transfer_established": { "type": "boolean" },
           "authorship_established": { "type": "boolean" },
-          "cadence": { "enum": ["none", "daily", "weekly", "monthly"] },
+          "cadence": { "type": "string", "enum": ["none", "daily", "weekly", "monthly"] },
           "unresolved_questions": { "type": "array", "items": { "type": "string" } },
-          "evidence_quality": { "enum": ["high", "medium", "low"] },
+          "evidence_quality": { "type": "string", "enum": ["high", "medium", "low"] },
           "handoff": {
             "anyOf": [
               { "type": "null" },
               {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["kind", "title", "preview", "capability_id"],
+                "required": ["kind", "title", "body", "capability_id"],
                 "properties": {
-                  "kind": { "enum": ["prompt", "saved_prompt", "existing_capability", "runbook"] },
-                  "title": { "type": "string" },
-                  "preview": { "type": "string" },
+                  "kind": { "type": "string", "enum": ["prompt", "saved_prompt", "existing_capability", "runbook"] },
+                  "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+                  "body": { "type": "string", "minLength": 1, "maxLength": 12000 },
                   "capability_id": { "type": ["string", "null"] }
                 }
               }
@@ -78,7 +77,7 @@
                 "properties": {
                   "claim": { "type": "string" },
                   "why_worth_fixing": { "type": "string" },
-                  "evidence_ids": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } }
+                  "evidence_ids": { "type": "array", "minItems": 1, "items": { "type": "string" } }
                 }
               }
             ]

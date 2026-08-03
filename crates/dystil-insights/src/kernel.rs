@@ -44,6 +44,12 @@ pub fn derive_eligibility(
             errors,
         };
     };
+    if handoff.title.trim().is_empty() || handoff.title.chars().count() > 160 {
+        errors.push("handoff title is not usable".into());
+    }
+    if handoff.body.trim().is_empty() || handoff.body.chars().count() > 12_000 {
+        errors.push("handoff body is not complete and bounded".into());
+    }
     let handoff_allowed = match proposal.construct {
         Construct::Recognition | Construct::ManualTransfer => {
             matches!(
@@ -99,6 +105,15 @@ pub fn derive_eligibility(
         eligible: errors.is_empty(),
         errors,
     }
+}
+
+pub fn handoff_preview(body: &str) -> String {
+    let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut preview = normalized.chars().take(240).collect::<String>();
+    if normalized.chars().count() > 240 {
+        preview.push('…');
+    }
+    preview
 }
 
 pub fn evidence_quality(
@@ -285,7 +300,7 @@ mod tests {
             handoff: Some(Handoff {
                 kind: handoff_type,
                 title: "title".into(),
-                preview: "preview".into(),
+                body: "A complete and directly usable handoff body.".into(),
                 capability_id: None,
             }),
             finding: Some(FindingDraft {
@@ -325,6 +340,22 @@ mod tests {
             )
             .eligible
         );
+    }
+
+    #[test]
+    fn complete_handoff_body_is_required_and_preview_is_derived() {
+        let context = EligibilityContext {
+            occurrence_count: 1,
+            cadence_supported: false,
+            capability_verified: false,
+        };
+        let mut incomplete = proposal(Construct::Recognition, HandoffType::Prompt);
+        incomplete.handoff.as_mut().unwrap().body.clear();
+        assert!(!derive_eligibility(&incomplete, &context).eligible);
+        let long = format!("{} end", "word ".repeat(80));
+        let preview = handoff_preview(&long);
+        assert!(preview.chars().count() <= 241);
+        assert!(preview.ends_with('…'));
     }
 
     #[test]

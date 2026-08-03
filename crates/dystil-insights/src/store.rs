@@ -1,6 +1,6 @@
 use std::{collections::HashSet, path::Path, str::FromStr, time::Duration};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::{
@@ -10,13 +10,14 @@ use sqlx::{
 use thiserror::Error;
 
 use crate::{
-    cadence_supported, derive_eligibility, rank, select_top, user_label, Cadence, Construct,
-    DispositionKind, EligibilityContext, EvidenceRecord, FindingCandidate, FindingPage,
+    cadence_supported, derive_eligibility, handoff_preview, rank, select_top, user_label, Cadence,
+    Construct, DispositionKind, EligibilityContext, EvidenceRecord, FindingCandidate, FindingPage,
     HandoffType, ObservationCertainty, ObservationRecord, OpportunityStatus, ReconciliationOutput,
     WorthFixingCard, WorthFixingEvidenceLine, WorthFixingSummary,
 };
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 3;
+const MANUAL_REFRESH_MIN_OBSERVATION_SPAN_HOURS: f64 = 3.0;
 
 #[derive(Debug, Error)]
 pub enum InsightsError {
@@ -34,12 +35,17 @@ pub enum InsightsError {
 
 pub type Result<T> = std::result::Result<T, InsightsError>;
 
-fn fingerprint<T: Serialize>(value: &T) -> Result<String> {
+fn has_duplicates(values: &[String]) -> bool {
+    let mut seen = HashSet::with_capacity(values.len());
+    values.iter().any(|value| !seen.insert(value))
+}
+
+pub(crate) fn fingerprint<T: Serialize>(value: &T) -> Result<String> {
     let bytes = serde_json::to_vec(value)?;
     Ok(hex::encode(Sha256::digest(bytes)))
 }
 
-fn stable_id<T: Serialize>(prefix: &str, value: &T) -> Result<String> {
+pub(crate) fn stable_id<T: Serialize>(prefix: &str, value: &T) -> Result<String> {
     Ok(format!("{prefix}_{}", &fingerprint(value)?[..24]))
 }
 
@@ -125,21 +131,12 @@ async fn migrate(pool: &SqlitePool) -> Result<()> {
         sqlx::query_scalar("SELECT value FROM insights_metadata WHERE key='schema_version'")
             .fetch_optional(&mut *tx)
             .await?;
-    if let Some(existing) = existing {
-        let parsed = existing.parse::<i64>().unwrap_or(-1);
-        if parsed != SCHEMA_VERSION {
-            return Err(InsightsError::UnsupportedSchema(parsed));
-        }
-    } else {
-        sqlx::query("INSERT INTO insights_metadata(key,value) VALUES('schema_version',?1)")
-            .bind(SCHEMA_VERSION.to_string())
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("INSERT INTO insights_schema_migrations(version,applied_at) VALUES(?1,?2)")
-            .bind(SCHEMA_VERSION)
-            .bind(Utc::now().to_rfc3339())
-            .execute(&mut *tx)
-            .await?;
+    let current_version = existing
+        .as_deref()
+        .map(|value| value.parse::<i64>().unwrap_or(-1))
+        .unwrap_or(0);
+    if !(0..=SCHEMA_VERSION).contains(&current_version) {
+        return Err(InsightsError::UnsupportedSchema(current_version));
     }
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS evidence(
@@ -289,6 +286,143 @@ async fn migrate(pool: &SqlitePool) -> Result<()> {
     )
     .execute(&mut *tx)
     .await?;
+    if current_version < 1 {
+        sqlx::query(
+            "INSERT OR IGNORE INTO insights_schema_migrations(version,applied_at) VALUES(1,?1)",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .execute(&mut *tx)
+        .await?;
+    }
+    if current_version < 2 {
+        sqlx::query("ALTER TABLE findings ADD COLUMN handoff_body TEXT NOT NULL DEFAULT ''")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("ALTER TABLE capabilities ADD COLUMN action_kind TEXT")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("ALTER TABLE capabilities ADD COLUMN action_target TEXT")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "CREATE TABLE artifacts(
+              artifact_id TEXT PRIMARY KEY,source_kind TEXT NOT NULL,
+              source_finding_id TEXT UNIQUE REFERENCES findings(finding_id),source_request_id TEXT,
+              kind TEXT NOT NULL,title TEXT NOT NULL,current_version INTEGER NOT NULL,
+              status TEXT NOT NULL,capability_id TEXT REFERENCES capabilities(capability_id),
+              kept_at TEXT NOT NULL,last_used_at TEXT,updated_at TEXT NOT NULL,removed_at TEXT)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE artifact_change_jobs(
+              job_id TEXT PRIMARY KEY,artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id),
+              base_version INTEGER NOT NULL,request_text TEXT NOT NULL,input_fingerprint TEXT NOT NULL UNIQUE,
+              status TEXT NOT NULL,input_json TEXT NOT NULL,prompt_hash TEXT NOT NULL,schema_hash TEXT NOT NULL,
+              model TEXT NOT NULL,proposed_title TEXT,proposed_body TEXT,attempts INTEGER NOT NULL DEFAULT 0,
+              error_code TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,accepted_at TEXT)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE UNIQUE INDEX one_active_artifact_change_job ON artifact_change_jobs(artifact_id)
+             WHERE status IN ('pending','running','preview_ready')",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE artifact_versions(
+              version_id TEXT PRIMARY KEY,artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id),
+              ordinal INTEGER NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,
+              source_finding_version_id TEXT REFERENCES opportunity_versions(version_id),
+              change_job_id TEXT REFERENCES artifact_change_jobs(job_id),created_at TEXT NOT NULL,
+              UNIQUE(artifact_id,ordinal))",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE artifact_events(
+              event_id TEXT PRIMARY KEY,artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id),
+              event_type TEXT NOT NULL,action TEXT,created_at TEXT NOT NULL)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE artifact_change_attempts(
+              job_id TEXT NOT NULL REFERENCES artifact_change_jobs(job_id),attempt INTEGER NOT NULL,
+              request_fingerprint TEXT NOT NULL,output_fingerprint TEXT,status TEXT NOT NULL,
+              usage_json TEXT NOT NULL,latency_ms INTEGER NOT NULL,error_code TEXT,created_at TEXT NOT NULL,
+              PRIMARY KEY(job_id,attempt))",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO insights_schema_migrations(version,applied_at) VALUES(2,?1)",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .execute(&mut *tx)
+        .await?;
+        let skipped_dispositions = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM dispositions WHERE kind IN ('accepted','saved')",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        let incomplete_findings = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM findings WHERE active=1 AND handoff_body=''",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE opportunities SET current_status='withdrawn' WHERE opportunity_id IN
+             (SELECT opportunity_id FROM findings WHERE active=1 AND handoff_body='')",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE findings SET active=0 WHERE active=1 AND handoff_body=''")
+            .execute(&mut *tx)
+            .await?;
+        for (key, value) in [
+            ("legacy_artifact_dispositions_skipped", skipped_dispositions),
+            ("legacy_incomplete_findings_withdrawn", incomplete_findings),
+        ] {
+            sqlx::query(
+                "INSERT INTO insights_metadata(key,value) VALUES(?1,?2)
+                 ON CONFLICT(key) DO UPDATE SET value=?2",
+            )
+            .bind(key)
+            .bind(value.to_string())
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    if current_version < 3 {
+        sqlx::query("ALTER TABLE observations ADD COLUMN admitted_at TEXT")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "UPDATE observations SET admitted_at=COALESCE(
+               (SELECT accepted_at FROM explorer_jobs
+                WHERE observations.source_key LIKE explorer_jobs.batch_id || ':%'
+                ORDER BY accepted_at LIMIT 1),
+               occurred_at)
+             WHERE admitted_at IS NULL",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO insights_schema_migrations(version,applied_at) VALUES(3,?1)",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .execute(&mut *tx)
+        .await?;
+    }
+    sqlx::query(
+        "INSERT INTO insights_metadata(key,value) VALUES('schema_version',?1)
+         ON CONFLICT(key) DO UPDATE SET value=?1",
+    )
+    .bind(SCHEMA_VERSION.to_string())
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -390,6 +524,71 @@ pub async fn mark_source_deleted(
     Ok(result.rows_affected() > 0)
 }
 
+/// Removes the locally retained content for capture evidence while preserving
+/// only its opaque identity so references cannot be accidentally re-admitted.
+/// Findings that relied on any forgotten source are withdrawn immediately.
+pub async fn forget_capture_evidence(
+    pool: &SqlitePool,
+    source_namespace: &str,
+    source_ids: &[String],
+) -> Result<(u64, u64)> {
+    if source_ids.is_empty() {
+        return Ok((0, 0));
+    }
+
+    let mut forgotten_evidence = 0u64;
+    let mut affected_findings = std::collections::HashSet::new();
+    for chunk in source_ids.chunks(400) {
+        let mut tx = pool.begin().await?;
+        let mut finding_query = sqlx::QueryBuilder::new(
+            "SELECT DISTINCT fe.finding_id FROM finding_evidence fe JOIN evidence e ON e.evidence_id=fe.evidence_id WHERE e.source_namespace=",
+        );
+        finding_query
+            .push_bind(source_namespace)
+            .push(" AND e.source_id IN (");
+        let mut separated = finding_query.separated(",");
+        for source_id in chunk {
+            separated.push_bind(source_id);
+        }
+        separated.push_unseparated(")");
+        for row in finding_query.build().fetch_all(&mut *tx).await? {
+            affected_findings.insert(row.get::<String, _>("finding_id"));
+        }
+
+        let mut update = sqlx::QueryBuilder::new(
+            "UPDATE evidence SET excerpt='',app=NULL,window=NULL,deleted=1 WHERE source_namespace=",
+        );
+        update
+            .push_bind(source_namespace)
+            .push(" AND source_id IN (");
+        let mut separated = update.separated(",");
+        for source_id in chunk {
+            separated.push_bind(source_id);
+        }
+        separated.push_unseparated(")");
+        forgotten_evidence += update.build().execute(&mut *tx).await?.rows_affected();
+        tx.commit().await?;
+    }
+
+    if !affected_findings.is_empty() {
+        let mut tx = pool.begin().await?;
+        for chunk in affected_findings.iter().collect::<Vec<_>>().chunks(400) {
+            let mut update =
+                sqlx::QueryBuilder::new("UPDATE findings SET active=0 WHERE finding_id IN (");
+            let mut separated = update.separated(",");
+            for finding_id in chunk {
+                separated.push_bind(*finding_id);
+            }
+            separated.push_unseparated(")");
+            update.build().execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        recompute_surface_status(pool).await?;
+    }
+
+    Ok((forgotten_evidence, affected_findings.len() as u64))
+}
+
 pub async fn admit_observation(pool: &SqlitePool, item: &ObservationRecord) -> Result<i64> {
     if item.evidence_ids.is_empty() {
         return Err(InsightsError::Invalid("observation has no evidence".into()));
@@ -430,8 +629,8 @@ pub async fn admit_observation(pool: &SqlitePool, item: &ObservationRecord) -> R
         return Ok(sequence);
     }
     let result = sqlx::query(
-        "INSERT INTO observations(observation_id,source_key,occurred_at,statement,certainty,evidence_ids_json,immutable_fingerprint)
-         VALUES(?1,?2,?3,?4,?5,?6,?7)",
+        "INSERT INTO observations(observation_id,source_key,occurred_at,statement,certainty,evidence_ids_json,immutable_fingerprint,admitted_at)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
     )
     .bind(&item.observation_id)
     .bind(&item.source_key)
@@ -440,6 +639,7 @@ pub async fn admit_observation(pool: &SqlitePool, item: &ObservationRecord) -> R
     .bind(certainty_str(item.certainty))
     .bind(serde_json::to_string(&item.evidence_ids)?)
     .bind(immutable)
+    .bind(Utc::now().to_rfc3339())
     .execute(&mut *tx)
     .await?;
     let sequence = result.last_insert_rowid();
@@ -633,9 +833,11 @@ async fn apply_explorer_output_inner(
     let mut seen_local = HashSet::new();
     let mut tx = pool.begin().await?;
     let mut accepted = Vec::new();
+    let accepted_at = Utc::now().to_rfc3339();
     for draft in &output.observations {
         if draft.statement.trim().is_empty()
             || draft.evidence_ids.is_empty()
+            || has_duplicates(&draft.evidence_ids)
             || !seen_local.insert(draft.local_id.clone())
         {
             return Err(InsightsError::Invalid(
@@ -675,11 +877,12 @@ async fn apply_explorer_output_inner(
             }
         } else {
             sqlx::query(
-                "INSERT INTO observations(observation_id,source_key,occurred_at,statement,certainty,evidence_ids_json,immutable_fingerprint)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                "INSERT INTO observations(observation_id,source_key,occurred_at,statement,certainty,evidence_ids_json,immutable_fingerprint,admitted_at)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
             ).bind(&observation_id).bind(&source_key).bind(&draft.occurred_at)
                 .bind(&draft.statement).bind(certainty_str(draft.certainty))
                 .bind(serde_json::to_string(&draft.evidence_ids)?).bind(immutable)
+                .bind(&accepted_at)
                 .execute(&mut *tx).await?;
         }
         accepted.push(observation_id);
@@ -706,7 +909,7 @@ async fn apply_explorer_output_inner(
         "UPDATE explorer_jobs SET status='accepted',accepted_at=?2,updated_at=?2 WHERE job_id=?1",
     )
     .bind(job_id)
-    .bind(Utc::now().to_rfc3339())
+    .bind(&accepted_at)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -922,7 +1125,7 @@ fn status_str(value: OpportunityStatus) -> &'static str {
     }
 }
 
-fn handoff_str(value: HandoffType) -> &'static str {
+pub(crate) fn handoff_str(value: HandoffType) -> &'static str {
     match value {
         HandoffType::Prompt => "prompt",
         HandoffType::SavedPrompt => "saved_prompt",
@@ -931,7 +1134,7 @@ fn handoff_str(value: HandoffType) -> &'static str {
     }
 }
 
-fn parse_handoff(value: &str) -> Result<HandoffType> {
+pub(crate) fn parse_handoff(value: &str) -> Result<HandoffType> {
     match value {
         "prompt" => Ok(HandoffType::Prompt),
         "saved_prompt" => Ok(HandoffType::SavedPrompt),
@@ -1062,6 +1265,11 @@ async fn apply_reconciliation_inner(
         ));
     }
     let expected = job_observation_ids(pool, job_id).await?;
+    if has_duplicates(&output.considered_observation_ids) {
+        return Err(InsightsError::Invalid(
+            "reconciliation repeats a considered observation".into(),
+        ));
+    }
     let expected_set: HashSet<_> = expected.iter().collect();
     let considered_set: HashSet<_> = output.considered_observation_ids.iter().collect();
     if expected.len() != output.considered_observation_ids.len() || expected_set != considered_set {
@@ -1150,6 +1358,13 @@ async fn apply_reconciliation_inner(
                     "occurrence has empty evidence".into(),
                 ));
             }
+            if has_duplicates(&occurrence.observation_ids)
+                || has_duplicates(&occurrence.evidence_ids)
+            {
+                return Err(InsightsError::Invalid(
+                    "occurrence repeats an observation or evidence reference".into(),
+                ));
+            }
             if occurrence
                 .observation_ids
                 .iter()
@@ -1236,7 +1451,8 @@ async fn apply_reconciliation_inner(
             if handoff.kind == HandoffType::ExistingCapability {
                 if let Some(capability_id) = &handoff.capability_id {
                     sqlx::query_scalar::<_, i64>(
-                        "SELECT COUNT(*) FROM capabilities WHERE capability_id=?1",
+                        "SELECT COUNT(*) FROM capabilities WHERE capability_id=?1
+                         AND action_kind IS NOT NULL AND action_target IS NOT NULL",
                     )
                     .bind(capability_id)
                     .fetch_one(&mut *tx)
@@ -1317,6 +1533,7 @@ async fn apply_reconciliation_inner(
                 ));
             }
             if finding.evidence_ids.is_empty()
+                || has_duplicates(&finding.evidence_ids)
                 || finding
                     .evidence_ids
                     .iter()
@@ -1347,7 +1564,11 @@ async fn apply_reconciliation_inner(
                 .await?;
             let finding_id = stable_id("wff", &(&opportunity_id, &version_id, finding, handoff))?;
             sqlx::query(
-                "INSERT INTO findings VALUES(?1,?2,?3,1,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+                "INSERT INTO findings(
+                   finding_id,opportunity_id,version_id,active,construct,label,claim,
+                   why_worth_fixing,handoff_type,handoff_title,handoff_preview,handoff_body,
+                   occurrence_count,cadence,rank_score,rank_vector_json,created_at)
+                 VALUES(?1,?2,?3,1,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
             )
             .bind(&finding_id)
             .bind(&opportunity_id)
@@ -1362,7 +1583,8 @@ async fn apply_reconciliation_inner(
             .bind(&finding.why_worth_fixing)
             .bind(handoff_str(handoff.kind))
             .bind(&handoff.title)
-            .bind(&handoff.preview)
+            .bind(handoff_preview(&handoff.body))
+            .bind(&handoff.body)
             .bind(occurrence_count as i64)
             .bind(cadence_str(proposal.cadence))
             .bind(rank_score)
@@ -1480,18 +1702,57 @@ async fn active_candidates(pool: &SqlitePool) -> Result<Vec<FindingCandidate>> {
         .collect()
 }
 
-pub async fn recompute_surface_status(pool: &SqlitePool) -> Result<()> {
-    let candidates = active_candidates(pool).await?;
+async fn active_candidates_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+) -> Result<Vec<FindingCandidate>> {
+    let rows = sqlx::query(
+        "SELECT f.*,
+          NOT EXISTS(SELECT 1 FROM finding_evidence fe JOIN evidence e ON e.evidence_id=fe.evidence_id
+            WHERE fe.finding_id=f.finding_id AND
+            (NOT e.policy_allowed OR NOT e.redaction_ready OR e.deleted OR e.sensitive)) evidence_available
+         FROM findings f WHERE f.active=1 ORDER BY f.finding_id",
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let construct = parse_construct(row.get("construct"))?;
+            let cadence = parse_cadence(row.get("cadence"))?;
+            Ok(FindingCandidate {
+                card: WorthFixingCard {
+                    finding_id: row.get("finding_id"),
+                    label: row.get("label"),
+                    claim: row.get("claim"),
+                    why_worth_fixing: row.get("why_worth_fixing"),
+                    handoff_type: parse_handoff(row.get("handoff_type"))?,
+                    handoff_title: row.get("handoff_title"),
+                    handoff_preview: row.get("handoff_preview"),
+                    occurrence_count: row.get::<i64, _>("occurrence_count") as u32,
+                    cadence,
+                    evidence_available: row.get::<bool, _>("evidence_available"),
+                },
+                construct,
+                rank_score: row.get::<i64, _>("rank_score") as i32,
+                rank_vector: serde_json::from_str(row.get("rank_vector_json"))?,
+                active: row.get("active"),
+            })
+        })
+        .collect()
+}
+
+pub(crate) async fn recompute_surface_status_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+) -> Result<()> {
+    let candidates = active_candidates_tx(tx).await?;
     let selected: HashSet<String> = select_top(candidates, 5)
         .into_iter()
         .map(|candidate| candidate.card.finding_id)
         .collect();
-    let mut tx = pool.begin().await?;
     sqlx::query(
         "UPDATE opportunities SET current_status='eligible'
          WHERE current_status='surfaced'",
     )
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
     for finding_id in selected {
         sqlx::query(
@@ -1499,9 +1760,15 @@ pub async fn recompute_surface_status(pool: &SqlitePool) -> Result<()> {
              (SELECT opportunity_id FROM findings WHERE finding_id=?1)",
         )
         .bind(finding_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
+    Ok(())
+}
+
+pub async fn recompute_surface_status(pool: &SqlitePool) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    recompute_surface_status_tx(&mut tx).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -1619,6 +1886,19 @@ pub async fn worth_fixing_summary(
     )
     .fetch_one(pool)
     .await? as u32;
+    let has_generated_finding =
+        sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM findings)")
+            .fetch_one(pool)
+            .await?
+            != 0;
+    let observation_span_hours = sqlx::query_scalar::<_, f64>(
+        "SELECT COALESCE(MAX(julianday(occurred_at)) - MIN(julianday(occurred_at)), 0) * 24
+         FROM observations",
+    )
+    .fetch_one(pool)
+    .await?;
+    let manual_refresh_ready = has_generated_finding
+        || observation_span_hours >= MANUAL_REFRESH_MIN_OBSERVATION_SPAN_HOURS;
     let processing = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM inference_jobs WHERE status IN ('pending','running')",
     )
@@ -1643,6 +1923,7 @@ pub async fn worth_fixing_summary(
         eligible_count,
         watching_count,
         pending_observation_count,
+        manual_refresh_ready,
         processing,
         stale_evidence_count,
         provider_ready,
@@ -1788,27 +2069,62 @@ pub async fn set_enhanced_diagnostics(pool: &SqlitePool, enabled: bool) -> Resul
     Ok(())
 }
 
+/// Clears all user-derived Worth Fixing and Ready-to-use content while keeping
+/// the migrated schema usable. This is the insights side of the app-wide
+/// delete-everything operation.
+pub async fn delete_all_insights_data(pool: &SqlitePool) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    for table in [
+        "artifact_change_attempts",
+        "artifact_versions",
+        "artifact_change_jobs",
+        "artifact_events",
+        "artifacts",
+        "dispositions",
+        "finding_evidence",
+        "findings",
+        "occurrences",
+        "opportunity_versions",
+        "opportunities",
+        "reconciliations",
+        "job_attempts",
+        "job_observations",
+        "inference_jobs",
+        "explorer_attempts",
+        "explorer_jobs",
+        "observations",
+        "evidence",
+        "capabilities",
+        "wake_starts",
+        "capture_cursors",
+        "compaction_checkpoints",
+        "insights_cursor",
+    ] {
+        sqlx::query(&format!("DELETE FROM {table}"))
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("DELETE FROM insights_metadata WHERE key!='schema_version'")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO insights_cursor(stream,last_observation_sequence,updated_at)
+         VALUES('explorer',0,?1)",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 pub async fn record_wake_start(
     pool: &SqlitePool,
     local_day: &str,
     reason: &str,
     normal: bool,
-    max_normal_wakes: u8,
 ) -> Result<String> {
     let mut tx = pool.begin().await?;
-    if normal {
-        let count = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM wake_starts WHERE local_day=?1 AND normal=1",
-        )
-        .bind(local_day)
-        .fetch_one(&mut *tx)
-        .await?;
-        if count >= max_normal_wakes as i64 {
-            return Err(InsightsError::Invalid(
-                "daily Steward wake limit reached".into(),
-            ));
-        }
-    }
     let now = Utc::now().to_rfc3339();
     let wake_id = stable_id("wfw", &(local_day, reason, normal, &now))?;
     sqlx::query("INSERT INTO wake_starts VALUES(?1,?2,?3,?4,?5)")
@@ -1888,7 +2204,7 @@ pub async fn finding_evidence(
         .collect())
 }
 
-fn disposition_str(value: DispositionKind) -> &'static str {
+pub(crate) fn disposition_str(value: DispositionKind) -> &'static str {
     match value {
         DispositionKind::Accepted => "accepted",
         DispositionKind::Saved => "saved",
@@ -1954,8 +2270,8 @@ pub async fn record_disposition(
     .bind(&now)
     .execute(&mut *tx)
     .await?;
+    recompute_surface_status_tx(&mut tx).await?;
     tx.commit().await?;
-    recompute_surface_status(pool).await?;
     Ok(disposition_id)
 }
 
@@ -1980,6 +2296,75 @@ pub async fn pending_observations(pool: &SqlitePool, limit: u32) -> Result<Vec<O
             })
         })
         .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingObservationStats {
+    pub count: usize,
+    pub episode_groups: usize,
+    pub oldest_admitted_at: Option<String>,
+}
+
+/// Scheduling metadata for observations not yet owned by a Steward job.
+/// Admission time controls queue latency; activity time is used only to
+/// estimate distinct ten-minute work episodes. Historical backfill therefore
+/// cannot look overdue the instant Explorer admits it.
+pub async fn pending_observation_stats(pool: &SqlitePool) -> Result<PendingObservationStats> {
+    let rows = sqlx::query(
+        "SELECT o.occurred_at,o.admitted_at FROM observations o WHERE NOT EXISTS
+         (SELECT 1 FROM job_observations j WHERE j.observation_id=o.observation_id)",
+    )
+    .fetch_all(pool)
+    .await?;
+    let count = rows.len();
+    let oldest_admitted_at = rows
+        .iter()
+        .filter_map(|row| row.get::<Option<String>, _>("admitted_at"))
+        .min();
+    let mut occurred = rows
+        .iter()
+        .filter_map(|row| {
+            DateTime::parse_from_rfc3339(row.get::<String, _>("occurred_at").as_str())
+                .ok()
+                .map(|value| value.with_timezone(&Utc))
+        })
+        .collect::<Vec<_>>();
+    occurred.sort_unstable();
+    let episode_groups = if count == 0 {
+        0
+    } else if occurred.is_empty() {
+        1
+    } else {
+        1 + occurred
+            .windows(2)
+            .filter(|pair| (pair[1] - pair[0]).num_minutes() >= 10)
+            .count()
+    };
+    Ok(PendingObservationStats {
+        count,
+        episode_groups,
+        oldest_admitted_at,
+    })
+}
+
+pub async fn last_successful_steward_wake_at(pool: &SqlitePool) -> Result<Option<String>> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT accepted_at FROM inference_jobs WHERE status='accepted'
+         ORDER BY accepted_at DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?)
+}
+
+pub async fn wake_reason_started(pool: &SqlitePool, local_day: &str, reason: &str) -> Result<bool> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT EXISTS(SELECT 1 FROM wake_starts WHERE local_day=?1 AND reason=?2)",
+    )
+    .bind(local_day)
+    .bind(reason)
+    .fetch_one(pool)
+    .await?
+        != 0)
 }
 
 pub async fn watching_opportunity_count(pool: &SqlitePool) -> Result<u32> {
@@ -2065,13 +2450,59 @@ pub async fn register_capability(
         }
         return Ok(());
     }
-    sqlx::query("INSERT INTO capabilities VALUES(?1,?2,?3,?4)")
-        .bind(capability_id)
-        .bind(app)
-        .bind(description)
-        .bind(immutable)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "INSERT INTO capabilities(
+          capability_id,app,description,immutable_fingerprint,action_kind,action_target)
+         VALUES(?1,?2,?3,?4,NULL,NULL)",
+    )
+    .bind(capability_id)
+    .bind(app)
+    .bind(description)
+    .bind(immutable)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn register_actionable_capability(
+    pool: &SqlitePool,
+    capability_id: &str,
+    app: &str,
+    description: &str,
+    action_target: &str,
+) -> Result<()> {
+    if !action_target.starts_with("https://")
+        || action_target.chars().count() > 2_048
+        || action_target.chars().any(char::is_control)
+    {
+        return Err(InsightsError::Invalid(
+            "capability action target must be a bounded HTTPS URL".into(),
+        ));
+    }
+    let immutable = fingerprint(&(app, description, "https_url", action_target))?;
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT immutable_fingerprint FROM capabilities WHERE capability_id=?1")
+            .bind(capability_id)
+            .fetch_optional(pool)
+            .await?;
+    if let Some(existing) = existing {
+        if existing != immutable {
+            return Err(InsightsError::IdentityCollision(capability_id.into()));
+        }
+        return Ok(());
+    }
+    sqlx::query(
+        "INSERT INTO capabilities(
+          capability_id,app,description,immutable_fingerprint,action_kind,action_target)
+         VALUES(?1,?2,?3,?4,'https_url',?5)",
+    )
+    .bind(capability_id)
+    .bind(app)
+    .bind(description)
+    .bind(immutable)
+    .bind(action_target)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -2106,6 +2537,35 @@ mod tests {
             deleted: false,
             sensitive: false,
         }
+    }
+
+    #[tokio::test]
+    async fn forgetting_capture_evidence_scrubs_retained_content() {
+        let (_directory, pool) = setup().await;
+        let mut record = evidence(1);
+        record.source_namespace = "local-capture".into();
+        record.app = Some("Mail".into());
+        record.window = Some("Private subject".into());
+        record.excerpt = "Private message body".into();
+        upsert_evidence(&pool, &record).await.unwrap();
+
+        let (forgotten, findings) =
+            forget_capture_evidence(&pool, "local-capture", &["frame:1".to_string()])
+                .await
+                .unwrap();
+
+        assert_eq!(forgotten, 1);
+        assert_eq!(findings, 0);
+        let row = sqlx::query(
+            "SELECT excerpt,app,window,deleted FROM evidence WHERE source_namespace='local-capture' AND source_id='frame:1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<String, _>("excerpt"), "");
+        assert_eq!(row.get::<Option<String>, _>("app"), None);
+        assert_eq!(row.get::<Option<String>, _>("window"), None);
+        assert_eq!(row.get::<i64, _>("deleted"), 1);
     }
 
     fn observation(index: usize) -> ObservationRecord {
@@ -2147,7 +2607,7 @@ mod tests {
             handoff: Some(Handoff {
                 kind: HandoffType::Prompt,
                 title: "Prepare the report".into(),
-                preview: "Turn the supplied material into the expected report.".into(),
+                body: "Turn the supplied material into the expected report.".into(),
                 capability_id: None,
             }),
             automation_potential: false,
@@ -2281,6 +2741,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manual_refresh_waits_for_three_hours_of_explorer_observations() {
+        let (_directory, pool) = setup().await;
+        upsert_evidence(&pool, &evidence(1)).await.unwrap();
+        let mut first = observation(1);
+        first.occurred_at = "2026-01-01T09:00:00Z".into();
+        admit_observation(&pool, &first).await.unwrap();
+        assert!(
+            !worth_fixing_summary(&pool, true)
+                .await
+                .unwrap()
+                .manual_refresh_ready
+        );
+
+        upsert_evidence(&pool, &evidence(2)).await.unwrap();
+        let mut second = observation(2);
+        second.occurred_at = "2026-01-01T11:59:00Z".into();
+        admit_observation(&pool, &second).await.unwrap();
+        assert!(
+            !worth_fixing_summary(&pool, true)
+                .await
+                .unwrap()
+                .manual_refresh_ready
+        );
+
+        upsert_evidence(&pool, &evidence(3)).await.unwrap();
+        let mut third = observation(3);
+        third.occurred_at = "2026-01-01T12:00:00Z".into();
+        admit_observation(&pool, &third).await.unwrap();
+        assert!(
+            worth_fixing_summary(&pool, true)
+                .await
+                .unwrap()
+                .manual_refresh_ready
+        );
+    }
+
+    #[tokio::test]
     async fn admission_rejects_policy_barred_evidence_and_withdraws_deleted_cards() {
         let (_directory, pool) = setup().await;
         let mut barred = evidence(1);
@@ -2305,21 +2802,14 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(
-            worth_fixing_summary(&pool, true)
-                .await
-                .unwrap()
-                .selected
-                .len(),
-            1
-        );
+        let generated = worth_fixing_summary(&pool, true).await.unwrap();
+        assert_eq!(generated.selected.len(), 1);
+        assert!(generated.manual_refresh_ready);
         barred.deleted = true;
         upsert_evidence(&pool, &barred).await.unwrap();
-        assert!(worth_fixing_summary(&pool, true)
-            .await
-            .unwrap()
-            .selected
-            .is_empty());
+        let withdrawn = worth_fixing_summary(&pool, true).await.unwrap();
+        assert!(withdrawn.selected.is_empty());
+        assert!(withdrawn.manual_refresh_ready);
     }
 
     #[tokio::test]
@@ -2333,6 +2823,36 @@ mod tests {
             upsert_evidence(&pool, &changed).await,
             Err(InsightsError::IdentityCollision(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn capability_catalog_allows_only_bounded_https_targets() {
+        let (_directory, pool) = setup().await;
+        assert!(register_actionable_capability(
+            &pool,
+            "cap_safe",
+            "Editor",
+            "Open documentation",
+            "https://example.com/docs"
+        )
+        .await
+        .is_ok());
+        for target in [
+            "http://example.com",
+            "file:///tmp/private",
+            "javascript:alert(1)",
+            "https://example.com/\nunsafe",
+        ] {
+            assert!(register_actionable_capability(
+                &pool,
+                &format!("cap_{}", target.len()),
+                "Editor",
+                "Unsafe",
+                target
+            )
+            .await
+            .is_err());
+        }
     }
 
     #[tokio::test]
@@ -2401,6 +2921,151 @@ mod tests {
             reopened,
             Err(InsightsError::UnsupportedSchema(999))
         ));
+    }
+
+    #[tokio::test]
+    async fn schema_one_database_migrates_to_artifacts_without_losing_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("schema-one.sqlite");
+        let options = SqliteConnectOptions::from_str(path.to_string_lossy().as_ref())
+            .unwrap()
+            .create_if_missing(true);
+        let legacy = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE insights_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+             CREATE TABLE insights_schema_migrations(version INTEGER PRIMARY KEY,applied_at TEXT NOT NULL);
+             CREATE TABLE capabilities(capability_id TEXT PRIMARY KEY,app TEXT NOT NULL,
+               description TEXT NOT NULL,immutable_fingerprint TEXT NOT NULL);",
+        )
+        .execute(&legacy)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO insights_metadata VALUES('schema_version','1')")
+            .execute(&legacy)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO insights_schema_migrations VALUES(1,'2026-01-01T00:00:00Z')")
+            .execute(&legacy)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO capabilities VALUES('cap_legacy','Editor','Legacy tool','hash')")
+            .execute(&legacy)
+            .await
+            .unwrap();
+        legacy.close().await;
+
+        let migrated = open_insights_database(&path).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT description FROM capabilities WHERE capability_id='cap_legacy'"
+            )
+            .fetch_one(&migrated)
+            .await
+            .unwrap(),
+            "Legacy tool"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT value FROM insights_metadata WHERE key='schema_version'"
+            )
+            .fetch_one(&migrated)
+            .await
+            .unwrap(),
+            "3"
+        );
+        for table in [
+            "artifacts",
+            "artifact_versions",
+            "artifact_events",
+            "artifact_change_jobs",
+            "artifact_change_attempts",
+        ] {
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1"
+                )
+                .bind(table)
+                .fetch_one(&migrated)
+                .await
+                .unwrap(),
+                1
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn schema_two_backfills_observation_admission_time_from_explorer_receipt() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("schema-two.sqlite");
+        let options = SqliteConnectOptions::from_str(path.to_string_lossy().as_ref())
+            .unwrap()
+            .create_if_missing(true);
+        let legacy = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE insights_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+             CREATE TABLE insights_schema_migrations(version INTEGER PRIMARY KEY,applied_at TEXT NOT NULL);
+             CREATE TABLE observations(
+               sequence INTEGER PRIMARY KEY AUTOINCREMENT,observation_id TEXT NOT NULL UNIQUE,
+               source_key TEXT NOT NULL UNIQUE,occurred_at TEXT NOT NULL,statement TEXT NOT NULL,
+               certainty TEXT NOT NULL,evidence_ids_json TEXT NOT NULL,immutable_fingerprint TEXT NOT NULL);
+             CREATE TABLE explorer_jobs(
+               job_id TEXT PRIMARY KEY,batch_id TEXT NOT NULL UNIQUE,input_fingerprint TEXT NOT NULL UNIQUE,
+               status TEXT NOT NULL,input_json TEXT NOT NULL,prompt_hash TEXT NOT NULL,schema_hash TEXT NOT NULL,
+               model TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,error_code TEXT,
+               created_at TEXT NOT NULL,updated_at TEXT NOT NULL,accepted_at TEXT);",
+        )
+        .execute(&legacy)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO insights_metadata VALUES('schema_version','2')")
+            .execute(&legacy)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO insights_schema_migrations VALUES(1,'2026-01-01T00:00:00Z'),(2,'2026-01-02T00:00:00Z')")
+            .execute(&legacy).await.unwrap();
+        sqlx::query(
+            "INSERT INTO explorer_jobs VALUES(
+              'job','capture-f1','fingerprint','accepted','{}','prompt','schema','mock',1,NULL,
+              '2026-01-03T09:00:00Z','2026-01-03T09:05:00Z','2026-01-03T09:05:00Z')",
+        )
+        .execute(&legacy)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO observations VALUES(
+              1,'observation','capture-f1:obs-1','2025-12-01T08:00:00Z','work happened',
+              'explicit','[]','immutable')",
+        )
+        .execute(&legacy)
+        .await
+        .unwrap();
+        legacy.close().await;
+
+        let migrated = open_insights_database(&path).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT admitted_at FROM observations WHERE observation_id='observation'"
+            )
+            .fetch_one(&migrated)
+            .await
+            .unwrap(),
+            "2026-01-03T09:05:00Z"
+        );
+        let stats = pending_observation_stats(&migrated).await.unwrap();
+        assert_eq!(stats.count, 1);
+        assert_eq!(stats.episode_groups, 1);
+        assert_eq!(
+            stats.oldest_admitted_at.as_deref(),
+            Some("2026-01-03T09:05:00Z")
+        );
     }
 
     #[tokio::test]
@@ -2519,21 +3184,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn daily_wake_starts_are_durable_and_capped_at_four() {
+    async fn wake_starts_are_durable_without_a_product_daily_cap() {
         let (_directory, pool) = setup().await;
-        for index in 0..4 {
-            record_wake_start(&pool, "2026-01-01", &format!("threshold-{index}"), true, 4)
+        for index in 0..6 {
+            record_wake_start(&pool, "2026-01-01", &format!("threshold-{index}"), true)
                 .await
                 .unwrap();
         }
-        assert_eq!(normal_wakes_started(&pool, "2026-01-01").await.unwrap(), 4);
-        assert!(record_wake_start(&pool, "2026-01-01", "fifth", true, 4)
+        assert_eq!(normal_wakes_started(&pool, "2026-01-01").await.unwrap(), 6);
+        assert!(wake_reason_started(&pool, "2026-01-01", "threshold-5")
             .await
-            .is_err());
-        record_wake_start(&pool, "2026-01-01", "recovery", false, 4)
+            .unwrap());
+        record_wake_start(&pool, "2026-01-01", "recovery", false)
             .await
             .unwrap();
-        assert_eq!(normal_wakes_started(&pool, "2026-01-01").await.unwrap(), 4);
+        assert_eq!(normal_wakes_started(&pool, "2026-01-01").await.unwrap(), 6);
     }
 
     #[tokio::test]

@@ -2,9 +2,9 @@ use chrono::{DateTime, NaiveDate, Utc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WakeReason {
-    ObservationThreshold,
-    ThresholdCrossing,
-    ActivePeriodEnded,
+    ObservationVolume,
+    ObservationBurst,
+    PendingDeadline,
     ExplicitRequest,
     EndOfDay,
     Recovery,
@@ -12,12 +12,11 @@ pub enum WakeReason {
 
 #[derive(Debug, Clone)]
 pub struct WakeState {
-    pub local_day: NaiveDate,
-    pub normal_wakes_started: u8,
     pub pending_observations: usize,
+    pub pending_episode_groups: usize,
+    pub minutes_since_last_successful_wake: i64,
+    pub oldest_pending_minutes: i64,
     pub job_running: bool,
-    pub threshold_crossing: bool,
-    pub active_period_ended: bool,
     pub explicit_request: bool,
     pub end_of_active_day: bool,
     pub recovery_pending: bool,
@@ -25,17 +24,35 @@ pub struct WakeState {
     pub resource_permitted: bool,
 }
 
+/// Adaptive Steward batching policy.
+///
+/// This deliberately uses evidence volume plus elapsed queue time instead of a
+/// fixed daily wake allowance. A normal wake waits for a useful batch; a burst
+/// drains pressure sooner; and the deadline prevents sparse work from waiting
+/// indefinitely. Explicit requests, one end-of-day flush, and crash recovery
+/// bypass batching thresholds. Provider cache state is never part of the
+/// decision: durable observations and memory remain the source of truth.
 #[derive(Debug, Clone, Copy)]
 pub struct WakePolicy {
     pub observation_threshold: usize,
-    pub max_normal_wakes_per_day: u8,
+    pub episode_group_threshold: usize,
+    pub normal_interval_minutes: i64,
+    pub burst_observation_threshold: usize,
+    pub burst_interval_minutes: i64,
+    pub deadline_observation_threshold: usize,
+    pub max_pending_minutes: i64,
 }
 
 impl Default for WakePolicy {
     fn default() -> Self {
         Self {
-            observation_threshold: 15,
-            max_normal_wakes_per_day: 4,
+            observation_threshold: 12,
+            episode_group_threshold: 2,
+            normal_interval_minutes: 30,
+            burst_observation_threshold: 40,
+            burst_interval_minutes: 10,
+            deadline_observation_threshold: 3,
+            max_pending_minutes: 90,
         }
     }
 }
@@ -51,26 +68,30 @@ impl WakePolicy {
         if !state.provider_ready || !state.resource_permitted {
             return None;
         }
-        if state.pending_observations == 0 && !state.explicit_request {
-            return None;
-        }
-        if state.normal_wakes_started >= self.max_normal_wakes_per_day {
+        if state.pending_observations == 0 {
             return None;
         }
         if state.explicit_request {
             return Some(WakeReason::ExplicitRequest);
         }
-        if state.threshold_crossing {
-            return Some(WakeReason::ThresholdCrossing);
-        }
-        if state.pending_observations >= self.observation_threshold {
-            return Some(WakeReason::ObservationThreshold);
-        }
-        if state.active_period_ended {
-            return Some(WakeReason::ActivePeriodEnded);
-        }
-        if state.end_of_active_day && state.normal_wakes_started == 0 {
+        if state.end_of_active_day {
             return Some(WakeReason::EndOfDay);
+        }
+        if state.pending_observations >= self.burst_observation_threshold
+            && state.minutes_since_last_successful_wake >= self.burst_interval_minutes
+        {
+            return Some(WakeReason::ObservationBurst);
+        }
+        if state.pending_observations >= self.deadline_observation_threshold
+            && state.oldest_pending_minutes >= self.max_pending_minutes
+        {
+            return Some(WakeReason::PendingDeadline);
+        }
+        if state.pending_observations >= self.observation_threshold
+            && state.pending_episode_groups >= self.episode_group_threshold
+            && state.minutes_since_last_successful_wake >= self.normal_interval_minutes
+        {
+            return Some(WakeReason::ObservationVolume);
         }
         None
     }
@@ -86,12 +107,11 @@ mod tests {
 
     fn state() -> WakeState {
         WakeState {
-            local_day: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-            normal_wakes_started: 0,
-            pending_observations: 15,
+            pending_observations: 12,
+            pending_episode_groups: 2,
+            minutes_since_last_successful_wake: 30,
+            oldest_pending_minutes: 30,
             job_running: false,
-            threshold_crossing: false,
-            active_period_ended: false,
             explicit_request: false,
             end_of_active_day: false,
             recovery_pending: false,
@@ -101,31 +121,63 @@ mod tests {
     }
 
     #[test]
-    fn coalesces_while_a_job_is_running_and_caps_normal_wakes() {
+    fn coalesces_until_volume_context_and_interval_are_ready() {
         let policy = WakePolicy::default();
         let mut value = state();
-        value.job_running = true;
+        assert_eq!(policy.decide(&value), Some(WakeReason::ObservationVolume));
+        value.pending_observations = 11;
         assert_eq!(policy.decide(&value), None);
-        value.job_running = false;
-        value.normal_wakes_started = 4;
+        value.pending_observations = 12;
+        value.pending_episode_groups = 1;
+        assert_eq!(policy.decide(&value), None);
+        value.pending_episode_groups = 2;
+        value.minutes_since_last_successful_wake = 29;
         assert_eq!(policy.decide(&value), None);
     }
 
     #[test]
-    fn recovery_does_not_consume_a_normal_wake() {
+    fn burst_and_deadline_bound_latency_without_a_daily_cap() {
         let policy = WakePolicy::default();
         let mut value = state();
-        value.normal_wakes_started = 4;
+        value.pending_observations = 40;
+        value.pending_episode_groups = 1;
+        value.minutes_since_last_successful_wake = 10;
+        assert_eq!(policy.decide(&value), Some(WakeReason::ObservationBurst));
+
+        value.pending_observations = 3;
+        value.minutes_since_last_successful_wake = 5;
+        value.oldest_pending_minutes = 90;
+        assert_eq!(policy.decide(&value), Some(WakeReason::PendingDeadline));
+    }
+
+    #[test]
+    fn explicit_end_of_day_and_recovery_bypass_batching_thresholds() {
+        let policy = WakePolicy::default();
+        let mut value = state();
+        value.pending_observations = 1;
+        value.pending_episode_groups = 1;
+        value.minutes_since_last_successful_wake = 0;
+
+        value.explicit_request = true;
+        assert_eq!(policy.decide(&value), Some(WakeReason::ExplicitRequest));
+        value.explicit_request = false;
+        value.end_of_active_day = true;
+        assert_eq!(policy.decide(&value), Some(WakeReason::EndOfDay));
+        value.end_of_active_day = false;
         value.recovery_pending = true;
+        value.provider_ready = false;
         assert_eq!(policy.decide(&value), Some(WakeReason::Recovery));
     }
 
     #[test]
-    fn provider_pressure_postpones_without_consuming_pending_work() {
+    fn provider_pressure_and_in_flight_work_preserve_the_queue() {
         let policy = WakePolicy::default();
         let mut value = state();
         value.provider_ready = false;
         assert_eq!(policy.decide(&value), None);
-        assert_eq!(value.pending_observations, 15);
+        assert_eq!(value.pending_observations, 12);
+        value.provider_ready = true;
+        value.job_running = true;
+        assert_eq!(policy.decide(&value), None);
     }
 }

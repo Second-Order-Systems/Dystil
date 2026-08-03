@@ -146,7 +146,8 @@ pub struct OccurrenceDelta {
 pub struct Handoff {
     pub kind: HandoffType,
     pub title: String,
-    pub preview: String,
+    /// Complete, bounded artifact content. A preview is derived by the kernel.
+    pub body: String,
     pub capability_id: Option<String>,
 }
 
@@ -231,6 +232,7 @@ pub struct WorthFixingSummary {
     pub eligible_count: u32,
     pub watching_count: u32,
     pub pending_observation_count: u32,
+    pub manual_refresh_ready: bool,
     pub processing: bool,
     pub stale_evidence_count: u32,
     pub provider_ready: bool,
@@ -252,4 +254,90 @@ pub struct WorthFixingEvidenceLine {
 pub struct FindingPage {
     pub items: Vec<WorthFixingCard>,
     pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadyArtifactAction {
+    Copy,
+    Open,
+    Share,
+    ShowHow,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadyArtifactCard {
+    pub artifact_id: String,
+    pub title: String,
+    pub kind: HandoffType,
+    pub description: String,
+    pub last_used_at: Option<String>,
+    pub primary_action: ReadyArtifactAction,
+    pub secondary_action: ReadyArtifactAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactPage {
+    pub items: Vec<ReadyArtifactCard>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactChangeSummary {
+    pub request: String,
+    pub changed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadyArtifactDetail {
+    pub card: ReadyArtifactCard,
+    pub body: String,
+    pub kept_at: String,
+    pub change_count: u32,
+    pub changes: Vec<ArtifactChangeSummary>,
+    pub provenance_available: bool,
+    pub provenance_label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KeepFindingResult {
+    pub artifact: ReadyArtifactCard,
+    pub summary: WorthFixingSummary,
+    pub already_kept: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadyArtifactUseResult {
+    pub artifact_id: String,
+    pub last_used_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadyArtifactMutationResult {
+    pub artifact_id: String,
+    pub revision: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactChangePreview {
+    pub change_job_id: String,
+    pub artifact_id: String,
+    pub title: String,
+    pub body: String,
+    pub changed_line_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArtifactChangeOutput {
+    pub schema_version: u32,
+    pub title: String,
+    pub body: String,
 }
