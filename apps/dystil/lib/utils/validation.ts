@@ -49,6 +49,8 @@ export const settingsStoreSchema = z.object({
   usePiiRemoval: z.boolean(),
   devMode: z.boolean(),
   autoStartEnabled: z.boolean(),
+  capturePaused: z.boolean().optional(),
+  capturePauseUntil: z.string().datetime().nullable().optional(),
   platform: z.string(),
   
   // Shortcuts
