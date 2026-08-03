@@ -17,4 +17,6 @@ pub struct DystilCaptureConfig {
     pub prioritize_input_latency: bool,
     pub extraction_thread_priority: String,
     pub pause_extraction_on_input_ms: u64,
+    /// Opt-in local model pass that strengthens deterministic text redaction.
+    pub async_pii_redaction: bool,
 }

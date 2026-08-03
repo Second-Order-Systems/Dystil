@@ -587,6 +587,14 @@ async externalMcpAdd(client: string) : Promise<Result<ExternalMcpSetupView, stri
 async focusExistingWindow() : Promise<void> {
     await TAURI_INVOKE("focus_existing_window");
 },
+async getAiPiiRedactionSettings() : Promise<Result<AiPiiRedactionSettingsView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_ai_pii_redaction_settings") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Return the macOS bundle identifier of the running app
  * (e.g. `dystil`, `dystil.beta`, `dystil.dev`). The onboarding stuck-screen
@@ -1206,6 +1214,20 @@ async saveWorthFixingFinding(findingId: string) : Promise<Result<KeepFindingResu
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Persist the explicit AI PII choice. Enabling first downloads and verifies
+ * the local model while capture continues with deterministic redaction. Only
+ * after that succeeds do we restart the short-lived capture session so the
+ * model worker begins processing pending rows.
+ */
+async setAiPiiRedactionEnabled(enabled: boolean) : Promise<Result<AiPiiRedactionSettingsView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_ai_pii_redaction_enabled", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async setAppAutoUpdate(enabled: boolean) : Promise<Result<AppUpdateSettingsView, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_app_auto_update", { enabled }) };
@@ -1509,6 +1531,7 @@ async writeBrowserLogs(entries: BrowserLogEntry[]) : Promise<void> {
 export type AgentEvidenceView = { label: string; localDate: string }
 export type AgentMessageView = { messageId: string; conversationId: string; peerUserId: string; direction: string; kind: string; localStatus: string; text: string; evidence: AgentEvidenceView[]; createdAt: string }
 export type AgentPeerView = { userId: string; displayName: string | null; email: string; agentStatus: string }
+export type AiPiiRedactionSettingsView = { enabled: boolean; modelDownloaded: boolean }
 export type AiPresetModelsView = { models: string[]; detail: string }
 export type AiPresetView = { id: string; name: string; providerKind: string; endpoint: string | null; model: string; active: boolean; credentialPresent: boolean; validationStatus: string; validationMessage: string | null; validatedAt: string | null }
 export type AiProviderModelView = { id: string; displayName: string; description: string; isDefault: boolean }

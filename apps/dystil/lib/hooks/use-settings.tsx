@@ -307,7 +307,7 @@ let DEFAULT_SETTINGS: Settings = {
   ocrEngine: "default",
   monitorIds: ["default"],
   usePiiRemoval: true,
-  asyncPiiRedaction: true,
+  asyncPiiRedaction: false,
   piiBackend: "local",
   piiRedactionLabels: ["secret"],
   port: 3030,

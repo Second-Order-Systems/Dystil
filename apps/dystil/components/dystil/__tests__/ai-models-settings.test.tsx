@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   aiProviderStatus: vi.fn(),
   aiPresetDiscoverModels: vi.fn(),
   aiPresetActivateManaged: vi.fn(),
+  getAiPiiRedactionSettings: vi.fn(),
+  setAiPiiRedactionEnabled: vi.fn(),
   toast: vi.fn(),
 }));
 
@@ -25,6 +27,8 @@ vi.mock("@/lib/utils/tauri", () => ({
     aiProviderStatus: (...args: unknown[]) => mocks.aiProviderStatus(...args),
     aiPresetDiscoverModels: (...args: unknown[]) => mocks.aiPresetDiscoverModels(...args),
     aiPresetActivateManaged: (...args: unknown[]) => mocks.aiPresetActivateManaged(...args),
+    getAiPiiRedactionSettings: (...args: unknown[]) => mocks.getAiPiiRedactionSettings(...args),
+    setAiPiiRedactionEnabled: (...args: unknown[]) => mocks.setAiPiiRedactionEnabled(...args),
   },
 }));
 
@@ -48,6 +52,8 @@ describe("AI models settings", () => {
     mocks.aiProviderStatus.mockImplementation(async (provider: string) => ({ status: "ok", data: { provider, state: "ready", authenticated: true, installedVersion: "1", detail: null } }));
     mocks.aiPresetDiscoverModels.mockResolvedValue({ status: "ok", data: { models: ["qwen3:8b"], detail: "Found 1 model." } });
     mocks.aiPresetActivateManaged.mockResolvedValue({ status: "ok", data: managedPreset });
+    mocks.getAiPiiRedactionSettings.mockResolvedValue({ status: "ok", data: { enabled: false, modelDownloaded: false } });
+    mocks.setAiPiiRedactionEnabled.mockResolvedValue({ status: "ok", data: { enabled: true, modelDownloaded: true } });
   });
 
   it("shows the actual active preset and detected Ollama models without invented spend", async () => {
@@ -82,5 +88,18 @@ describe("AI models settings", () => {
 
     fireEvent.click(screen.getByRole("option", { name: "OpenAI-compatible" }));
     expect(screen.getByPlaceholderText("model ID")).toBeInTheDocument();
+  });
+
+  it("keeps AI PII removal off until the user explicitly enables it", async () => {
+    render(<AiModelsSettings />);
+
+    const toggle = await screen.findByRole("switch", { name: "Enable AI PII removal" });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText("Use AI PII for more privacy")).toBeInTheDocument();
+    expect(screen.getByText("Off")).toBeInTheDocument();
+    expect(screen.getByText(/2–5% CPU occasionally/)).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(mocks.setAiPiiRedactionEnabled).toHaveBeenCalledWith(true));
   });
 });

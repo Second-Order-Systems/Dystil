@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "@/components/ui/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { commands, type AiPresetView, type AiProviderStatusView } from "@/lib/utils/tauri";
+import { Switch } from "@/components/ui/switch";
+import { commands, type AiPiiRedactionSettingsView, type AiPresetView, type AiProviderStatusView } from "@/lib/utils/tauri";
 
 type ManagedProvider = "codex" | "claude";
 type ByokProvider = "anthropic" | "openai" | "openai_compatible" | "dystil_ai";
@@ -53,17 +54,20 @@ export function AiModelsSettings() {
   const [byokEndpoint, setByokEndpoint] = useState("");
   const [byokModel, setByokModel] = useState("");
   const [byokKey, setByokKey] = useState("");
+  const [aiPii, setAiPii] = useState<AiPiiRedactionSettingsView>({ enabled: false, modelDownloaded: false });
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextPresets, codex, claude] = await Promise.all([
+      const [nextPresets, codex, claude, nextAiPii] = await Promise.all([
         commands.aiPresetList().then(resultData),
         commands.aiProviderStatus("codex").then(resultData),
         commands.aiProviderStatus("claude").then(resultData),
+        commands.getAiPiiRedactionSettings().then(resultData),
       ]);
       setPresets(nextPresets);
       setStatuses({ codex, claude });
+      setAiPii(nextAiPii);
       setError("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -172,6 +176,17 @@ export function AiModelsSettings() {
     }
   });
 
+  const setAiPiiEnabled = (enabled: boolean) => run("ai-pii", async () => {
+    const updated = resultData(await commands.setAiPiiRedactionEnabled(enabled));
+    setAiPii(updated);
+    toast({
+      title: enabled ? "AI PII removal is on" : "AI PII removal is off",
+      description: enabled
+        ? "The local model will strengthen deterministic redaction after capture."
+        : "Deterministic redaction remains on.",
+    });
+  });
+
   return <div className="mx-auto max-w-[880px]">
     <h1 className="text-[29px] font-medium tracking-[-0.02em]">AI models</h1>
     <p className="mb-[26px] mt-[8px] max-w-[700px] text-[18px] leading-[1.6] text-[#60636b]">Choose what Dystil uses to reason over your local work history.</p>
@@ -217,6 +232,32 @@ export function AiModelsSettings() {
           </div>
           <div className="mt-[16px] flex gap-4"><button disabled={busy !== null} className={primaryButton}>{busy === "byok" ? "Checking connection…" : "Save and use"}</button><button type="button" disabled={busy !== null} onClick={() => { setShowByok(false); setByokKey(""); }} className={textButton}>Cancel</button></div>
         </form>}
+      </div>
+    </section>
+
+    <section aria-labelledby="ai-pii-redaction" className="mb-[26px]">
+      <div className="mb-[10px]">
+        <h2 id="ai-pii-redaction" className="text-[18px] font-medium">AI PII removal</h2>
+        <p className="mt-1 max-w-[700px] text-[14px] leading-5 text-[#74777e]">Add an optional local-model pass after Dystil&apos;s always-on deterministic redaction.</p>
+      </div>
+      <div className="rounded-[12px] border border-[#e7e7e2] bg-white px-[19px] py-[17px]">
+        <div className="flex items-start justify-between gap-6">
+          <div className="min-w-0">
+            <p className="text-[16px] font-medium text-[#202421]">Use AI PII for more privacy</p>
+            <p aria-live="polite" className="mt-1 text-[14px] leading-5 text-[#68706c]">
+              {busy === "ai-pii"
+                ? "Enabling…"
+                : aiPii.enabled ? "On" : "Off"}
+            </p>
+          </div>
+          <Switch
+            aria-label="Enable AI PII removal"
+            checked={aiPii.enabled}
+            disabled={busy !== null || loading}
+            onCheckedChange={(enabled) => void setAiPiiEnabled(enabled)}
+          />
+        </div>
+        <p className="mt-[13px] max-w-[690px] border-t border-[#efefe9] pt-[13px] text-[13px] leading-5 text-[#74777e]">Uses about 2–5% CPU occasionally while reviewing newly captured text.</p>
       </div>
     </section>
 

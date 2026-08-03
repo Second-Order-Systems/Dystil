@@ -2,8 +2,8 @@
 //!
 //! `dystil-redact` applies deterministic regex sanitization synchronously at
 //! write time. This worker closes the loop: it polls `dystil_text_redaction_state`
-//! for `Pending` rows, re-applies the best available backend (deterministic now;
-//! ONNX NER later), overwrites source columns in place, and marks the row
+//! for `Pending` rows after an ONNX model is available, overwrites source
+//! columns in place, and marks the row
 //! `Complete` or `DeterministicFallback` on exhausted retries.
 //!
 //! To upgrade to an ONNX model: add a new arm in `dispatch_surface` that calls
@@ -39,8 +39,8 @@ pub struct RedactionWorker {
 }
 
 impl RedactionWorker {
-    /// Start the worker. If `model` is `Some`, each row gets a regex pre-pass
-    /// followed by an ONNX pass on the residual. If `None`, regex only.
+    /// Start the worker. It waits while `model` is `None`; each row gets a
+    /// regex pre-pass followed by an ONNX pass once the model is installed.
     pub fn start(pool: SqlitePool, model: Option<Arc<dyn TextRedactor>>) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let model = Arc::new(RwLock::new(model));
@@ -98,8 +98,11 @@ async fn run_worker(
             break;
         }
 
-        let active_model = model.read().await.clone();
-        match process_pending_batch(&pool, active_model.as_deref()).await {
+        let Some(active_model) = model.read().await.clone() else {
+            debug!("redaction worker: waiting for opt-in model");
+            continue;
+        };
+        match process_pending_batch(&pool, active_model.as_ref()).await {
             Ok(0) => debug!("redaction worker: nothing pending"),
             Ok(n) => info!(processed = n, "redaction worker: batch complete"),
             Err(e) => warn!("redaction worker: batch error: {}", e),
@@ -123,7 +126,7 @@ struct PendingRow {
 
 async fn process_pending_batch(
     pool: &SqlitePool,
-    model: Option<&dyn TextRedactor>,
+    model: &dyn TextRedactor,
 ) -> Result<usize, sqlx::Error> {
     let rows = sqlx::query_as::<_, PendingRow>(
         "SELECT source_table, source_row_id, surface, attempts
@@ -138,7 +141,7 @@ async fn process_pending_batch(
 
     let count = rows.len();
     for row in &rows {
-        if let Err(e) = process_row(pool, row, model).await {
+        if let Err(e) = process_row(pool, row, Some(model)).await {
             warn!(
                 table = %row.source_table,
                 id = row.source_row_id,

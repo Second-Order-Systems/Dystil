@@ -13,6 +13,9 @@ use tracing::{error, warn};
 /// small allow-list of services the user explicitly chose for work; recording
 /// settings are then derived from that answer.
 const SOCIAL_CAPTURE_ALLOWED_KEY: &str = "socialCaptureAllowed";
+/// One-time migration marker. AI-backed PII removal previously started and
+/// downloaded its model without an explicit user choice.
+const AI_PII_EXPLICIT_OPT_IN_KEY: &str = "aiPiiExplicitOptInV1";
 
 struct SocialCaptureService {
     id: &'static str,
@@ -822,7 +825,7 @@ impl Default for SettingsStore {
             recording: crate::recording_settings::RecordingSettings {
                 monitor_ids: vec!["default".to_string()],
                 use_pii_removal: true,
-                async_pii_redaction: true,
+                async_pii_redaction: false,
                 pii_backend: "local".to_string(),
                 ignored_windows,
                 ..crate::recording_settings::RecordingSettings::default()
@@ -899,6 +902,18 @@ impl SettingsStore {
                     Value::Bool(true),
                 );
             }
+
+            // The local model is optional and relatively large. No prior UI
+            // exposed this preference, so an existing `true` value cannot
+            // represent an informed opt-in. Default it off once; subsequent
+            // user choices are preserved by the marker.
+            if !obj.contains_key(AI_PII_EXPLICIT_OPT_IN_KEY) {
+                obj.insert("asyncPiiRedaction".to_string(), Value::Bool(false));
+                obj.insert(
+                    AI_PII_EXPLICIT_OPT_IN_KEY.to_string(),
+                    Value::Bool(true),
+                );
+            }
         }
         val
     }
@@ -970,6 +985,7 @@ impl SettingsStore {
             prioritize_input_latency: settings.prioritize_input_latency,
             extraction_thread_priority: settings.extraction_thread_priority.clone(),
             pause_extraction_on_input_ms: settings.pause_extraction_on_input_ms,
+            async_pii_redaction: settings.async_pii_redaction,
         }
     }
 
@@ -1205,6 +1221,27 @@ mod tests {
     #[test]
     fn auto_update_defaults_to_enabled() {
         assert!(SettingsStore::default().auto_update);
+    }
+
+    #[test]
+    fn ai_pii_is_opt_in_for_new_and_existing_settings() {
+        let defaults = SettingsStore::default();
+        assert!(!defaults.recording.async_pii_redaction);
+        assert!(!defaults
+            .to_dystil_capture_config(std::path::PathBuf::from("/tmp/dystil-test"))
+            .async_pii_redaction);
+
+        let migrated = SettingsStore::sanitize_legacy_fields(json!({
+            "asyncPiiRedaction": true
+        }));
+        assert_eq!(migrated.get("asyncPiiRedaction"), Some(&json!(false)));
+        assert_eq!(migrated.get(AI_PII_EXPLICIT_OPT_IN_KEY), Some(&json!(true)));
+
+        let opted_in = SettingsStore::sanitize_legacy_fields(json!({
+            "asyncPiiRedaction": true,
+            AI_PII_EXPLICIT_OPT_IN_KEY: true
+        }));
+        assert_eq!(opted_in.get("asyncPiiRedaction"), Some(&json!(true)));
     }
 
     #[test]
