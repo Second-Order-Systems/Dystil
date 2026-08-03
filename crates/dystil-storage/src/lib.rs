@@ -382,7 +382,7 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
         "CREATE TABLE IF NOT EXISTS ai_presets (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
-            provider_kind TEXT NOT NULL CHECK (provider_kind IN ('codex', 'claude', 'openai_compatible', 'ollama')),
+            provider_kind TEXT NOT NULL CHECK (provider_kind IN ('codex', 'claude', 'anthropic', 'openai', 'openai_compatible', 'dystil_ai', 'ollama')),
             endpoint TEXT,
             model TEXT NOT NULL,
             active INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)),
@@ -395,6 +395,50 @@ pub async fn initialize_capture_schema(pool: &SqlitePool) -> Result<(), StorageE
     )
     .execute(&mut *tx)
     .await?;
+    let ai_preset_schema: String = sqlx::query_scalar(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ai_presets'",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if !ai_preset_schema.contains("'anthropic'")
+        || !ai_preset_schema.contains("'openai'")
+        || !ai_preset_schema.contains("'dystil_ai'")
+    {
+        sqlx::query("DROP INDEX IF EXISTS idx_ai_presets_active")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("ALTER TABLE ai_presets RENAME TO ai_presets_before_provider_expansion")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "CREATE TABLE ai_presets (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                provider_kind TEXT NOT NULL CHECK (provider_kind IN ('codex', 'claude', 'anthropic', 'openai', 'openai_compatible', 'dystil_ai', 'ollama')),
+                endpoint TEXT,
+                model TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)),
+                validation_status TEXT NOT NULL DEFAULT 'unknown' CHECK (validation_status IN ('unknown', 'ready', 'error')),
+                validation_message TEXT,
+                validated_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO ai_presets
+             SELECT id, name, provider_kind, endpoint, model, active,
+                    validation_status, validation_message, validated_at, created_at, updated_at
+             FROM ai_presets_before_provider_expansion",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DROP TABLE ai_presets_before_provider_expansion")
+            .execute(&mut *tx)
+            .await?;
+    }
     sqlx::query(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_presets_active
          ON ai_presets(active) WHERE active = 1",
@@ -482,6 +526,48 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn expands_existing_ai_presets_for_api_providers_without_losing_presets() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE ai_presets (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                provider_kind TEXT NOT NULL CHECK (provider_kind IN ('codex', 'claude', 'openai_compatible', 'ollama')),
+                endpoint TEXT, model TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)),
+                validation_status TEXT NOT NULL DEFAULT 'unknown' CHECK (validation_status IN ('unknown', 'ready', 'error')),
+                validation_message TEXT, validated_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO ai_presets(id,name,provider_kind,model,active) VALUES('managed-codex','ChatGPT subscription','codex','default',1)")
+            .execute(&pool).await.unwrap();
+
+        initialize_capture_schema(&pool).await.unwrap();
+
+        let preserved: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM ai_presets WHERE id='managed-codex' AND active=1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(preserved, 1);
+        sqlx::query("INSERT INTO ai_presets(id,name,provider_kind,model) VALUES('anthropic-key','Anthropic API','anthropic','claude-test')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO ai_presets(id,name,provider_kind,model) VALUES('openai-key','OpenAI API','openai','gpt-test')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO ai_presets(id,name,provider_kind,model) VALUES('dystil-key','Dystil AI','dystil_ai','gpt-test')")
+            .execute(&pool).await.unwrap();
     }
 
     #[tokio::test]

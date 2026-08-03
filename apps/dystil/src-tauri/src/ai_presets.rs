@@ -22,6 +22,9 @@ use crate::{ai, recording::RecordingState};
 const KEYRING_SERVICE: &str = "com.dystil.app.ai-preset";
 const PI_CODING_AGENT_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.80.6";
 const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.80.6";
+const DYSTIL_AI_ENDPOINT: &str = "https://coconut.2os.ai/v1";
+const ANTHROPIC_DEFAULT_MODEL: &str = "claude-haiku-4-5";
+const OPENAI_DEFAULT_MODEL: &str = "gpt-5.6-luna";
 
 #[derive(Default)]
 struct PiRpcAccumulator {
@@ -189,9 +192,12 @@ fn normalize_provider(value: &str) -> Result<&'static str, String> {
     match value.trim().to_ascii_lowercase().as_str() {
         "codex" => Ok("codex"),
         "claude" => Ok("claude"),
-        "openai_compatible" | "custom" | "openai" => Ok("openai_compatible"),
+        "anthropic" | "anthropic_api" => Ok("anthropic"),
+        "openai" => Ok("openai"),
+        "openai_compatible" | "custom" => Ok("openai_compatible"),
+        "dystil_ai" | "dystil" => Ok("dystil_ai"),
         "ollama" | "native_ollama" => Ok("ollama"),
-        _ => Err("provider must be codex, claude, openai_compatible, or ollama".into()),
+        _ => Err("provider must be codex, claude, anthropic, openai, openai_compatible, dystil_ai, or ollama".into()),
     }
 }
 
@@ -199,10 +205,14 @@ fn normalize_endpoint(provider: &str, value: Option<&str>) -> Result<Option<Stri
     if matches!(provider, "codex" | "claude") {
         return Ok(None);
     }
-    let fallback = if provider == "ollama" {
-        "http://localhost:11434/v1"
-    } else {
-        "https://api.openai.com/v1"
+    if provider == "dystil_ai" {
+        return Ok(Some(DYSTIL_AI_ENDPOINT.to_string()));
+    }
+    let fallback = match provider {
+        "ollama" => "http://localhost:11434/v1",
+        "anthropic" => "https://api.anthropic.com",
+        "dystil_ai" => DYSTIL_AI_ENDPOINT,
+        _ => "https://api.openai.com/v1",
     };
     let value = value.unwrap_or(fallback).trim().trim_end_matches('/');
     if !(value.starts_with("https://")
@@ -214,7 +224,7 @@ fn normalize_endpoint(provider: &str, value: Option<&str>) -> Result<Option<Stri
     {
         return Err("endpoint must use HTTPS (or localhost HTTP)".into());
     }
-    let value = if provider == "openai_compatible" {
+    let value = if matches!(provider, "openai" | "openai_compatible" | "dystil_ai") {
         let parsed = url::Url::parse(value).map_err(|_| "endpoint is not a valid URL")?;
         if parsed.path() == "/" || parsed.path().is_empty() {
             format!("{value}/v1")
@@ -225,6 +235,14 @@ fn normalize_endpoint(provider: &str, value: Option<&str>) -> Result<Option<Stri
         value.to_string()
     };
     Ok(Some(value))
+}
+
+fn automatic_api_model(provider: &str) -> Option<&'static str> {
+    match provider {
+        "anthropic" => Some(ANTHROPIC_DEFAULT_MODEL),
+        "openai" | "dystil_ai" => Some(OPENAI_DEFAULT_MODEL),
+        _ => None,
+    }
 }
 
 async fn preset_views(database: &sqlx::SqlitePool) -> Result<Vec<AiPresetView>, String> {
@@ -280,13 +298,17 @@ pub async fn ai_preset_save(
         return Err("subscription presets are created from their provider connection".into());
     }
     let name = name.trim();
-    let model = model.trim();
+    let model = automatic_api_model(provider).unwrap_or_else(|| model.trim());
     if name.is_empty() || model.is_empty() || name.len() > 80 || model.len() > 200 {
         return Err("preset name and model are required".into());
     }
     let endpoint = normalize_endpoint(provider, endpoint.as_deref())?;
-    if provider == "openai_compatible" && api_key.as_deref().unwrap_or("").trim().is_empty() {
-        return Err("an API key is required for a custom provider".into());
+    if matches!(
+        provider,
+        "anthropic" | "openai" | "openai_compatible" | "dystil_ai"
+    ) && api_key.as_deref().unwrap_or("").trim().is_empty()
+    {
+        return Err("an API key is required for a BYOK provider".into());
     }
     let id = Uuid::new_v4().to_string();
     if let Some(value) = api_key.filter(|value| !value.trim().is_empty()) {
@@ -443,6 +465,13 @@ pub async fn ai_preset_discover_models(
     let response = if provider == "ollama" {
         let root = endpoint.trim_end_matches("/v1");
         client.get(format!("{root}/api/tags")).send().await
+    } else if provider == "anthropic" {
+        client
+            .get(format!("{endpoint}/v1/models"))
+            .header("x-api-key", api_key.unwrap_or_default())
+            .header("anthropic-version", "2023-06-01")
+            .send()
+            .await
     } else {
         let request = client.get(format!("{endpoint}/models"));
         request
@@ -506,7 +535,10 @@ pub(crate) async fn active(database: &sqlx::SqlitePool) -> Result<Option<ActiveA
     };
     let id: String = row.get("id");
     let provider_kind: String = row.get("provider_kind");
-    let api_key = if provider_kind == "openai_compatible" {
+    let api_key = if matches!(
+        provider_kind.as_str(),
+        "anthropic" | "openai" | "openai_compatible" | "dystil_ai"
+    ) {
         credential(id.clone()).await?
     } else {
         None
@@ -570,19 +602,19 @@ async fn ensure_pi_installed() -> Result<PathBuf, String> {
 fn write_pi_models(preset: &ActiveAiPreset) -> Result<PathBuf, String> {
     let dir = pi_root()?.join("state");
     std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    let provider = if preset.provider_kind == "ollama" {
-        "ollama"
-    } else {
-        "custom"
+    let provider = match preset.provider_kind.as_str() {
+        "ollama" => "ollama",
+        "anthropic" => "anthropic",
+        _ => "custom",
     };
     let api_key = if provider == "ollama" {
         "ollama"
     } else {
-        "$CUSTOM_API_KEY"
+        "CUSTOM_API_KEY"
     };
     let mut provider_config = json!({
         "baseUrl": preset.endpoint.as_deref().unwrap_or("http://localhost:11434/v1"),
-        "api": "openai-completions", "apiKey": api_key,
+        "api": if provider == "anthropic" { "anthropic-messages" } else { "openai-completions" }, "apiKey": api_key,
         "models": [{"id": preset.model, "name": preset.model, "reasoning": false,
             "input": ["text"], "maxTokens": 8192,
             "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}]
@@ -626,10 +658,10 @@ pub(crate) async fn pi_answer(
     }
     let agent_dir = write_pi_models(preset)?;
     let extension = write_dystil_tools_extension()?;
-    let provider = if preset.provider_kind == "ollama" {
-        "ollama"
-    } else {
-        "custom"
+    let provider = match preset.provider_kind.as_str() {
+        "ollama" => "ollama",
+        "anthropic" => "anthropic",
+        _ => "custom",
     };
     let prompt = format!(
         "{}\n\nReturn only JSON matching this schema: {}",
@@ -742,10 +774,10 @@ pub(crate) async fn pi_structured(
         return Err("structured schema is too large".into());
     }
     let agent_dir = write_pi_models(preset)?;
-    let provider = if preset.provider_kind == "ollama" {
-        "ollama"
-    } else {
-        "custom"
+    let provider = match preset.provider_kind.as_str() {
+        "ollama" => "ollama",
+        "anthropic" => "anthropic",
+        _ => "custom",
     };
     let prompt = format!(
         "{}\n\nReturn only JSON matching this schema: {}",
@@ -806,6 +838,7 @@ pub(crate) async fn pi_structured(
     Ok(dystil_ai::AiStructuredRun {
         runtime: dystil_ai::AiRuntimeKind::Pi,
         runtime_version: Some(format!("pi:0.80.6:{}", preset.id)),
+        model: preset.model.clone(),
         elapsed_ms: started.elapsed().as_millis() as u64,
         output,
         usage,
@@ -828,10 +861,10 @@ pub(crate) async fn pi_automation(
     std::fs::create_dir_all(&request.working_directory).map_err(|error| error.to_string())?;
     let agent_dir = write_pi_models(preset)?;
     let extension = write_dystil_tools_extension()?;
-    let provider = if preset.provider_kind == "ollama" {
-        "ollama"
-    } else {
-        "custom"
+    let provider = match preset.provider_kind.as_str() {
+        "ollama" => "ollama",
+        "anthropic" => "anthropic",
+        _ => "custom",
     };
     let started = Instant::now();
     let mut child = Command::new(executable)
@@ -915,9 +948,18 @@ pub async fn ai_preset_test(
         .map_err(|error| error.to_string())?
         .ok_or("AI preset not found")?;
     let provider: String = preset.get("provider_kind");
-    let result = if matches!(provider.as_str(), "ollama" | "openai_compatible") {
-        let discovery = if matches!(provider.as_str(), "ollama" | "openai_compatible") {
-            let api_key = if provider == "openai_compatible" {
+    let result = if matches!(
+        provider.as_str(),
+        "ollama" | "anthropic" | "openai" | "openai_compatible" | "dystil_ai"
+    ) {
+        let discovery = if matches!(
+            provider.as_str(),
+            "ollama" | "anthropic" | "openai" | "openai_compatible" | "dystil_ai"
+        ) {
+            let api_key = if matches!(
+                provider.as_str(),
+                "anthropic" | "openai" | "openai_compatible" | "dystil_ai"
+            ) {
                 credential(preset.get("id")).await?
             } else {
                 None
@@ -973,6 +1015,21 @@ mod tests {
             "https://api.openai.com/v1"
         );
         assert!(normalize_endpoint("openai_compatible", Some("http://models.example/v1")).is_err());
+        assert_eq!(
+            normalize_endpoint("anthropic", None).unwrap().unwrap(),
+            "https://api.anthropic.com"
+        );
+        assert_eq!(normalize_provider("anthropic_api").unwrap(), "anthropic");
+        assert_eq!(normalize_provider("openai").unwrap(), "openai");
+        assert_eq!(normalize_provider("dystil").unwrap(), "dystil_ai");
+        assert_eq!(automatic_api_model("anthropic"), Some("claude-haiku-4-5"));
+        assert_eq!(automatic_api_model("openai"), Some("gpt-5.6-luna"));
+        assert_eq!(automatic_api_model("dystil_ai"), Some("gpt-5.6-luna"));
+        assert_eq!(automatic_api_model("openai_compatible"), None);
+        assert_eq!(
+            normalize_endpoint("dystil_ai", None).unwrap().unwrap(),
+            DYSTIL_AI_ENDPOINT
+        );
     }
 
     #[test]

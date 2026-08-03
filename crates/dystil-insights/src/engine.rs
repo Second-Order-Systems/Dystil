@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, time::Duration};
 
-use dystil_ai::{AiRuntime, AiRuntimeError, AiStructuredRequest};
+use dystil_ai::{AiModelTier, AiRuntime, AiRuntimeError, AiStructuredRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -18,8 +18,10 @@ use crate::{
 
 const EXPLORER_PROMPT_VERSION: &str = "worth-fixing-explorer-v1";
 const EXPLORER_PROMPT: &str = include_str!("../resources/explorer_prompt_v1.md");
+const EXPLORER_MODEL_TIER: AiModelTier = AiModelTier::Economy;
 const STEWARD_PROMPT_VERSION: &str = "worth-fixing-steward-v2";
 const STEWARD_PROMPT: &str = include_str!("../resources/steward_prompt_v2.md");
+const STEWARD_MODEL_TIER: AiModelTier = AiModelTier::Frontier;
 
 #[derive(Debug, Error)]
 pub enum EngineError {
@@ -186,11 +188,11 @@ async fn run_explorer_batch_inner<R: AiRuntime + ?Sized>(
     let input_json = serde_json::to_string(&packet)?;
     let prompt_hash = hash_bytes(EXPLORER_PROMPT.as_bytes());
     let schema_hash = hash_bytes(&serde_json::to_vec(&explorer_schema())?);
-    let descriptor = runtime.descriptor();
+    let model = runtime.model_for_tier(EXPLORER_MODEL_TIER);
     let input_fingerprint = hash_bytes(
         format!(
             "{}\n{}\n{}\n{}",
-            descriptor.model, prompt_hash, schema_hash, input_json
+            model, prompt_hash, schema_hash, input_json
         )
         .as_bytes(),
     );
@@ -202,7 +204,7 @@ async fn run_explorer_batch_inner<R: AiRuntime + ?Sized>(
             input_json: &input_json,
             prompt_hash: &prompt_hash,
             schema_hash: &schema_hash,
-            model: &descriptor.model,
+            model: &model,
         },
     )
     .await?;
@@ -218,14 +220,14 @@ async fn run_frozen_explorer_job<R: AiRuntime + ?Sized>(
     if !claim_explorer_job(pool, &job_id).await? {
         return Ok(ExplorerRunResult::AlreadyAccepted { job_id });
     }
-    let descriptor = runtime.descriptor();
+    let model = runtime.model_for_tier(EXPLORER_MODEL_TIER);
     let mut prompt = format!("{EXPLORER_PROMPT}\n\nNORMALIZED_INPUT_PACKET:\n{input_json}");
     let mut last_error = String::new();
     for attempt in 0..=1 {
         let request_fingerprint = hash_bytes(
             format!(
                 "{}\n{}\n{}\n{}",
-                descriptor.model,
+                model,
                 EXPLORER_PROMPT_VERSION,
                 hash_bytes(&serde_json::to_vec(&explorer_schema())?),
                 prompt
@@ -235,6 +237,7 @@ async fn run_frozen_explorer_job<R: AiRuntime + ?Sized>(
         let run = match runtime
             .infer_structured(AiStructuredRequest {
                 purpose: "worth_fixing_explorer".into(),
+                model_tier: EXPLORER_MODEL_TIER,
                 prompt: prompt.clone(),
                 output_schema: explorer_schema(),
                 timeout: Duration::from_secs(180),
@@ -324,6 +327,7 @@ async fn infer_once<R: AiRuntime + ?Sized>(
     runtime
         .infer_structured(AiStructuredRequest {
             purpose: purpose.into(),
+            model_tier: STEWARD_MODEL_TIER,
             prompt,
             output_schema: schema(),
             timeout: Duration::from_secs(180),
@@ -342,7 +346,7 @@ pub async fn run_steward_wake<R: AiRuntime + ?Sized>(
     reason: &str,
     observation_limit: u32,
 ) -> EngineResult<WakeResult> {
-    let descriptor = runtime.descriptor();
+    let model = runtime.model_for_tier(STEWARD_MODEL_TIER);
     let stored = recoverable_job(pool).await?;
     let (job_id, packet_json) = if let Some(job) = stored {
         if accepted_job(pool, &job.job_id).await? {
@@ -369,7 +373,7 @@ pub async fn run_steward_wake<R: AiRuntime + ?Sized>(
         let input_fingerprint = hash_bytes(
             format!(
                 "{}\n{}\n{}\n{}",
-                descriptor.model, prompt_hash, schema_hash, packet_json
+                model, prompt_hash, schema_hash, packet_json
             )
             .as_bytes(),
         );
@@ -386,7 +390,7 @@ pub async fn run_steward_wake<R: AiRuntime + ?Sized>(
                 observation_ids: &observation_ids,
                 prompt_hash: &prompt_hash,
                 schema_hash: &schema_hash,
-                model: &descriptor.model,
+                model: &model,
                 input_json: &packet_json,
             },
         )
@@ -407,7 +411,7 @@ pub async fn run_steward_wake<R: AiRuntime + ?Sized>(
         let request_fingerprint = hash_bytes(
             format!(
                 "{}\n{}\n{}\n{}",
-                descriptor.model,
+                model,
                 STEWARD_PROMPT_VERSION,
                 hash_bytes(&serde_json::to_vec(&schema())?),
                 prompt
@@ -499,6 +503,7 @@ mod tests {
         descriptor: AiRuntimeDescriptor,
         outputs: Mutex<VecDeque<Value>>,
         calls: Mutex<Vec<String>>,
+        tiers: Mutex<Vec<AiModelTier>>,
     }
 
     impl MockRuntime {
@@ -511,6 +516,7 @@ mod tests {
                 },
                 outputs: Mutex::new(outputs.into()),
                 calls: Mutex::new(Vec::new()),
+                tiers: Mutex::new(Vec::new()),
             }
         }
     }
@@ -534,10 +540,12 @@ mod tests {
             &self,
             request: AiStructuredRequest,
         ) -> Result<AiStructuredRun, AiRuntimeError> {
+            self.tiers.lock().unwrap().push(request.model_tier);
             self.calls.lock().unwrap().push(request.prompt);
             Ok(AiStructuredRun {
                 runtime: AiRuntimeKind::Pi,
                 runtime_version: None,
+                model: self.descriptor.model.clone(),
                 elapsed_ms: 5,
                 output: self.outputs.lock().unwrap().pop_front().unwrap(),
                 usage: BTreeMap::from([("input_tokens".into(), 10)]),
@@ -604,6 +612,10 @@ mod tests {
         .unwrap();
         assert!(matches!(result, WakeResult::Accepted { .. }));
         assert_eq!(runtime.calls.lock().unwrap().len(), 2);
+        assert_eq!(
+            runtime.tiers.lock().unwrap().as_slice(),
+            &[AiModelTier::Frontier, AiModelTier::Frontier]
+        );
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(*) FROM job_attempts WHERE status='accepted'"
@@ -682,6 +694,10 @@ mod tests {
         assert!(matches!(result, ExplorerRunResult::Accepted { .. }));
         let calls = runtime.calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
+        assert_eq!(
+            runtime.tiers.lock().unwrap().as_slice(),
+            &[AiModelTier::Economy, AiModelTier::Economy]
+        );
         assert!(!calls[0].contains("SECRET PRIVATE CONTENT"));
         assert!(!calls[0].contains("private:1"));
         assert_eq!(
