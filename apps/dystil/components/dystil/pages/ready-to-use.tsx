@@ -1,11 +1,63 @@
 "use client";
 
-import { useState } from "react";
-import { readyFixes } from "../data";
+import { useEffect, useRef } from "react";
 import { PageHeading } from "../page-primitives";
+import { ArtifactCard } from "../ready-to-use/artifact-card";
+import { useReadyArtifacts } from "../ready-to-use/use-ready-artifacts";
 
-export function ReadyToUse({ onAsk }: { onAsk: () => void }) {
-  const [expanded, setExpanded] = useState<string | null>(readyFixes[0].id);
-  const [approved, setApproved] = useState<string[]>([]);
-  return <div className="mx-auto max-w-[1124px]"><PageHeading title="Three fixes are ready." description="Dystil found repeatable work it can prepare for you. Nothing runs until you review and approve it." /><section className="mt-[38px]"><div className="border-b border-[#dad8d2] pb-[12px]"><h2 className="text-[20px] font-medium text-black">Ready now</h2></div><div className="divide-y divide-[#e1dfd9] border-b border-[#dad8d2]">{readyFixes.map((fix) => { const isExpanded = expanded === fix.id; const isApproved = approved.includes(fix.id); return <article key={fix.id} className="py-[20px]"><div className="grid grid-cols-[108px_minmax(0,1fr)_auto] items-start gap-[22px]"><p className={`mt-[3px] flex items-center gap-[8px] text-[13px] font-medium ${isApproved ? "text-[#6c726f]" : "text-[#087b5f]"}`}><span className={`h-[7px] w-[7px] rounded-full ${isApproved ? "bg-[#8f9692]" : "bg-[#12a77a]"}`} />{isApproved ? "Approved" : "Fix ready"}</p><div><h3 className="text-[20px] font-medium leading-[1.3] text-[#151716]">{fix.title}</h3><p className="mt-[5px] text-[16px] leading-[1.5] text-[#596069]">{fix.description}</p><p className="mt-[9px] text-[13px] text-[#8a8f95]">{fix.evidence}</p></div><button type="button" onClick={() => setExpanded(isExpanded ? null : fix.id)} className="mt-[1px] min-w-[86px] rounded-[9px] border border-[#d4d2cc] bg-white px-[14px] py-[9px] text-[14px] font-medium text-[#3d4247] transition-colors hover:border-[#8db7a8] hover:text-[#087b5f] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#087b5f]">{isExpanded ? "Close" : "Review"}</button></div>{isExpanded && <div className="ml-[130px] mt-[17px] rounded-[12px] bg-[#f5faf7] px-[18px] py-[16px]"><p className="text-[14px] font-medium text-[#22302b]">What Dystil will do</p><ol className="mt-[10px] grid gap-[7px]">{fix.steps.map((step, index) => <li key={step} className="flex gap-[10px] text-[14px] leading-[1.5] text-[#5c6460]"><span className="text-[#0f6e56]">{index + 1}.</span><span>{step}</span></li>)}</ol><div className="mt-[15px] flex items-center gap-[14px]"><button type="button" disabled={isApproved} onClick={() => setApproved((current) => current.includes(fix.id) ? current : [...current, fix.id])} className="rounded-[9px] bg-[#087b5f] px-[16px] py-[9px] text-[14px] font-medium text-white hover:bg-[#06634d] disabled:bg-[#d7ddd9] disabled:text-[#78817c]">{isApproved ? "Approved" : "Approve this fix"}</button><button type="button" onClick={() => setExpanded(null)} className="text-[14px] text-[#6a706d] hover:text-[#222624]">Not now</button></div></div>}</article>; })}</div></section><button type="button" onClick={onAsk} className="mt-[24px] text-[15px] font-medium text-[#087b5f] hover:text-[#055d49]">Want Dystil to look at something else? Ask for a fix →</button></div>;
+export function ReadyToUse({ onAsk, onWorthFixing }: { onAsk: () => void; onWorthFixing: () => void }) {
+  const model = useReadyArtifacts();
+  const page = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (model.notice !== "Artifact removed.") return;
+    queueMicrotask(() => (page.current?.querySelector("article") ?? page.current?.querySelector("h1"))?.focus());
+  }, [model.notice]);
+
+  if (model.loading && !model.items.length) return <div className="mx-auto max-w-[1124px]" aria-busy="true"><PageHeading title="Ready to use" description="Loading the things you kept…" /></div>;
+
+  return <div ref={page} className="mx-auto max-w-[1124px]">
+    <PageHeading title={model.items.length ? `${model.items.length} ${model.items.length === 1 ? "thing" : "things"}, ready when you are.` : "Ready to use"} description={model.items.length ? "Everything you kept. Each one works from here, so nothing needs setting up again." : "Prompts, runbooks, and useful tools you keep from Worth fixing will live here. Nothing is added without your say-so."} />
+    <div aria-live="polite" className="mt-5 min-h-6 text-[14px] text-[#446158]">{model.notice}</div>
+    {model.error ? <div role="alert" className="mt-3 rounded-[10px] bg-[#fff4f1] px-4 py-3 text-[14px] text-[#7d3028]">Ready to use hit a problem: {model.error} <button className="ml-2 font-medium underline" onClick={() => void model.load()}>Try again</button></div> : null}
+    {!model.items.length ? <ReadyEmptyState waitingCount={model.waitingCount} onWorthFixing={onWorthFixing} onAsk={onAsk} /> : <><section className="mt-8" aria-label="Ready artifacts">{model.items.map((artifact) => <ArtifactCard key={artifact.artifactId} artifact={artifact} detail={model.detail} provenance={model.provenance} preview={model.preview} pending={model.pending === artifact.artifactId || model.pending === `change:${artifact.artifactId}`} onAction={(action) => { if (action === "copy") void model.copy(artifact); else if (action === "share") void model.share(artifact); else void model.open(artifact, action); }} onClose={model.close} onProvenance={() => void model.showProvenance(artifact.artifactId)} onPropose={(request) => model.propose(artifact.artifactId, request)} onRetry={() => void model.retry()} onConfirm={() => void model.confirm()} onReject={() => void model.reject()} onRemove={() => { if (window.confirm(`Remove “${artifact.title}”? This cannot be undone.`)) void model.remove(artifact.artifactId); }} />)}</section><button type="button" onClick={onAsk} className="mt-7 text-[15px] font-medium text-[#087b5f] hover:text-[#055d49] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#087b5f]">Want Dystil to look at something else? Ask for a fix →</button></>}
+  </div>;
+}
+
+const READY_KINDS = [
+  ["Prompt", "Reusable instructions for work you want done the same way again."],
+  ["Runbook", "A clear sequence for work that still needs your judgment."],
+  ["Tool you already have", "A direct path to a capability that can already help."],
+] as const;
+
+function ReadyEmptyState({ waitingCount, onWorthFixing, onAsk }: { waitingCount: number; onWorthFixing: () => void; onAsk: () => void }) {
+  const worthFixingLabel = waitingCount > 0
+    ? `Review ${waitingCount} ${waitingCount === 1 ? "finding" : "findings"} in Worth fixing`
+    : "See Worth fixing";
+
+  return <section aria-labelledby="ready-empty-title" className="mt-10 border-y border-[#d9d7d0]">
+    <div className="grid lg:grid-cols-[minmax(280px,0.82fr)_minmax(360px,1.18fr)]">
+      <div className="py-9 pr-8 lg:border-r lg:border-[#d9d7d0] lg:pr-12">
+        <p className="text-[13px] font-medium text-[#157252]">Your saved toolkit</p>
+        <h2 id="ready-empty-title" className="mt-3 max-w-[18ch] text-[27px] font-normal leading-[1.24] tracking-[-0.025em] text-[#151616]">Keep a finding once. Use it again from here.</h2>
+        <p className="mt-4 max-w-[42ch] text-[15px] leading-6 text-[#5c625f]">When Dystil finds something worth fixing, you decide whether it belongs here.</p>
+        <div className="mt-7 flex flex-wrap items-center gap-x-5 gap-y-3">
+          <button type="button" onClick={onWorthFixing} className="rounded-[8px] bg-[#157252] px-4 py-2.5 text-[14px] font-medium text-white transition-colors hover:bg-[#0f5d43] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-[#157252]">{worthFixingLabel}</button>
+          <button type="button" onClick={onAsk} className="text-[14px] font-medium text-[#157252] underline decoration-[#a8cbbc] underline-offset-4 hover:text-[#0f5d43] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#157252]">Ask for a fix</button>
+        </div>
+      </div>
+      <div className="border-t border-[#d9d7d0] py-2 lg:border-t-0 lg:pl-12">
+        <p className="py-4 text-[13px] text-[#747a76]">What you can keep here</p>
+        <dl>
+          {READY_KINDS.map(([title, description], index) => <div key={title} className="grid grid-cols-[30px_minmax(0,1fr)] gap-3 border-t border-[#e5e3dd] py-5">
+            <span aria-hidden="true" className="pt-0.5 text-[12px] tabular-nums text-[#8fa49b]">0{index + 1}</span>
+            <div className="grid gap-1 sm:grid-cols-[150px_minmax(0,1fr)] sm:gap-5">
+              <dt className="text-[15px] font-medium text-[#1d1f1e]">{title}</dt>
+              <dd className="max-w-[46ch] text-[14px] leading-[1.55] text-[#686e6a]">{description}</dd>
+            </div>
+          </div>)}
+        </dl>
+      </div>
+    </div>
+  </section>;
 }

@@ -26,7 +26,7 @@ export type Chat = {
 
 export type SettingsTab =
   | "What Dystil can see"
-  | "Model and cost"
+  | "AI models"
   | "When it runs"
   | "Storage"
   | "Notifications"
@@ -36,12 +36,6 @@ export type SettingsTab =
 export type DystilShellProps = {
   userName: string;
   userEmail: string;
-  recording: boolean;
-  toggling: boolean;
-  onToggleRecording: () => void;
-  screenshotEnabled: boolean;
-  onScreenshotChange: (value: boolean) => void;
-  screenshotBusy: boolean;
   peers: Peer[];
   agentMessages: AgentMessage[];
   sessions: ChatSession[];

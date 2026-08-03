@@ -141,13 +141,8 @@ export type Settings = SettingsStore & {
   disableClipboardCapture?: boolean;
   /** Skip keyboard / typed-text capture in the UI recorder. Defaults to true (keyboard capture OFF) — the a11y tree + OCR still capture on-screen text, this only drops the raw keystroke stream where secrets get typed. */
   disableKeyboardCapture?: boolean;
-  /** Auto-delete local data older than retention days (free alternative to cloud archive) */
-  localRetentionEnabled?: boolean;
-  /** Days to keep data locally before auto-deleting (default: 14) */
-  localRetentionDays?: number;
-  /** What gets deleted past the cutoff: "media" keeps DB rows (search/timeline still
-   * work), only reclaims mp4/wav/jpeg files. "all" wipes everything. Default: "media". */
-  localRetentionMode?: "media" | "all";
+  /** Days of raw capture kept locally. Zero means forever. */
+  retentionDays?: number;
   /** Apply macOS vibrancy effect to sidebar for a translucent glass look */
   translucentSidebar?: boolean;
   /** Hide model "thinking" reasoning blocks in chat (default: true) */
@@ -331,6 +326,8 @@ let DEFAULT_SETTINGS: Settings = {
   autoUpdate: false,
   autoUpdatePipes: true,
   autoStartEnabled: true,
+  capturePaused: false,
+  capturePauseUntil: null,
   platform: "unknown",
   disabledShortcuts: [],
   user: {
@@ -369,9 +366,7 @@ let DEFAULT_SETTINGS: Settings = {
   pauseOnDrmContent: false,
   disableClipboardCapture: true,
   disableKeyboardCapture: true,
-  localRetentionEnabled: false,
-  localRetentionDays: 14,
-  localRetentionMode: "media",
+  retentionDays: 90,
   encryptStore: true,
   hdRecordingDefault: "ask",
   hdRecordingIntervalMs: 100,

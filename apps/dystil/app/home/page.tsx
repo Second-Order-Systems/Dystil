@@ -8,9 +8,7 @@ import { ChatShell, type Chat, type ChatSession } from "@/components/chat-shell"
 import { ToastAction } from "@/components/ui/toast";
 import { toast } from "@/components/ui/use-toast";
 import { signOut } from "@/lib/auth-session";
-import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { useSettings } from "@/lib/hooks/use-settings";
-import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 import { commands, type LocalChatMessageView } from "@/lib/utils/tauri";
 
 type AgentPeer = { userId: string; displayName: string | null; email: string; agentStatus: string };
@@ -62,24 +60,16 @@ function toChatTurns(messages: LocalChatMessageView[]): Chat[] {
   return turns;
 }
 
-async function isCaptureRunning() { return invoke<boolean>("is_capture_running").catch(() => false); }
-
 export default function HomePage() {
-  const { settings, reloadStore } = useSettings();
-  const { health, isServerDown, fetchHealth } = useHealthCheck();
-  const [captureRunning, setCaptureRunning] = useState<boolean | null>(null);
-  const [toggling, setToggling] = useState(false);
-  const [screenshotBusy, setScreenshotBusy] = useState(false);
+  const { settings } = useSettings();
   const [loggingOut, setLoggingOut] = useState(false);
   const [version, setVersion] = useState("");
   const [peers, setPeers] = useState<AgentPeer[]>([]);
   const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
 
-  const recording = isServerDown || health?.status_code === 500 ? false : captureRunning ?? false;
   const userName = settings.user?.name?.trim() || "Dystil user";
   const userEmail = settings.user?.email?.trim() || "No email available";
-  const refreshCapture = async () => setCaptureRunning(await isCaptureRunning());
   const refreshMailbox = async () => {
     const [nextPeers, nextMessages] = await Promise.all([
       invoke<AgentPeer[]>("agent_list_peers").catch(() => []),
@@ -95,10 +85,7 @@ export default function HomePage() {
   };
 
   useEffect(() => {
-    void refreshCapture(); getVersion().then(setVersion).catch(() => {});
-    let unlisten: (() => void) | undefined;
-    listen("recording-status-changed", () => void refreshCapture()).then((dispose) => { unlisten = dispose; }).catch(() => {});
-    return () => unlisten?.();
+    getVersion().then(setVersion).catch(() => {});
   }, []);
   useEffect(() => { void refreshSessions(); }, []);
   useEffect(() => {
@@ -169,35 +156,10 @@ export default function HomePage() {
     return () => unlisten?.();
   }, []);
 
-  const toggleCapture = async () => {
-    setToggling(true); const target = !recording;
-    try {
-      const result = target ? await commands.startCapture() : await commands.stopCapture();
-      if (result.status === "error") throw new Error(result.error);
-      await new Promise((resolve) => window.setTimeout(resolve, 300));
-      await refreshCapture(); await fetchHealth();
-    } catch (error) { toast({ title: "Could not update recording", description: error instanceof Error ? error.message : String(error), variant: "destructive" }); }
-    finally { setToggling(false); }
-  };
-  const setScreenshots = async (enabled: boolean) => {
-    setScreenshotBusy(true);
-    try {
-      if (enabled) {
-        let permission = await commands.checkScreenRecordingPermission();
-        if (permission !== "granted" && permission !== "notNeeded") { await requestPermissionWithFlow("screenRecording"); permission = await commands.checkScreenRecordingPermission(); }
-        if (permission !== "granted" && permission !== "notNeeded") throw new Error("Screen Recording permission was not granted.");
-      }
-      const result = await commands.setScreenshotCaptureEnabled(enabled);
-      if (result.status === "error") throw new Error(result.error);
-      await reloadStore(); await refreshCapture();
-    } catch (error) { toast({ title: "Could not update screenshot capture", description: error instanceof Error ? error.message : String(error), variant: "destructive" }); }
-    finally { setScreenshotBusy(false); }
-  };
   const logout = async () => { setLoggingOut(true); try { await signOut(); } catch (error) { toast({ title: "Logout failed", description: error instanceof Error ? error.message : String(error), variant: "destructive" }); } finally { setLoggingOut(false); } };
 
   return <ChatShell
-    userName={userName} userEmail={userEmail} recording={recording} toggling={toggling} onToggleRecording={() => void toggleCapture()}
-    screenshotEnabled={!settings.disableVision} onScreenshotChange={(enabled) => void setScreenshots(enabled)} screenshotBusy={screenshotBusy}
+    userName={userName} userEmail={userEmail}
     peers={peers} agentMessages={agentMessages} sessions={sessions}
     onLoadSession={async (sessionId) => {
       const result = await commands.localChatGetMessages(sessionId);

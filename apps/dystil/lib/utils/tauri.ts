@@ -5,7 +5,7 @@
 
 
 export const commands = {
-async acceptWorthFixingFinding(findingId: string) : Promise<Result<string, string>> {
+async acceptWorthFixingFinding(findingId: string) : Promise<Result<KeepFindingResult, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("accept_worth_fixing_finding", { findingId }) };
 } catch (e) {
@@ -446,6 +446,14 @@ async completeOnboarding(onboardingData: JsonValue) : Promise<Result<null, strin
     else return { status: "error", error: e  as any };
 }
 },
+async confirmReadyArtifactChange(changeJobId: string) : Promise<Result<ReadyArtifactDetail, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("confirm_ready_artifact_change", { changeJobId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Copy a frame deeplink (dystil://frame/N) to clipboard. Native API only.
  */
@@ -469,7 +477,7 @@ async copyTextToClipboard(text: string) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async correctWorthFixingFinding(findingId: string, correctionText: string, intent: string) : Promise<Result<string, string>> {
+async correctWorthFixingFinding(findingId: string, correctionText: string, intent: string) : Promise<Result<WorthFixingSummary, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("correct_worth_fixing_finding", { findingId, correctionText, intent }) };
 } catch (e) {
@@ -480,6 +488,14 @@ async correctWorthFixingFinding(findingId: string, correctionText: string, inten
 async deleteCacheFiles(paths: string[]) : Promise<Result<number, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("delete_cache_files", { paths }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async deleteCaptureData(scope: DeletionScope) : Promise<Result<DeletionResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_capture_data", { scope }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -508,7 +524,7 @@ async disableOverlayClickThrough() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async dismissWorthFixingFinding(findingId: string, reason: DispositionKind) : Promise<Result<string, string>> {
+async dismissWorthFixingFinding(findingId: string, reason: DispositionKind) : Promise<Result<WorthFixingSummary, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("dismiss_worth_fixing_finding", { findingId, reason }) };
 } catch (e) {
@@ -587,6 +603,14 @@ async getAppIdentifier() : Promise<string> {
 async getAppServerConfig() : Promise<JsonValue> {
     return await TAURI_INVOKE("get_app_server_config");
 },
+async getAppUpdateSettings() : Promise<Result<AppUpdateSettingsView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_app_update_settings") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Read the current boot phase of the server. Used by the onboarding UI to
  * show progress ("updating database", "loading pipes", ...) while the HTTP
@@ -618,6 +642,19 @@ async getCaptureHealth() : Promise<Result<CaptureHealth, string>> {
 }
 },
 /**
+ * Return the privacy categories and real apps/sites observed in local capture
+ * for the current calendar month. Durations are estimated from frame gaps and
+ * never leave the device.
+ */
+async getCaptureVisibility() : Promise<Result<CaptureVisibilityView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_capture_visibility") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Read the user's dystil cloud session JWT from `~/.dystil/
  * auth.json`. Returns None when the file is missing, malformed, or the
  * token field is empty.
@@ -632,6 +669,14 @@ async getCaptureHealth() : Promise<Result<CaptureHealth, string>> {
  */
 async getCloudToken() : Promise<string | null> {
     return await TAURI_INVOKE("get_cloud_token");
+},
+async getDeletionSources() : Promise<Result<DeletionSource[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_deletion_sources") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 async getDiskUsage(forceRefresh: boolean | null, dataDir: string | null) : Promise<Result<JsonValue, string>> {
     try {
@@ -707,6 +752,38 @@ async getOtherWorthFixingFindings(cursor: string | null, limit: number) : Promis
     else return { status: "error", error: e  as any };
 }
 },
+async getReadyArtifact(artifactId: string) : Promise<Result<ReadyArtifactDetail, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_ready_artifact", { artifactId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getReadyArtifactProvenance(artifactId: string) : Promise<Result<WorthFixingEvidenceLine[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_ready_artifact_provenance", { artifactId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getReadyToUse(cursor: string | null, limit: number) : Promise<Result<ArtifactPage, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_ready_to_use", { cursor, limit }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getRetentionStorage(forceRefresh: boolean | null) : Promise<Result<RetentionStorageView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_retention_storage", { forceRefresh }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Read local cloud-sync consent. Defaults are fail-closed for both new and
  * existing installations because `syncConsent` is serde-defaulted.
@@ -714,6 +791,14 @@ async getOtherWorthFixingFindings(cursor: string | null, limit: number) : Promis
 async getSyncConsent() : Promise<Result<SyncConsent, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_sync_consent") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getWhenItRunsSettings() : Promise<Result<WhenItRunsView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_when_it_runs_settings") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -746,6 +831,14 @@ async hideNotificationPanel() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async installAppUpdate() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("install_app_update") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async isCaptureRunning() : Promise<Result<boolean, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("is_capture_running") };
@@ -759,6 +852,14 @@ async isCaptureRunning() : Promise<Result<boolean, string>> {
  */
 async isOverlayClickThrough() : Promise<boolean> {
     return await TAURI_INVOKE("is_overlay_click_through");
+},
+async keepWorthFixingFinding(findingId: string) : Promise<Result<KeepFindingResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("keep_worth_fixing_finding", { findingId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 async listCacheFiles() : Promise<Result<CacheFile[], string>> {
     try {
@@ -891,6 +992,14 @@ async openPipeWindow(port: number, title: string) : Promise<Result<null, string>
     else return { status: "error", error: e  as any };
 }
 },
+async openReadyCapability(artifactId: string) : Promise<Result<ReadyArtifactUseResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_ready_capability", { artifactId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async openSearchWindow(query: string | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("open_search_window", { query }) };
@@ -902,6 +1011,38 @@ async openSearchWindow(query: string | null) : Promise<Result<null, string>> {
 async openWindowsShellTarget(target: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("open_windows_shell_target", { target }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async pauseCaptureFor(mode: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pause_capture_for", { mode }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async previewCaptureDeletion(scope: DeletionScope) : Promise<Result<DeletionPreview, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("preview_capture_deletion", { scope }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async proposeReadyArtifactChange(artifactId: string, request: string) : Promise<Result<ArtifactChangePreview, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("propose_ready_artifact_change", { artifactId, request }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async recordReadyArtifactUsed(artifactId: string, action: ReadyArtifactAction) : Promise<Result<ReadyArtifactUseResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("record_ready_artifact_used", { artifactId, action }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -927,12 +1068,28 @@ async refreshTrayMenu() : Promise<Result<null, string>> {
 }
 },
 /**
- * Explicit refresh backend boundary. Normal background wakes use the same
- * durable engine; this command does not bypass admission or the daily cap.
+ * Explicit refresh backend boundary. It bypasses adaptive batching thresholds
+ * but not evidence admission, one-job-at-a-time execution, or durable recovery.
  */
 async refreshWorthFixing() : Promise<Result<WorthFixingRefreshResult, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("refresh_worth_fixing") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async rejectReadyArtifactChange(changeJobId: string) : Promise<Result<ReadyArtifactDetail, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("reject_ready_artifact_change", { changeJobId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async removeReadyArtifact(artifactId: string) : Promise<Result<ReadyArtifactMutationResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remove_ready_artifact", { artifactId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1025,9 +1182,33 @@ async resizeSearchWindow(width: number, height: number) : Promise<Result<null, s
     else return { status: "error", error: e  as any };
 }
 },
-async saveWorthFixingFinding(findingId: string) : Promise<Result<string, string>> {
+async resumeCaptureNow() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("resume_capture_now") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async retryReadyArtifactChange(changeJobId: string) : Promise<Result<ArtifactChangePreview, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("retry_ready_artifact_change", { changeJobId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async saveWorthFixingFinding(findingId: string) : Promise<Result<KeepFindingResult, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("save_worth_fixing_finding", { findingId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async setAppAutoUpdate(enabled: boolean) : Promise<Result<AppUpdateSettingsView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_app_auto_update", { enabled }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1036,6 +1217,29 @@ async saveWorthFixingFinding(findingId: string) : Promise<Result<string, string>
 async setAutostart(enabled: boolean) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_autostart", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Enable or block one sensitive category by updating the capture engine's
+ * real window and URL filters.
+ */
+async setCaptureCategoryEnabled(categoryId: string, enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_capture_category_enabled", { categoryId, enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Enable or block one observed application or website from future capture.
+ */
+async setCaptureSourceEnabled(sourceKind: string, sourceName: string, enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_capture_source_enabled", { sourceKind, sourceName, enabled }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1087,6 +1291,14 @@ async setOnboardingAiSetup(setup: OnboardingAiSetup) : Promise<Result<Onboarding
 async setOnboardingStep(step: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_onboarding_step", { step }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async setRetentionDays(retentionDays: number) : Promise<Result<RetentionStorageView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_retention_days", { retentionDays }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1301,6 +1513,10 @@ export type AiPresetModelsView = { models: string[]; detail: string }
 export type AiPresetView = { id: string; name: string; providerKind: string; endpoint: string | null; model: string; active: boolean; credentialPresent: boolean; validationStatus: string; validationMessage: string | null; validatedAt: string | null }
 export type AiProviderModelView = { id: string; displayName: string; description: string; isDefault: boolean }
 export type AiProviderStatusView = { provider: string; state: string; installedVersion: string | null; authenticated: boolean | null; detail: string | null }
+export type AppUpdateSettingsView = { autoUpdate: boolean; updaterAvailable: boolean; availableVersion: string | null }
+export type ArtifactChangePreview = { changeJobId: string; artifactId: string; title: string; body: string; changedLineCount: number }
+export type ArtifactChangeSummary = { request: string; changedAt: string }
+export type ArtifactPage = { items: ReadyArtifactCard[]; nextCursor: string | null }
 export type AuthMode = "individual" | "workspace"
 export type AutomationArtifactView = { id: string; runId: string; automationName: string; relativePath: string; sizeBytes: number; mediaType: string; liveView: boolean; outputKind: string; contentJson: string | null; createdAt: string }
 export type AutomationDraftView = { id: string; request: string; markdown: string; automation: AutomationView }
@@ -1335,8 +1551,15 @@ export type BrowserLogEntry = { level: string; message: string }
 export type BuildCapabilities = { cloudAvailable: boolean; authMode: AuthMode; cloudBaseUrl: string | null; officialBuild: boolean }
 export type CacheFile = { path: string; label: string; size_bytes: number }
 export type Cadence = "none" | "daily" | "weekly" | "monthly"
+export type CaptureCategoryView = { id: string; enabled: boolean }
 export type CaptureHealth = { status: string; status_code: number; last_frame_timestamp: string | null; last_ui_timestamp: string | null; frame_status: string; ui_status: string; message: string }
+export type CaptureSourceView = { id: string; kind: string; name: string; activeMinutes: number; enabled: boolean }
+export type CaptureVisibilityView = { categories: CaptureCategoryView[]; sources: CaptureSourceView[]; sourcesError: string | null }
 export type Credits = { amount: number }
+export type DeletionPreview = { frameCount: number; eventCount: number; capturedDurationSeconds: number; screenshotCount: number; mediaBytes: number; oldestAt: string | null; newestAt: string | null; cloudCopyMayRemain: boolean }
+export type DeletionResult = { deletedFrames: number; deletedEvents: number; deletedScreenshots: number; forgottenEvidence: number; withdrawnFindings: number; cloudCopyMayRemain: boolean }
+export type DeletionScope = { kind: string; startDate: string | null; endDate: string | null; sourceKind: string | null; sourceName: string | null }
+export type DeletionSource = { kind: string; name: string }
 export type DispositionKind = "accepted" | "saved" | "not_a_problem" | "leave_it" | "close_but"
 export type DystilAuthState = { status: string; session: DystilUserSession | null; user: DystilUserProfile | null; device_token_present: boolean; error: string | null }
 export type DystilUserOrg = { id: string; name: string | null; slug: string | null; roles: string[] }
@@ -1347,6 +1570,7 @@ export type FindingPage = { items: WorthFixingCard[]; nextCursor: string | null 
 export type HandoffType = "prompt" | "saved_prompt" | "existing_capability" | "runbook"
 export type HardwareCapability = { hasGpu: boolean; cpuCores: number; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
+export type KeepFindingResult = { artifact: ReadyArtifactCard; summary: WorthFixingSummary; alreadyKept: boolean }
 export type KeychainStatus = { state: string }
 export type LocalChatMessageView = { id: string; sessionId: string; role: string; mode: string; question: string | null; answer: string | null; status: string; citationsJson: string | null; provider: string | null; model: string | null; elapsedMs: number | null; errorCode: string | null; createdAt: string }
 export type LocalChatSessionView = { id: string; title: string; updatedAt: string }
@@ -1370,6 +1594,12 @@ currentStep?: string | null;
  * local preference only; provider credentials live in their own stores.
  */
 aiSetupChoice?: string | null }
+export type ReadyArtifactAction = "copy" | "open" | "share" | "show_how"
+export type ReadyArtifactCard = { artifactId: string; title: string; kind: HandoffType; description: string; lastUsedAt: string | null; primaryAction: ReadyArtifactAction; secondaryAction: ReadyArtifactAction }
+export type ReadyArtifactDetail = { card: ReadyArtifactCard; body: string; keptAt: string; changeCount: number; changes: ArtifactChangeSummary[]; provenanceAvailable: boolean; provenanceLabel: string }
+export type ReadyArtifactMutationResult = { artifactId: string; revision: number }
+export type ReadyArtifactUseResult = { artifactId: string; lastUsedAt: string }
+export type RetentionStorageView = { retentionDays: number; totalDataSize: string; totalDataBytes: number; availableSpace: string; availableSpaceBytes: number; fixedBytes: number; dailyHistoryBytes: number; observedDays: number; estimateIsEarly: boolean }
 /**
  * A single schedule rule: a day-of-week + time range + what to record.
  */
@@ -1614,7 +1844,22 @@ scheduleRules?: ScheduleRule[] }) &
  * that the Rust struct doesn't know about. Without this, `save()` would
  * serialize only known fields and silently wipe frontend-only data.
  */
-({ [key in string]: null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue } }) & { isLoading: boolean; devMode: boolean; ocrEngine: string; dataDir: string; autoStartEnabled: boolean; platform: string; user: User;
+({ [key in string]: null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue } }) & { isLoading: boolean; devMode: boolean; ocrEngine: string; dataDir: string; autoStartEnabled: boolean;
+/**
+ * Whether capture was explicitly paused by the user. Kept separate from
+ * the live capture session so a privacy pause survives an app restart.
+ */
+capturePaused?: boolean;
+/**
+ * Absolute UTC deadline for a timed pause. `None` while paused means the
+ * pause is indefinite and requires an explicit resume.
+ */
+capturePauseUntil?: string | null;
+/**
+ * Number of days of raw capture to retain locally. Zero means forever.
+ * Findings and other derived artifacts are not governed by this setting.
+ */
+retentionDays?: number; platform: string; user: User;
 /**
  * Explicit, local permission for cloud synchronization. This is never
  * inferred from login/device state or remote policy.
@@ -1672,11 +1917,12 @@ minimizeToTrayOnClose?: boolean }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "PermissionRecovery"
 export type SyncConsent = { segments: boolean; screenshots: boolean }
 export type User = { id: string | null; name: string | null; email: string | null; image: string | null; token: string | null; api_key: string | null; credits: Credits | null; bio: string | null; website: string | null; contact: string | null; credits_balance: number | null }
+export type WhenItRunsView = { autostartEnabled: boolean; screenshotEnabled: boolean; captureRunning: boolean; capturePaused: boolean; pauseUntil: string | null }
 export type WorthFixingCard = { findingId: string; label: string; claim: string; whyWorthFixing: string; handoffType: HandoffType; handoffTitle: string; handoffPreview: string; occurrenceCount: number; cadence: Cadence; evidenceAvailable: boolean }
 export type WorthFixingCleanupResult = { removedFiles: number; removedBytes: number; retainedBytes: number; enhancedDiagnostics: boolean }
 export type WorthFixingEvidenceLine = { evidenceId: string; occurredAt: string; app: string | null; description: string; available: boolean }
 export type WorthFixingRefreshResult = { status: string; jobId: string | null; opportunitiesChanged: number; findingsCreated: number }
-export type WorthFixingSummary = { selected: WorthFixingCard[]; eligibleCount: number; watchingCount: number; pendingObservationCount: number; processing: boolean; staleEvidenceCount: number; providerReady: boolean; lastSuccessfulWakeAt: string | null }
+export type WorthFixingSummary = { selected: WorthFixingCard[]; eligibleCount: number; watchingCount: number; pendingObservationCount: number; manualRefreshReady: boolean; processing: boolean; staleEvidenceCount: number; providerReady: boolean; lastSuccessfulWakeAt: string | null }
 
 /** tauri-specta globals **/
 
