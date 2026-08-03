@@ -1,6 +1,9 @@
 use chrono;
+use same_file::Handle;
 use serde::{Deserialize, Serialize};
 use serde_json;
+use sqlx::Row;
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -20,6 +23,12 @@ pub struct DiskUsage {
     pub total_data_bytes: u64,
     /// Raw available space bytes for frontend calculations.
     pub available_space_bytes: u64,
+    /// Raw retained capture media bytes used by storage projections.
+    #[serde(default)]
+    pub media_size_bytes: u64,
+    /// Raw capture database bytes used by storage projections.
+    #[serde(default)]
+    pub database_size_bytes: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -32,6 +41,7 @@ pub struct MonitorUsage {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DiskUsedByMedia {
     pub videos_size: String,
+    pub screenshots_size: String,
     pub total_media_size: String,
     pub monitors: Vec<MonitorUsage>,
 }
@@ -72,21 +82,50 @@ fn canonical_dir_key(p: &Path) -> String {
     s.trim_end_matches('/').trim_end_matches('\\').to_string()
 }
 
+#[cfg(unix)]
+fn allocated_file_size(metadata: &fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    metadata.blocks().saturating_mul(512)
+}
+
+#[cfg(not(unix))]
+fn allocated_file_size(metadata: &fs::Metadata) -> u64 {
+    metadata.len()
+}
+
 pub fn directory_size(path: &Path) -> io::Result<Option<u64>> {
     if !path.exists() {
         return Ok(None);
     }
-    let mut size = 0;
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let metadata = entry.metadata()?;
-        if metadata.is_dir() {
-            size += directory_size(&entry.path())?.unwrap_or(0);
-        } else {
-            size += metadata.len();
+
+    fn scan(path: &Path, seen_files: &mut HashSet<Handle>) -> io::Result<u64> {
+        let mut size = 0u64;
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            // A symlink does not store the target below this data directory.
+            // Skipping it also prevents cycles and accidental traversal outside
+            // the directory the user asked us to measure.
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                size = size.saturating_add(scan(&entry.path(), seen_files)?);
+                continue;
+            }
+
+            // Bun keeps its global packages and download cache as hard links.
+            // Different paths can therefore refer to the same bytes on disk.
+            // `Handle` provides a cross-platform filesystem identity so each
+            // underlying file contributes to the total exactly once.
+            if seen_files.insert(Handle::from_path(entry.path())?) {
+                size = size.saturating_add(allocated_file_size(&entry.metadata()?));
+            }
         }
+        Ok(size)
     }
-    Ok(Some(size))
+
+    scan(path, &mut HashSet::new()).map(Some)
 }
 
 pub fn readable(size: u64) -> String {
@@ -170,6 +209,7 @@ pub async fn disk_usage(
     }
 
     let mut total_video_size: u64 = 0;
+    let mut total_screenshot_size: u64 = 0;
 
     // Calculate total data size
     info!("Calculating total data size for: {}", dystil_dir.display());
@@ -206,6 +246,7 @@ pub async fn disk_usage(
         fn scan_media_files(
             dir: &Path,
             video_size: &mut u64,
+            screenshot_size: &mut u64,
             monitor_sizes: &mut std::collections::HashMap<String, u64>,
         ) -> io::Result<()> {
             // Regex to extract monitor name prefix before the timestamp
@@ -217,9 +258,9 @@ pub async fn disk_usage(
                 let entry = entry?;
                 let path = entry.path();
                 if path.is_dir() {
-                    scan_media_files(&path, video_size, monitor_sizes)?;
+                    scan_media_files(&path, video_size, screenshot_size, monitor_sizes)?;
                 } else if path.is_file() {
-                    let size = entry.metadata()?.len();
+                    let size = allocated_file_size(&entry.metadata()?);
                     let file_name = path.file_name().unwrap().to_string_lossy().to_string();
 
                     let extension = path
@@ -228,7 +269,9 @@ pub async fn disk_usage(
                         .unwrap_or("")
                         .to_lowercase();
 
-                    if extension == "mp4" {
+                    if matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "webp") {
+                        *screenshot_size += size;
+                    } else if extension == "mp4" {
                         {
                             *video_size += size;
                             // Track per-monitor
@@ -252,7 +295,12 @@ pub async fn disk_usage(
             Ok(())
         }
 
-        if let Err(e) = scan_media_files(&data_dir, &mut total_video_size, &mut monitor_sizes) {
+        if let Err(e) = scan_media_files(
+            &data_dir,
+            &mut total_video_size,
+            &mut total_screenshot_size,
+            &mut monitor_sizes,
+        ) {
             warn!("Error scanning media files: {}", e);
         }
 
@@ -266,7 +314,9 @@ pub async fn disk_usage(
     }
 
     let videos_size_str = readable(total_video_size);
-    let total_media_size_str = readable(total_video_size);
+    let screenshots_size_str = readable(total_screenshot_size);
+    let total_media_size = total_video_size.saturating_add(total_screenshot_size);
+    let total_media_size_str = readable(total_media_size);
 
     // Calculate database size (db.sqlite and related files)
     info!("Calculating database size");
@@ -275,7 +325,7 @@ pub async fn disk_usage(
         let db_path = dystil_dir.join(file_name);
         if db_path.exists() {
             if let Ok(metadata) = fs::metadata(&db_path) {
-                database_size += metadata.len();
+                database_size += allocated_file_size(&metadata);
             }
         }
     }
@@ -291,7 +341,7 @@ pub async fn disk_usage(
                 let file_name = path.file_name().unwrap_or_default().to_string_lossy();
                 if file_name.ends_with(".log") {
                     if let Ok(metadata) = entry.metadata() {
-                        logs_size += metadata.len();
+                        logs_size += allocated_file_size(&metadata);
                     }
                 }
             }
@@ -313,7 +363,7 @@ pub async fn disk_usage(
     info!("Pipes size: {} bytes", pipes_size);
 
     // Calculate "other" — everything not accounted for above
-    let accounted = total_video_size + database_size + logs_size + pipes_size;
+    let accounted = total_media_size + database_size + logs_size + pipes_size;
     let other_size: u64 = total_data_size_bytes.saturating_sub(accounted);
     info!(
         "Other size: {} bytes (total {} - accounted {})",
@@ -336,28 +386,9 @@ pub async fn disk_usage(
         available
     };
 
-    // Find oldest recording date by parsing filenames (*_YYYY-MM-DD_HH-MM-SS.mp4)
-    // More reliable than filesystem timestamps which can reflect copy/move time.
-    let recording_since = if data_dir.exists() {
-        let date_re = regex::Regex::new(r"(\d{4}-\d{2}-\d{2})_\d{2}-\d{2}-\d{2}\.\w+$").ok();
-        let mut oldest: Option<String> = None;
-        if let (Some(re), Ok(entries)) = (&date_re, fs::read_dir(&data_dir)) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if let Some(caps) = re.captures(&name) {
-                    let date = caps[1].to_string();
-                    oldest = Some(match oldest {
-                        Some(prev) if date < prev => date,
-                        Some(prev) => prev,
-                        None => date,
-                    });
-                }
-            }
-        }
-        oldest
-    } else {
-        None
-    };
+    let recording_since = oldest_capture_date(dystil_dir)
+        .await
+        .or_else(|| oldest_recording_date(&data_dir));
 
     let mut monitors: Vec<MonitorUsage> = monitor_sizes
         .into_iter()
@@ -372,6 +403,7 @@ pub async fn disk_usage(
     let disk_usage = DiskUsage {
         media: DiskUsedByMedia {
             videos_size: videos_size_str,
+            screenshots_size: screenshots_size_str,
             total_media_size: total_media_size_str,
             monitors,
         },
@@ -387,6 +419,8 @@ pub async fn disk_usage(
         recording_since,
         total_data_bytes: total_data_size_bytes,
         available_space_bytes: available_space,
+        media_size_bytes: total_media_size,
+        database_size_bytes: database_size,
     };
 
     info!("Disk usage calculation completed: {:?}", disk_usage);
@@ -408,4 +442,140 @@ pub async fn disk_usage(
     }
 
     Ok(Some(disk_usage))
+}
+
+fn oldest_recording_date(data_dir: &Path) -> Option<String> {
+    let valid_date = regex::Regex::new(r"^\d{4}-\d{2}-\d{2}$").ok()?;
+    let legacy_file = regex::Regex::new(r"(\d{4}-\d{2}-\d{2})_\d{2}-\d{2}-\d{2}\.\w+$").ok()?;
+    let mut oldest = None;
+    let mut pending = vec![(data_dir.to_path_buf(), None::<String>)];
+
+    while let Some((dir, containing_date)) = pending.pop() {
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let candidate = if path.is_dir() {
+                let nested_date = valid_date
+                    .is_match(&name)
+                    .then_some(name)
+                    .or_else(|| containing_date.clone());
+                pending.push((path, nested_date));
+                None
+            } else {
+                containing_date.clone().or_else(|| {
+                    legacy_file
+                        .captures(&name)
+                        .map(|captures| captures[1].to_string())
+                })
+            };
+            if let Some(date) = candidate {
+                if oldest.as_ref().is_none_or(|current| date < *current) {
+                    oldest = Some(date);
+                }
+            }
+        }
+    }
+    oldest
+}
+
+async fn oldest_capture_date(dystil_dir: &Path) -> Option<String> {
+    let pool =
+        match dystil_storage::open_capture_database_read_only(dystil_dir.join("db.sqlite")).await {
+            Ok(pool) => pool,
+            Err(error) => {
+                tracing::debug!(%error, "could not read oldest capture timestamp");
+                return None;
+            }
+        };
+    let result = sqlx::query(
+        "SELECT MIN(timestamp) AS oldest FROM (
+            SELECT timestamp FROM frames
+            UNION ALL
+            SELECT timestamp FROM ui_events
+         )",
+    )
+    .fetch_one(&pool)
+    .await;
+    let timestamp = match result {
+        Ok(row) => row.try_get::<Option<String>, _>("oldest").ok().flatten(),
+        Err(error) => {
+            tracing::debug!(%error, "could not query oldest capture timestamp");
+            None
+        }
+    }?;
+    let date = timestamp.get(..10)?;
+    regex::Regex::new(r"^\d{4}-\d{2}-\d{2}$")
+        .ok()?
+        .is_match(date)
+        .then(|| date.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{allocated_file_size, directory_size, oldest_capture_date, oldest_recording_date};
+
+    #[test]
+    fn counts_hard_linked_files_only_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let original = temp.path().join("cache-package");
+        let linked = temp.path().join("global-package");
+        std::fs::write(&original, vec![1u8; 1024]).unwrap();
+        std::fs::hard_link(&original, &linked).unwrap();
+
+        let expected = allocated_file_size(&std::fs::metadata(original).unwrap());
+        assert_eq!(directory_size(temp.path()).unwrap(), Some(expected));
+    }
+
+    #[test]
+    fn finds_oldest_date_in_nested_snapshot_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("2026-08-03")).unwrap();
+        std::fs::create_dir_all(temp.path().join("archive/2026-07-29")).unwrap();
+        std::fs::write(temp.path().join("2026-08-03/one.jpg"), []).unwrap();
+        std::fs::write(temp.path().join("archive/2026-07-29/one.jpg"), []).unwrap();
+
+        assert_eq!(
+            oldest_recording_date(temp.path()).as_deref(),
+            Some("2026-07-29")
+        );
+    }
+
+    #[test]
+    fn finds_legacy_flat_recording_names() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("monitor_1_2025-12-04_09-30-00.mp4"), []).unwrap();
+        std::fs::write(temp.path().join("monitor_1_2026-01-02_09-30-00.mp4"), []).unwrap();
+
+        assert_eq!(
+            oldest_recording_date(temp.path()).as_deref(),
+            Some("2025-12-04")
+        );
+    }
+
+    #[tokio::test]
+    async fn reads_capture_history_date_from_the_database_without_media() {
+        let temp = tempfile::tempdir().unwrap();
+        let pool = dystil_storage::open_capture_database(temp.path().join("db.sqlite"))
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO frames(timestamp) VALUES (?1)")
+            .bind("2026-07-21T10:30:00+00:00")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO ui_events(timestamp, event_type) VALUES (?1, 'click')")
+            .bind("2026-07-19T08:00:00+00:00")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+
+        assert_eq!(
+            oldest_capture_date(temp.path()).await.as_deref(),
+            Some("2026-07-19")
+        );
+    }
 }

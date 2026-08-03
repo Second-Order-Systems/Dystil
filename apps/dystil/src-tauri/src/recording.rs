@@ -10,13 +10,133 @@ use crate::config;
 use crate::permissions::do_permissions_check;
 use crate::server_core::ServerCore;
 use crate::store::SettingsStore;
+use chrono::{DateTime, Utc};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager, State};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
+
+static PAUSE_TIMER: Lazy<StdMutex<Option<tauri::async_runtime::JoinHandle<()>>>> =
+    Lazy::new(|| StdMutex::new(None));
+
+fn cancel_pause_timer() {
+    if let Some(handle) = PAUSE_TIMER.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        handle.abort();
+    }
+}
+
+pub fn persisted_pause_deadline(settings: &SettingsStore) -> Option<DateTime<Utc>> {
+    settings
+        .capture_pause_until
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+}
+
+/// Clear an expired or malformed timed pause before startup decides whether to
+/// create a capture session. Indefinite pauses deliberately remain active.
+pub fn normalize_pause_for_startup(settings: &mut SettingsStore) -> bool {
+    if !settings.capture_paused {
+        settings.capture_pause_until = None;
+        return false;
+    }
+    if settings.capture_pause_until.is_some()
+        && persisted_pause_deadline(settings).is_none_or(|deadline| deadline <= Utc::now())
+    {
+        settings.capture_paused = false;
+        settings.capture_pause_until = None;
+        return false;
+    }
+    true
+}
+
+fn schedule_pause_resume(app: tauri::AppHandle, deadline: DateTime<Utc>) {
+    cancel_pause_timer();
+    let delay = (deadline - Utc::now())
+        .to_std()
+        .unwrap_or_else(|_| Duration::from_secs(0));
+    let handle = tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(delay).await;
+        // Detach this task's handle before resuming so the resume path does not
+        // abort the task that is currently running.
+        PAUSE_TIMER.lock().unwrap_or_else(|e| e.into_inner()).take();
+        match resume_capture_from_pause_inner(app.clone()).await {
+            Ok(()) => {
+                crate::notifications::client::send("Capture resumed", "Dystil is recording again.")
+            }
+            Err(error) => {
+                error!(%error, "failed to auto-resume capture after timed pause");
+                let retry_at = Utc::now() + chrono::Duration::minutes(1);
+                schedule_pause_resume(app, retry_at);
+            }
+        }
+    });
+    *PAUSE_TIMER.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+}
+
+pub fn restore_pause_timer(app: tauri::AppHandle, settings: &SettingsStore) {
+    if settings.capture_paused {
+        if let Some(deadline) = persisted_pause_deadline(settings) {
+            schedule_pause_resume(app, deadline);
+        }
+    }
+}
+
+pub async fn pause_capture_until(
+    app: tauri::AppHandle,
+    deadline: Option<DateTime<Utc>>,
+) -> Result<(), String> {
+    let previous = SettingsStore::get(&app)?.unwrap_or_default();
+    let mut updated = previous.clone();
+    updated.capture_paused = true;
+    updated.capture_pause_until = deadline.map(|value| value.to_rfc3339());
+    updated.save(&app)?;
+
+    let state = app.state::<RecordingState>();
+    if let Err(error) = stop_capture(state, app.clone()).await {
+        let _ = previous.save(&app);
+        return Err(error);
+    }
+    cancel_pause_timer();
+    if let Some(deadline) = deadline {
+        schedule_pause_resume(app.clone(), deadline);
+    }
+    notify_recording_state_changed(&app);
+    Ok(())
+}
+
+async fn resume_capture_from_pause_inner(app: tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<RecordingState>();
+    let server_running = state.server.lock().await.is_some();
+    if server_running {
+        start_capture(state, app.clone()).await?;
+    } else {
+        spawn_capture(state, app.clone(), None).await?;
+    }
+
+    let mut settings = SettingsStore::get(&app)?.unwrap_or_default();
+    settings.capture_paused = false;
+    settings.capture_pause_until = None;
+    if let Err(error) = settings.save(&app) {
+        // Do not leave capture running if its persisted pause could not be
+        // cleared; otherwise restart would unexpectedly re-apply the pause.
+        let state = app.state::<RecordingState>();
+        let _ = stop_capture(state, app.clone()).await;
+        return Err(error);
+    }
+    notify_recording_state_changed(&app);
+    Ok(())
+}
+
+pub async fn resume_capture_from_pause(app: tauri::AppHandle) -> Result<(), String> {
+    cancel_pause_timer();
+    resume_capture_from_pause_inner(app).await
+}
 
 /// Build a `DystilCaptureConfig` from the current settings store.
 fn build_config(app: &tauri::AppHandle) -> Result<DystilCaptureConfig, String> {
@@ -638,4 +758,38 @@ async fn start_capture_internal(
 
     info!("Capture started on existing server");
     Ok(())
+}
+
+#[cfg(test)]
+mod pause_tests {
+    use super::*;
+
+    #[test]
+    fn startup_preserves_active_and_indefinite_pauses() {
+        let mut indefinite = SettingsStore::default();
+        indefinite.capture_paused = true;
+        assert!(normalize_pause_for_startup(&mut indefinite));
+        assert!(indefinite.capture_paused);
+
+        let mut timed = SettingsStore::default();
+        timed.capture_paused = true;
+        timed.capture_pause_until = Some((Utc::now() + chrono::Duration::hours(1)).to_rfc3339());
+        assert!(normalize_pause_for_startup(&mut timed));
+        assert!(timed.capture_paused);
+    }
+
+    #[test]
+    fn startup_clears_expired_or_malformed_timed_pauses() {
+        for deadline in [
+            (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339(),
+            "not-a-date".to_string(),
+        ] {
+            let mut settings = SettingsStore::default();
+            settings.capture_paused = true;
+            settings.capture_pause_until = Some(deadline);
+            assert!(!normalize_pause_for_startup(&mut settings));
+            assert!(!settings.capture_paused);
+            assert!(settings.capture_pause_until.is_none());
+        }
+    }
 }

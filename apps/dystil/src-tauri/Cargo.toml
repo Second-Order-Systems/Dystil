@@ -125,6 +125,7 @@ zip = "2"
 urlencoding = "2"
 url = "2"
 async-trait = "0.1"
+same-file = "1.0"
 
 # Cloud sync utilities
 hostname = "0.4"

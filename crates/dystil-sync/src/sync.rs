@@ -6,7 +6,6 @@ use dystil_protocol::{
 };
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use sqlx::SqlitePool;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
@@ -332,22 +331,6 @@ impl DystilSync {
             )));
         }
         Ok(response.json::<SegmentUploadResponse>().await?)
-    }
-
-    pub async fn cleanup_snapshots_once(&self) -> Result<(), SyncError> {
-        Self::cleanup_synced_snapshots_once(&self.db_path, &self.state_db_path).await
-    }
-
-    /// Deletes snapshots whose upload completion was persisted locally.
-    /// This is local-only cleanup and does not require cloud connectivity.
-    pub async fn cleanup_synced_snapshots_once(
-        db_path: &std::path::Path,
-        state_db_path: &std::path::Path,
-    ) -> Result<(), SyncError> {
-        let cache = Self::read_image_cache_at(state_db_path)?;
-        let db_url = format!("sqlite:{}?mode=ro", db_path.display());
-        let pool = SqlitePool::connect(&db_url).await?;
-        Self::cleanup_snapshots_before_cursor(&pool, &cache).await
     }
 
     pub(crate) async fn prepare_images(

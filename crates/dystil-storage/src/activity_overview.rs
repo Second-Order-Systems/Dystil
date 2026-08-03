@@ -28,6 +28,68 @@ pub struct ActivityOverviewRaw {
     pub health: ActivityHealthRaw,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CaptureSourceUsageRaw {
+    pub app_name: String,
+    pub browser_url: Option<String>,
+    pub active_seconds: f64,
+    pub observations: u64,
+}
+
+/// Aggregate every app/browser URL observed in a time range for settings.
+///
+/// Unlike the retrieval overview, this intentionally has no result limit: a
+/// privacy inventory must not hide less-active sources. Active time uses the
+/// same rule as the overview (the gap to the next frame, capped at five
+/// minutes), but the work and grouping happen in SQLite.
+pub async fn get_capture_source_usage(
+    pool: &SqlitePool,
+    start_time: &str,
+    end_time: &str,
+) -> Result<Vec<CaptureSourceUsageRaw>, StorageError> {
+    let rows = sqlx::query(
+        "WITH ordered_frames AS (
+             SELECT
+                 app_name,
+                 browser_url,
+                 timestamp,
+                 (julianday(LEAD(timestamp) OVER (
+                     ORDER BY datetime(timestamp), id
+                 )) - julianday(timestamp)) * 86400.0 AS gap_seconds
+             FROM frames
+             WHERE datetime(timestamp) BETWEEN datetime(?1) AND datetime(?2)
+         )
+         SELECT
+             COALESCE(NULLIF(TRIM(app_name), ''), 'Unknown') AS app_name,
+             NULLIF(TRIM(browser_url), '') AS browser_url,
+             TOTAL(CASE
+                 WHEN gap_seconds > 0.0 AND gap_seconds < 300.0 THEN gap_seconds
+                 ELSE 0.0
+             END) AS active_seconds,
+             COUNT(*) AS observations
+         FROM ordered_frames
+         GROUP BY
+             COALESCE(NULLIF(TRIM(app_name), ''), 'Unknown'),
+             NULLIF(TRIM(browser_url), '')",
+    )
+    .bind(start_time)
+    .bind(end_time)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(CaptureSourceUsageRaw {
+                app_name: row.try_get("app_name")?,
+                browser_url: row.try_get("browser_url")?,
+                active_seconds: row.try_get("active_seconds")?,
+                observations: row.try_get::<i64, _>("observations")?.max(0) as u64,
+            })
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()
+        .map_err(Into::into)
+}
+
 pub async fn get_activity_overview_raw(
     pool: &SqlitePool,
     start_time: &str,

@@ -1,6 +1,6 @@
 use crate::commands::{hide_main_window, show_main_window};
 use crate::health::{get_recording_info, get_recording_status, RecordingStatus};
-use crate::recording::{spawn_capture, start_capture, stop_capture, RecordingState};
+use crate::recording::{pause_capture_until, resume_capture_from_pause, RecordingState};
 use crate::store::{OnboardingStore, SettingsStore};
 
 use crate::window::ShowRewindWindow;
@@ -8,7 +8,6 @@ use anyhow::Result;
 use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use tauri::async_runtime::JoinHandle;
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::Emitter;
 use tauri::{
@@ -98,39 +97,14 @@ fn set_optimistic_status(status: RecordingStatus) {
     ));
 }
 
-/// Pending "pause for X minutes" timer. Held so a manual resume — or a fresh
-/// pause click — can abort the previous one and prevent a stale auto-resume
-/// from firing later. The start instant + total duration are kept so the tray
-/// tooltip can show a live "resumes in 12m" countdown via the existing 5-sec
-/// updater loop. No persistence: app quit / crash drops the timer and
-/// recording stays paused, which is the safer default for a privacy bias.
-struct PauseTimer {
-    handle: JoinHandle<()>,
-    started: std::time::Instant,
-    total: std::time::Duration,
-}
-
-static PAUSE_TIMER: Lazy<Mutex<Option<PauseTimer>>> = Lazy::new(|| Mutex::new(None));
-
-fn cancel_pause_timer() {
-    if let Some(t) = PAUSE_TIMER.lock().unwrap_or_else(|e| e.into_inner()).take() {
-        t.handle.abort();
-    }
-}
-
 /// Remaining time until auto-resume, if a pause timer is currently active.
-/// Returns None if the timer has already fired or no timer is set.
-#[allow(dead_code)]
-fn pause_remaining() -> Option<std::time::Duration> {
-    let guard = PAUSE_TIMER.lock().unwrap_or_else(|e| e.into_inner());
-    guard.as_ref().and_then(|t| {
-        let elapsed = t.started.elapsed();
-        if elapsed >= t.total {
-            None
-        } else {
-            Some(t.total - elapsed)
-        }
-    })
+fn pause_remaining(app: &AppHandle) -> Option<std::time::Duration> {
+    let settings = SettingsStore::get(app).ok().flatten()?;
+    if !settings.capture_paused {
+        return None;
+    }
+    let deadline = crate::recording::persisted_pause_deadline(&settings)?;
+    (deadline - chrono::Utc::now()).to_std().ok()
 }
 
 #[allow(dead_code)]
@@ -154,10 +128,6 @@ fn format_remaining(d: std::time::Duration) -> String {
     } else {
         format!("{}s", secs.max(1))
     }
-}
-
-fn send_notify(title: impl Into<String>, body: impl Into<String>) {
-    crate::notifications::client::send(title, body);
 }
 
 /// Immediately rebuild the tray menu (called from main thread after optimistic status set).
@@ -473,31 +443,27 @@ fn create_dynamic_menu(
         });
     let capture_label = if capture_running { "Pause" } else { "Resume" };
 
-    MenuBuilder::new(app)
+    let mut menu = MenuBuilder::new(app)
         .item(&MenuItemBuilder::with_id("open_app", "Open app").build(app)?)
-        .item(&MenuItemBuilder::with_id("toggle_capture", capture_label).build(app)?)
-        .build()
-        .map_err(Into::into)
+        .item(&MenuItemBuilder::with_id("toggle_capture", capture_label).build(app)?);
+    if capture_running {
+        menu = menu
+            .item(&MenuItemBuilder::with_id("pause_60", "Pause for 1 hour").build(app)?)
+            .item(&MenuItemBuilder::with_id("pause_today", "Pause for today").build(app)?);
+    }
+    menu.build().map_err(Into::into)
 }
 
 async fn handle_tray_capture_toggle(app_handle: AppHandle) {
-    cancel_pause_timer();
-
     let state = app_handle.state::<RecordingState>();
     let is_recording = state.capture_active.load(Ordering::SeqCst);
 
     if is_recording {
-        if let Err(e) = stop_capture(state, app_handle.clone()).await {
+        if let Err(e) = pause_capture_until(app_handle.clone(), None).await {
             error!("tray pause failed: {}", e);
         }
     } else {
-        let server_running = state.server.lock().await.is_some();
-        let result = if server_running {
-            start_capture(state, app_handle.clone()).await
-        } else {
-            spawn_capture(state, app_handle.clone(), None).await
-        };
-        if let Err(e) = result {
+        if let Err(e) = resume_capture_from_pause(app_handle.clone()).await {
             error!("tray resume failed: {}", e);
         }
     }
@@ -604,56 +570,23 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
             });
         }
         id if id.starts_with("pause_") => {
-            let mins: u64 = id
-                .strip_prefix("pause_")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(15);
-            let total = std::time::Duration::from_secs(mins * 60);
-            // Cancel any in-flight pause timer before scheduling a new one.
-            cancel_pause_timer();
-            // Pause now (same path as the manual toggle).
-            set_optimistic_status(RecordingStatus::Paused);
-            let app_for_stop = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = app_for_stop.emit("shortcut-stop-recording", ());
-            });
-            // Schedule auto-resume — also fires a notification so the user knows
-            // recording is back on without having to open the menu.
-            let app_for_resume = app_handle.clone();
-            let handle = tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(total).await;
-                let _ = app_for_resume.emit("shortcut-start-recording", ());
-                send_notify("Recording resumed", "dystil is recording again.");
-            });
-            *PAUSE_TIMER.lock().unwrap_or_else(|e| e.into_inner()) = Some(PauseTimer {
-                handle,
-                started: std::time::Instant::now(),
-                total,
-            });
-            // Tell the user via a system notification (the tray icon doesn't
-            // visually change between recording / paused, so the menubar gives
-            // no glance-level signal otherwise).
-            let pretty = if mins >= 60 {
-                let h = mins / 60;
-                if h == 1 {
-                    "1 hour".to_string()
-                } else {
-                    format!("{} hours", h)
-                }
+            let mode = if id == "pause_today" {
+                "today"
             } else {
-                format!("{} minutes", mins)
+                "oneHour"
             };
-            send_notify(
-                "Recording paused",
-                format!("dystil will auto-resume in {}.", pretty),
-            );
-            // Repaint the tray so "Recording" flips to "Paused" immediately.
-            let app_for_rebuild = app_handle.clone();
-            let _ = app_handle.run_on_main_thread(move || {
-                if let Err(e) = force_tray_rebuild(&app_for_rebuild) {
-                    error!("tray rebuild failed: {}", e);
+            match crate::commands::pause_deadline(mode, chrono::Local::now()) {
+                Ok(deadline) => {
+                    set_optimistic_status(RecordingStatus::Paused);
+                    let app = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(error) = pause_capture_until(app.clone(), Some(deadline)).await {
+                            error!(%error, "tray timed pause failed");
+                        }
+                    });
                 }
-            });
+                Err(error) => error!(%error, "could not calculate tray pause deadline"),
+            }
         }
         "lock_vault" => {
             let _ = app_handle.emit("vault-lock-requested", ());
@@ -807,7 +740,7 @@ async fn update_menu_if_needed(
     let tooltip: String = if has_perm_issue {
         "dystil — ⚠️ permissions needed".to_string()
     } else if effective_status == RecordingStatus::Paused {
-        match pause_remaining() {
+        match pause_remaining(app) {
             Some(d) => format!("dystil — paused, resumes in {}", format_remaining(d)),
             None => "dystil — paused".to_string(),
         }
