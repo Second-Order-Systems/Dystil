@@ -59,6 +59,13 @@
         { "url": "^obsidian://.*" }
       ]
     },
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        { "path": "$HOME/.dystil" },
+        { "path": "$HOME/.dystil/**" }
+      ]
+    },
     "core:window:default",
     "core:window:allow-get-all-windows",
     "core:window:allow-close",

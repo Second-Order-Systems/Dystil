@@ -1,13 +1,13 @@
 //! Typed Tauri boundary for the local Worth Fixing backend.
 //!
-//! The React page is intentionally not wired in this phase. Commands expose
-//! only product DTOs and user dispositions; inference and SQLite remain native.
+//! Commands expose only product DTOs and user dispositions; inference and
+//! SQLite remain native.
 
 use dystil_insights::{
-    cleanup_diagnostics, finding_evidence, normal_wakes_started, open_insights_database,
-    other_findings, pending_observations, record_disposition, record_wake_start, run_steward_wake,
+    cleanup_diagnostics, finding_evidence, keep_finding, open_insights_database, other_findings,
+    pending_observations, record_disposition, record_wake_start, run_steward_wake,
     set_enhanced_diagnostics, worth_fixing_summary, DiagnosticRetention, DispositionKind,
-    FindingPage, WakeResult, WorthFixingEvidenceLine, WorthFixingSummary,
+    FindingPage, KeepFindingResult, WakeResult, WorthFixingEvidenceLine, WorthFixingSummary,
 };
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -43,7 +43,7 @@ impl WorthFixingState {
     }
 }
 
-async fn provider_ready(state: &crate::recording::RecordingState) -> bool {
+pub(crate) async fn provider_ready(state: &crate::recording::RecordingState) -> bool {
     let server = state.server.lock().await;
     let Some(server) = server.as_ref() else {
         return false;
@@ -86,8 +86,8 @@ pub async fn get_worth_fixing_summary(
         .map_err(|error| error.to_string())
 }
 
-/// Explicit refresh backend boundary. Normal background wakes use the same
-/// durable engine; this command does not bypass admission or the daily cap.
+/// Explicit refresh backend boundary. It bypasses adaptive batching thresholds
+/// but not evidence admission, one-job-at-a-time execution, or durable recovery.
 #[tauri::command]
 #[specta::specta]
 pub async fn refresh_worth_fixing(
@@ -120,17 +120,10 @@ pub async fn refresh_worth_fixing(
     let timezone = crate::ai::local_timezone_offset();
     let local_day =
         crate::ai::local_date_for_timestamp(&chrono::Utc::now().to_rfc3339(), &timezone);
-    if normal_wakes_started(insights, &local_day)
-        .await
-        .map_err(|error| error.to_string())?
-        >= 4
-    {
-        return Err("the daily Worth Fixing refresh limit has been reached".into());
-    }
     let runtime = crate::ai_runtime::resolve(&app, &recording, &capture_db, &timezone)
         .await
         .map_err(|error| error.to_string())?;
-    record_wake_start(insights, &local_day, "explicit_request", true, 4)
+    record_wake_start(insights, &local_day, "explicit_request", true)
         .await
         .map_err(|error| error.to_string())?;
     match run_steward_wake(
@@ -250,17 +243,10 @@ async fn disposition(
 pub async fn accept_worth_fixing_finding(
     app: AppHandle,
     state: State<'_, WorthFixingState>,
+    recording: State<'_, crate::recording::RecordingState>,
     finding_id: String,
-) -> Result<String, String> {
-    disposition(
-        &app,
-        &state,
-        &finding_id,
-        DispositionKind::Accepted,
-        None,
-        None,
-    )
-    .await
+) -> Result<KeepFindingResult, String> {
+    keep_worth_fixing_finding(app, state, recording, finding_id).await
 }
 
 #[tauri::command]
@@ -268,17 +254,24 @@ pub async fn accept_worth_fixing_finding(
 pub async fn save_worth_fixing_finding(
     app: AppHandle,
     state: State<'_, WorthFixingState>,
+    recording: State<'_, crate::recording::RecordingState>,
     finding_id: String,
-) -> Result<String, String> {
-    disposition(
-        &app,
-        &state,
-        &finding_id,
-        DispositionKind::Saved,
-        None,
-        None,
-    )
-    .await
+) -> Result<KeepFindingResult, String> {
+    keep_worth_fixing_finding(app, state, recording, finding_id).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn keep_worth_fixing_finding(
+    app: AppHandle,
+    state: State<'_, WorthFixingState>,
+    recording: State<'_, crate::recording::RecordingState>,
+    finding_id: String,
+) -> Result<KeepFindingResult, String> {
+    let pool = state.pool(&app).await?;
+    keep_finding(pool, &finding_id, provider_ready(&recording).await)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -286,16 +279,18 @@ pub async fn save_worth_fixing_finding(
 pub async fn dismiss_worth_fixing_finding(
     app: AppHandle,
     state: State<'_, WorthFixingState>,
+    recording: State<'_, crate::recording::RecordingState>,
     finding_id: String,
     reason: DispositionKind,
-) -> Result<String, String> {
+) -> Result<WorthFixingSummary, String> {
     if !matches!(
         reason,
         DispositionKind::NotAProblem | DispositionKind::LeaveIt
     ) {
         return Err("dismissal reason must be not_a_problem or leave_it".into());
     }
-    disposition(&app, &state, &finding_id, reason, None, None).await
+    disposition(&app, &state, &finding_id, reason, None, None).await?;
+    get_worth_fixing_summary(app, state, recording).await
 }
 
 #[tauri::command]
@@ -303,10 +298,11 @@ pub async fn dismiss_worth_fixing_finding(
 pub async fn correct_worth_fixing_finding(
     app: AppHandle,
     state: State<'_, WorthFixingState>,
+    recording: State<'_, crate::recording::RecordingState>,
     finding_id: String,
     correction_text: String,
     intent: String,
-) -> Result<String, String> {
+) -> Result<WorthFixingSummary, String> {
     disposition(
         &app,
         &state,
@@ -315,5 +311,6 @@ pub async fn correct_worth_fixing_finding(
         Some(&correction_text),
         Some(&intent),
     )
-    .await
+    .await?;
+    get_worth_fixing_summary(app, state, recording).await
 }
