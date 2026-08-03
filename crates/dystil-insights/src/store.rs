@@ -1892,7 +1892,10 @@ pub async fn worth_fixing_summary(
             .await?
             != 0;
     let observation_span_hours = sqlx::query_scalar::<_, f64>(
-        "SELECT COALESCE(MAX(julianday(occurred_at)) - MIN(julianday(occurred_at)), 0) * 24
+        "SELECT CAST(
+             COALESCE(MAX(julianday(occurred_at)) - MIN(julianday(occurred_at)), 0)
+             AS REAL
+         ) * 24.0
          FROM observations",
     )
     .fetch_one(pool)
@@ -2738,6 +2741,19 @@ mod tests {
                 .unwrap(),
             21
         );
+    }
+
+    #[tokio::test]
+    async fn fresh_database_has_a_valid_empty_worth_fixing_summary() {
+        let (_directory, pool) = setup().await;
+        let summary = worth_fixing_summary(&pool, false).await.unwrap();
+        assert!(summary.selected.is_empty());
+        assert_eq!(summary.eligible_count, 0);
+        assert_eq!(summary.watching_count, 0);
+        assert_eq!(summary.pending_observation_count, 0);
+        assert!(!summary.manual_refresh_ready);
+        assert!(!summary.processing);
+        assert!(!summary.provider_ready);
     }
 
     #[tokio::test]
