@@ -3,7 +3,9 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use chrono::Utc;
-use dystil_ai::{AiModelTier, AiRuntime, AiRuntimeError, AiStructuredRequest};
+use dystil_ai::{
+    AiModelTier, AiReasoningEffort, AiRuntime, AiRuntimeError, AiStructuredRequest, AiToolPolicy,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -163,9 +165,12 @@ async fn run_job<R: AiRuntime + ?Sized>(
             .infer_structured(AiStructuredRequest {
                 purpose: "worth_fixing_artifact_change".into(),
                 model_tier: CHANGE_MODEL_TIER,
+                stable_prompt: String::new(),
                 prompt: prompt.clone(),
                 output_schema: schema_value.clone(),
                 timeout: Duration::from_secs(180),
+                reasoning_effort: AiReasoningEffort::High,
+                tool_policy: AiToolPolicy::None,
             })
             .await
         {

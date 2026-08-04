@@ -2,6 +2,32 @@
 @tailwind components;
 @tailwind utilities;
 
+@keyframes dystil-thinking-dot {
+  0%, 55%, 100% { transform: translateY(0); opacity: .45; }
+  25% { transform: translateY(-3px); opacity: 1; }
+}
+
+.dystil-thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.dystil-thinking-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: #16805c;
+  animation: dystil-thinking-dot 1.15s cubic-bezier(.22,.61,.36,1) infinite;
+}
+
+.dystil-thinking-dots i:nth-child(2) { animation-delay: 90ms; }
+.dystil-thinking-dots i:nth-child(3) { animation-delay: 180ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dystil-thinking-dots i { animation: none; opacity: .8; }
+}
+
 @layer base {
   :root {
     /* Tell the engine the UI is light by default so native scrollbars and form

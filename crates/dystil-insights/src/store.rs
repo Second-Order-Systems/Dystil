@@ -16,7 +16,7 @@ use crate::{
     WorthFixingCard, WorthFixingEvidenceLine, WorthFixingSummary,
 };
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const MANUAL_REFRESH_MIN_OBSERVATION_SPAN_HOURS: f64 = 3.0;
 
 #[derive(Debug, Error)]
@@ -411,6 +411,67 @@ async fn migrate(pool: &SqlitePool) -> Result<()> {
         .await?;
         sqlx::query(
             "INSERT OR IGNORE INTO insights_schema_migrations(version,applied_at) VALUES(3,?1)",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .execute(&mut *tx)
+        .await?;
+    }
+    if current_version < 4 {
+        sqlx::query(
+            "CREATE TABLE ask_sessions(
+              session_id TEXT PRIMARY KEY,phase TEXT NOT NULL,status TEXT NOT NULL,
+              question_count INTEGER NOT NULL,understanding_json TEXT NOT NULL,
+              pending_move_json TEXT,locked_understanding_json TEXT,presentation_json TEXT,
+              last_error_code TEXT,last_error_detail TEXT,provider TEXT,model TEXT,
+              artifact_kept_id TEXT REFERENCES artifacts(artifact_id),
+              created_at TEXT NOT NULL,updated_at TEXT NOT NULL)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE ask_messages(
+              message_id TEXT PRIMARY KEY,session_id TEXT NOT NULL REFERENCES ask_sessions(session_id),
+              ordinal INTEGER NOT NULL,role TEXT NOT NULL,text TEXT NOT NULL,event_json TEXT,
+              created_at TEXT NOT NULL,UNIQUE(session_id,ordinal))",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE ask_questions(
+              question_id TEXT PRIMARY KEY,session_id TEXT NOT NULL REFERENCES ask_sessions(session_id),
+              ordinal INTEGER NOT NULL,question_text TEXT NOT NULL,question_json TEXT NOT NULL,
+              created_at TEXT NOT NULL,UNIQUE(session_id,ordinal))",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE ask_jobs(
+              job_id TEXT PRIMARY KEY,session_id TEXT NOT NULL REFERENCES ask_sessions(session_id),
+              purpose TEXT NOT NULL,status TEXT NOT NULL,stable_prompt_hash TEXT NOT NULL,
+              schema_hash TEXT NOT NULL,input_fingerprint TEXT NOT NULL,input_json TEXT NOT NULL,
+              model TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,error_code TEXT,
+              created_at TEXT NOT NULL,updated_at TEXT NOT NULL,accepted_at TEXT,
+              UNIQUE(session_id,input_fingerprint))",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE ask_attempts(
+              job_id TEXT NOT NULL REFERENCES ask_jobs(job_id),attempt INTEGER NOT NULL,
+              request_fingerprint TEXT NOT NULL,output_fingerprint TEXT,status TEXT NOT NULL,
+              usage_json TEXT NOT NULL,latency_ms INTEGER NOT NULL,error_code TEXT,
+              created_at TEXT NOT NULL,PRIMARY KEY(job_id,attempt))",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE UNIQUE INDEX one_running_ask_job_per_session ON ask_jobs(session_id)
+             WHERE status='running'",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO insights_schema_migrations(version,applied_at) VALUES(4,?1)",
         )
         .bind(Utc::now().to_rfc3339())
         .execute(&mut *tx)
@@ -2078,6 +2139,11 @@ pub async fn set_enhanced_diagnostics(pool: &SqlitePool, enabled: bool) -> Resul
 pub async fn delete_all_insights_data(pool: &SqlitePool) -> Result<()> {
     let mut tx = pool.begin().await?;
     for table in [
+        "ask_attempts",
+        "ask_jobs",
+        "ask_questions",
+        "ask_messages",
+        "ask_sessions",
         "artifact_change_attempts",
         "artifact_versions",
         "artifact_change_jobs",

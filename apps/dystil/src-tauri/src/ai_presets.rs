@@ -612,10 +612,14 @@ fn write_pi_models(preset: &ActiveAiPreset) -> Result<PathBuf, String> {
     } else {
         "CUSTOM_API_KEY"
     };
+    let supports_reasoning_effort = matches!(
+        preset.provider_kind.as_str(),
+        "anthropic" | "openai" | "dystil_ai"
+    );
     let mut provider_config = json!({
         "baseUrl": preset.endpoint.as_deref().unwrap_or("http://localhost:11434/v1"),
         "api": if provider == "anthropic" { "anthropic-messages" } else { "openai-completions" }, "apiKey": api_key,
-        "models": [{"id": preset.model, "name": preset.model, "reasoning": false,
+        "models": [{"id": preset.model, "name": preset.model, "reasoning": supports_reasoning_effort,
             "input": ["text"], "maxTokens": 8192,
             "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}]
     });
@@ -764,7 +768,11 @@ pub(crate) async fn pi_structured(
     }
     if request.purpose.trim().is_empty()
         || request.prompt.trim().is_empty()
-        || request.prompt.len() > 1_000_000
+        || request
+            .stable_prompt
+            .len()
+            .saturating_add(request.prompt.len())
+            > 1_000_000
     {
         return Err("structured request purpose or prompt is invalid".into());
     }
@@ -779,15 +787,19 @@ pub(crate) async fn pi_structured(
         "anthropic" => "anthropic",
         _ => "custom",
     };
-    let prompt = format!(
-        "{}\n\nReturn only JSON matching this schema: {}",
-        request.prompt, schema
+    let prompt = format!("{}\n\nReturn only JSON matching this schema: {}", request.prompt, schema);
+    let stable_system_prompt = format!(
+        "You are a bounded Dystil structured inference worker. Use only the supplied packet, call no tools, preserve uncertainty, and return exactly the requested JSON.{}{}",
+        if request.stable_prompt.is_empty() { "" } else { "\n\n" },
+        request.stable_prompt
     );
     let started = Instant::now();
+    let thinking_level = pi_thinking_level(&preset.provider_kind, request.reasoning_effort);
     let mut child = Command::new(executable)
         .args([
             "--mode", "rpc", "--provider", provider, "--model", &preset.model,
-            "--system-prompt", "You are a bounded Dystil structured inference worker. Use only the supplied packet, call no tools, preserve uncertainty, and return exactly the requested JSON.",
+            "--thinking", thinking_level,
+            "--system-prompt", &stable_system_prompt,
             "--no-builtin-tools", "--tools", "", "--no-extensions", "--no-skills",
             "--no-prompt-templates", "--no-context-files", "--no-approve", "--no-session", "--offline",
         ])
@@ -843,6 +855,19 @@ pub(crate) async fn pi_structured(
         output,
         usage,
     })
+}
+
+fn pi_thinking_level(
+    provider_kind: &str,
+    effort: dystil_ai::AiReasoningEffort,
+) -> &'static str {
+    if matches!(effort, dystil_ai::AiReasoningEffort::High)
+        && matches!(provider_kind, "anthropic" | "openai" | "dystil_ai")
+    {
+        "high"
+    } else {
+        "off"
+    }
 }
 
 pub(crate) async fn pi_automation(
@@ -1099,5 +1124,25 @@ mod tests {
         assert_eq!(result.usage.get("input_tokens"), Some(&40));
         assert_eq!(result.usage.get("cached_input_tokens"), Some(&30));
         assert_eq!(result.usage.get("output_tokens"), Some(&5));
+    }
+
+    #[test]
+    fn pi_structured_maps_high_reasoning_to_the_native_thinking_control() {
+        assert_eq!(
+            pi_thinking_level("anthropic", dystil_ai::AiReasoningEffort::High),
+            "high"
+        );
+        assert_eq!(
+            pi_thinking_level("openai", dystil_ai::AiReasoningEffort::High),
+            "high"
+        );
+        assert_eq!(
+            pi_thinking_level("ollama", dystil_ai::AiReasoningEffort::High),
+            "off"
+        );
+        assert_eq!(
+            pi_thinking_level("anthropic", dystil_ai::AiReasoningEffort::Default),
+            "off"
+        );
     }
 }

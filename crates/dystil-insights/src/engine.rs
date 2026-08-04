@@ -1,6 +1,8 @@
 use std::{collections::BTreeMap, time::Duration};
 
-use dystil_ai::{AiModelTier, AiRuntime, AiRuntimeError, AiStructuredRequest};
+use dystil_ai::{
+    AiModelTier, AiReasoningEffort, AiRuntime, AiRuntimeError, AiStructuredRequest, AiToolPolicy,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -238,9 +240,12 @@ async fn run_frozen_explorer_job<R: AiRuntime + ?Sized>(
             .infer_structured(AiStructuredRequest {
                 purpose: "worth_fixing_explorer".into(),
                 model_tier: EXPLORER_MODEL_TIER,
+                stable_prompt: String::new(),
                 prompt: prompt.clone(),
                 output_schema: explorer_schema(),
                 timeout: Duration::from_secs(180),
+                reasoning_effort: AiReasoningEffort::Default,
+                tool_policy: AiToolPolicy::None,
             })
             .await
         {
@@ -328,9 +333,12 @@ async fn infer_once<R: AiRuntime + ?Sized>(
         .infer_structured(AiStructuredRequest {
             purpose: purpose.into(),
             model_tier: STEWARD_MODEL_TIER,
+            stable_prompt: String::new(),
             prompt,
             output_schema: schema(),
             timeout: Duration::from_secs(180),
+            reasoning_effort: AiReasoningEffort::High,
+            tool_policy: AiToolPolicy::None,
         })
         .await
 }
