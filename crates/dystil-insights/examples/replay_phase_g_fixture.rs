@@ -214,7 +214,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .into(),
-                preview: handoff
+                body: handoff
                     .get("preview")
                     .and_then(Value::as_str)
                     .unwrap_or_default()

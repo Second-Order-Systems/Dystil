@@ -6,6 +6,7 @@
 
 mod artifact;
 mod artifact_engine;
+mod ask_for_fix;
 mod compaction;
 mod engine;
 mod kernel;
@@ -19,6 +20,7 @@ mod types;
 
 pub use artifact::*;
 pub use artifact_engine::*;
+pub use ask_for_fix::*;
 pub use compaction::*;
 pub use engine::*;
 pub use kernel::*;

@@ -84,14 +84,49 @@ pub enum AiModelTier {
     Frontier,
 }
 
+/// Provider-neutral reasoning policy. Adapters apply a native control when
+/// their runtime exposes one and otherwise preserve the instruction in the
+/// stable prompt prefix.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AiReasoningEffort {
+    Default,
+    High,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AiToolPolicy {
+    None,
+    Retrieval,
+}
+
 #[derive(Debug, Clone)]
 pub struct AiStructuredRequest {
     /// Stable product purpose such as `worth_fixing_explorer`.
     pub purpose: String,
     pub model_tier: AiModelTier,
+    /// Byte-stable policy prefix. Keep request/session data out of this value
+    /// so provider prompt caches can reuse it between turns.
+    pub stable_prompt: String,
+    /// Volatile turn packet appended after `stable_prompt`.
     pub prompt: String,
     pub output_schema: Value,
     pub timeout: Duration,
+    pub reasoning_effort: AiReasoningEffort,
+    pub tool_policy: AiToolPolicy,
+}
+
+impl AiStructuredRequest {
+    pub fn assembled_prompt(&self) -> String {
+        if self.stable_prompt.is_empty() {
+            return self.prompt.clone();
+        }
+        format!(
+            "{}\n\n--- DYSTIL TURN PACKET ---\n{}",
+            self.stable_prompt, self.prompt
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -362,6 +397,8 @@ impl CliProvider {
                     &prompt,
                     Duration::from_secs(180),
                     model,
+                    AiReasoningEffort::Default,
+                    AiToolPolicy::Retrieval,
                 )
                 .await?
             }
@@ -369,9 +406,11 @@ impl CliProvider {
                 self.run_claude(
                     &temp,
                     &schema_path,
+                    "",
                     &prompt,
                     Duration::from_secs(180),
                     model,
+                    AiToolPolicy::Retrieval,
                 )
                 .await?
             }
@@ -396,7 +435,11 @@ impl CliProvider {
     ) -> Result<AiStructuredRun> {
         if request.purpose.trim().is_empty()
             || request.prompt.trim().is_empty()
-            || request.prompt.len() > 1_000_000
+            || request
+                .stable_prompt
+                .len()
+                .saturating_add(request.prompt.len())
+                > 1_000_000
         {
             return Err(AiError::InvalidOutput(
                 "structured request purpose or prompt is invalid".into(),
@@ -413,14 +456,31 @@ impl CliProvider {
         let temp = tempfile::tempdir()?;
         let schema_path = temp.path().join("output-schema.json");
         fs::write(&schema_path, schema)?;
+        let assembled_prompt = request.assembled_prompt();
         let (raw, provider_usage) = match self.provider {
             ProviderKind::Codex => {
-                self.run_codex(&temp, &schema_path, &request.prompt, request.timeout, model)
-                    .await?
+                self.run_codex(
+                    &temp,
+                    &schema_path,
+                    &assembled_prompt,
+                    request.timeout,
+                    model,
+                    request.reasoning_effort,
+                    request.tool_policy,
+                )
+                .await?
             }
             ProviderKind::Claude => {
-                self.run_claude(&temp, &schema_path, &request.prompt, request.timeout, model)
-                    .await?
+                self.run_claude(
+                    &temp,
+                    &schema_path,
+                    &request.stable_prompt,
+                    &request.prompt,
+                    request.timeout,
+                    model,
+                    request.tool_policy,
+                )
+                .await?
             }
         };
         if raw.len() > 2 * 1024 * 1024 {
@@ -620,6 +680,8 @@ impl CliProvider {
         prompt: &str,
         limit: Duration,
         model: Option<&str>,
+        reasoning_effort: AiReasoningEffort,
+        tool_policy: AiToolPolicy,
     ) -> Result<(String, BTreeMap<String, u64>)> {
         let output_path = temp.path().join("output.json");
         let canonical_executable =
@@ -660,8 +722,9 @@ impl CliProvider {
             .arg(schema_path)
             .arg("--output-last-message")
             .arg(&output_path);
-        if let Some(mcp) = &self.mcp_server {
-            command
+        if matches!(tool_policy, AiToolPolicy::Retrieval) {
+            if let Some(mcp) = &self.mcp_server {
+                command
                 .arg("-c")
                 .arg(format!(
                     "mcp_servers.dystil.command={}",
@@ -675,9 +738,13 @@ impl CliProvider {
                 .arg("mcp_servers.dystil.required=true")
                 .arg("-c")
                 .arg("mcp_servers.dystil.default_tools_approval_mode=\"auto\"");
+            }
         }
         if let Some(model) = model {
             command.args(["--model", model]);
+        }
+        if matches!(reasoning_effort, AiReasoningEffort::High) {
+            command.args(["-c", "model_reasoning_effort=\"high\""]);
         }
         command
             .arg("-")
@@ -702,9 +769,11 @@ impl CliProvider {
         &self,
         temp: &TempDir,
         schema_path: &Path,
+        stable_prompt: &str,
         prompt: &str,
         limit: Duration,
         model: Option<&str>,
+        tool_policy: AiToolPolicy,
     ) -> Result<(String, BTreeMap<String, u64>)> {
         let schema = fs::read_to_string(schema_path)?;
         let mut command = self.command();
@@ -720,16 +789,21 @@ impl CliProvider {
             ])
             .arg("--json-schema")
             .arg(schema);
-        if let Some(mcp) = &self.mcp_server {
-            let mcp_path = temp.path().join("dystil-mcp.json");
-            fs::write(
-                &mcp_path,
-                serde_json::to_vec(&serde_json::json!({
-                    "mcpServers": {"dystil": {"command": mcp.command, "args": mcp.args}}
-                }))
-                .map_err(|error| AiError::InvalidOutput(error.to_string()))?,
-            )?;
-            command.arg("--mcp-config").arg(mcp_path);
+        if !stable_prompt.is_empty() {
+            command.arg("--system-prompt").arg(stable_prompt);
+        }
+        if matches!(tool_policy, AiToolPolicy::Retrieval) {
+            if let Some(mcp) = &self.mcp_server {
+                let mcp_path = temp.path().join("dystil-mcp.json");
+                fs::write(
+                    &mcp_path,
+                    serde_json::to_vec(&serde_json::json!({
+                        "mcpServers": {"dystil": {"command": mcp.command, "args": mcp.args}}
+                    }))
+                    .map_err(|error| AiError::InvalidOutput(error.to_string()))?,
+                )?;
+                command.arg("--mcp-config").arg(mcp_path);
+            }
         }
         if let Some(model) = model {
             command.args(["--model", model]);
@@ -1492,5 +1566,69 @@ mod tests {
             .unwrap();
             assert_eq!(run.answer.evidence[0].evidence_ids, vec!["frame:1"]);
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn codex_structured_request_uses_native_high_reasoning_and_stable_prefix() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let executable = dir.path().join("fake-codex");
+        let args_path = dir.path().join("args.txt");
+        let stdin_path = dir.path().join("stdin.txt");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\nprintf '%s' \"$*\" > \"$DYSTIL_TEST_ARGS\"\ncat > \"$DYSTIL_TEST_STDIN\"\nout=''\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = '--output-last-message' ]; then out=$2; shift 2; continue; fi\n  shift\ndone\nprintf '%s' '{\"ok\":true}' > \"$out\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let provider = CliProvider {
+            provider: ProviderKind::Codex,
+            executable,
+            runtime_version: None,
+            environment: vec![
+                (
+                    "DYSTIL_TEST_ARGS".into(),
+                    args_path.to_string_lossy().into_owned(),
+                ),
+                (
+                    "DYSTIL_TEST_STDIN".into(),
+                    stdin_path.to_string_lossy().into_owned(),
+                ),
+            ],
+            mcp_server: None,
+        };
+        let run = provider
+            .run_structured_with_model(
+                AiStructuredRequest {
+                    purpose: "test".into(),
+                    model_tier: AiModelTier::Frontier,
+                    stable_prompt: "STABLE PREFIX".into(),
+                    prompt: "VOLATILE TURN".into(),
+                    output_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {"ok": {"type": "boolean"}},
+                        "required": ["ok"],
+                        "additionalProperties": false
+                    }),
+                    timeout: Duration::from_secs(5),
+                    reasoning_effort: AiReasoningEffort::High,
+                    tool_policy: AiToolPolicy::None,
+                },
+                Some("gpt-frontier"),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(run.output, serde_json::json!({"ok": true}));
+        let args = std::fs::read_to_string(args_path).unwrap();
+        assert!(args.contains("--model gpt-frontier"));
+        assert!(args.contains("-c model_reasoning_effort=\"high\""));
+        assert!(!args.contains("mcp_servers"));
+        let stdin = std::fs::read_to_string(stdin_path).unwrap();
+        assert!(stdin.starts_with("STABLE PREFIX"));
+        assert!(stdin.ends_with("VOLATILE TURN"));
     }
 }

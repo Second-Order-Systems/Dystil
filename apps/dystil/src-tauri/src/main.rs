@@ -33,6 +33,7 @@ mod ai_runtime;
 mod app_config;
 mod auth;
 mod automation_commands;
+mod ask_for_fix_commands;
 mod build_capabilities;
 mod capture_config;
 mod capture_policy;
@@ -77,6 +78,7 @@ pub use ai::*;
 pub use ai_presets::*;
 pub use auth::*;
 pub use automation_commands::*;
+pub use ask_for_fix_commands::*;
 pub use build_capabilities::*;
 pub use deletion::*;
 pub use server::*;
@@ -619,6 +621,7 @@ async fn main() {
 
     let app = app.manage(recording_state)
         .manage(worth_fixing_commands::WorthFixingState::default())
+        .manage(ask_for_fix_commands::AskForFixState::default())
         .invoke_handler(tauri_helper::tauri_collect_commands!())
         .setup(move |app| {
             //deep link register_all

@@ -198,6 +198,70 @@ async applyOnboardingCapturePolicy(selectedSocialServices: string[]) : Promise<R
     else return { status: "error", error: e  as any };
 }
 },
+async askForFixCancel(sessionId: string) : Promise<Result<AskSessionView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_cancel", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async askForFixConfirm(sessionId: string) : Promise<Result<AskSessionView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_confirm", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async askForFixCreate() : Promise<Result<AskSessionView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_create") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async askForFixGet(sessionId: string) : Promise<Result<AskSessionView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_get", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async askForFixKeepArtifact(sessionId: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_keep_artifact", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async askForFixLatest() : Promise<Result<AskSessionView | null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_latest") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async askForFixRetry(sessionId: string) : Promise<Result<AskSessionView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_retry", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async askForFixSubmit(sessionId: string, turn: AskUserTurn) : Promise<Result<AskSessionView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_submit", { sessionId, turn }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async authClearDeviceToken() : Promise<Result<DystilAuthState, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("auth_clear_device_token") };
@@ -1540,6 +1604,28 @@ export type AppUpdateSettingsView = { autoUpdate: boolean; updaterAvailable: boo
 export type ArtifactChangePreview = { changeJobId: string; artifactId: string; title: string; body: string; changedLineCount: number }
 export type ArtifactChangeSummary = { request: string; changedAt: string }
 export type ArtifactPage = { items: ReadyArtifactCard[]; nextCursor: string | null }
+export type AskArtifact = { kind: AskArtifactKind; title: string; description: string; body: string; steps: string[]; tool: string; capability: string; instructions: string[] }
+export type AskArtifactKind = "prompt" | "runbook" | "existing_capability"
+export type AskInputEvent = { kind: string; questionId: string | null; selectedOptionIds: string[] }
+export type AskMessageRole = "user" | "assistant"
+export type AskMessageView = { messageId: string; role: AskMessageRole; text: string; event: AskInputEvent | null; createdAt: string }
+export type AskOption = { id: string; label: string; description: string }
+export type AskPhase = "understand" | "follow_up" | "consolidate" | "present"
+export type AskPresentation = { route: AskPresentationRoute; headline: string; explanation: string; limitations: string[]; artifact: AskArtifact | null }
+export type AskPresentationRoute = "answer_now" | "something_now_more_later" | "cannot_see" | "needs_more_than_one_person"
+export type AskQuestion = { kind: AskQuestionKind; text: string; helper: string; options: AskOption[]; minSelections: number; maxSelections: number }
+export type AskQuestionKind = "free_text" | "single_select" | "multi_select" | "compare"
+export type AskSessionView = { sessionId: string; phase: AskPhase; status: string; questionCount: number; maxQuestions: number; messages: AskMessageView[]; understanding: AskUnderstanding; currentQuestionId: string | null; currentQuestion: AskQuestion | null; presentation: AskPresentation | null; locked: boolean; lastErrorCode: string | null; lastErrorDetail: string | null; provider: string | null; model: string | null; cachedInputTokens: number; artifactKeptId: string | null; createdAt: string; updatedAt: string }
+export type AskUnderstanding = { synthesis: string; grounding: string[]; inferences: string[]; preservedBoundary: string; uncertainty: string[]; solutionTarget: string }
+export type AskUserTurn = {
+/**
+ * Canonical semantic message seen by the model and user.
+ */
+text: string;
+/**
+ * Exact UI event retained for replay and analytics.
+ */
+event: AskInputEvent }
 export type AuthMode = "individual" | "workspace"
 export type AutomationArtifactView = { id: string; runId: string; automationName: string; relativePath: string; sizeBytes: number; mediaType: string; liveView: boolean; outputKind: string; contentJson: string | null; createdAt: string }
 export type AutomationDraftView = { id: string; request: string; markdown: string; automation: AutomationView }
