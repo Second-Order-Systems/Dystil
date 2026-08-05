@@ -121,6 +121,19 @@ jobs:
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Select MSVC linker
+        shell: powershell
+        run: |
+          $linker = Get-Command link.exe -All |
+            Where-Object { $_.Source -like "*Microsoft Visual Studio*" } |
+            Select-Object -First 1 -ExpandProperty Source
+          if (-not $linker) {
+            throw "Visual Studio link.exe was not found after MSVC setup"
+          }
+          Write-Host "Using MSVC linker: $linker"
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Download ONNX Runtime
         shell: powershell
         run: |
@@ -135,7 +148,7 @@ jobs:
 
       - name: Run pre_build.js
         working-directory: ${{ env.APP_DIR }}
-        shell: bash
+        shell: powershell
         env:
           DYSTIL_RELEASE_TARGET: x86_64-pc-windows-msvc
         run: bun ./scripts/pre_build.js
