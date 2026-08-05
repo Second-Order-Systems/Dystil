@@ -469,6 +469,25 @@ async fn put_device_capture_state(
     )
     .await?;
 
+    // Pause history is operational telemetry, not part of the capture-state
+    // contract. Never make the desktop client retry or fail because analytics
+    // storage is unavailable after the live device state was updated.
+    if let Err(error) = identity::record_device_capture_pause_transition(
+        &state.pool,
+        &principal.device_id,
+        body.capture_state.as_str(),
+        body.capture_pause_until,
+    )
+    .await
+    {
+        tracing::warn!(
+            %error,
+            device_id = %principal.device_id,
+            capture_state = body.capture_state.as_str(),
+            "device capture pause history update failed; continuing with live state"
+        );
+    }
+
     Ok(Json(UpdateDeviceCaptureStateResponse {
         ok: true,
         capture_state: body.capture_state,

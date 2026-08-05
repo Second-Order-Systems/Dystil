@@ -381,6 +381,68 @@ pub async fn update_device_capture_state(
     Ok(updated_at)
 }
 
+/// Best-effort pause-history projection of a device's already-persisted current
+/// capture state. The queries re-check that state so a delayed history write
+/// cannot open or close the wrong pause session after a newer transition.
+///
+/// Callers must treat errors from this function as telemetry failures: the
+/// primary `devices` update has already completed successfully.
+pub async fn record_device_capture_pause_transition(
+    pool: &PgPool,
+    device_id: &str,
+    capture_state: &str,
+    capture_pause_until: Option<DateTime<Utc>>,
+) -> Result<(), DbError> {
+    match (capture_state, capture_pause_until) {
+        ("paused", Some(scheduled_resume_at)) => {
+            sqlx::query(
+                "INSERT INTO device_capture_pauses (
+                     org_id,
+                     user_id,
+                     device_id,
+                     scheduled_resume_at
+                 )
+                 SELECT org_id, user_id, id, $2
+                 FROM devices
+                 WHERE id = $1
+                   AND revoked_at IS NULL
+                   AND capture_state = 'paused'
+                   AND capture_pause_until IS NOT DISTINCT FROM $2
+                 ON CONFLICT (device_id) WHERE resumed_at IS NULL
+                 DO UPDATE SET scheduled_resume_at = EXCLUDED.scheduled_resume_at
+                 WHERE device_capture_pauses.scheduled_resume_at
+                       IS DISTINCT FROM EXCLUDED.scheduled_resume_at",
+            )
+            .bind(device_id)
+            .bind(scheduled_resume_at)
+            .execute(pool)
+            .await?;
+        }
+        ("recording", None) => {
+            sqlx::query(
+                "UPDATE device_capture_pauses AS pause
+                 SET resumed_at = now()
+                 FROM devices
+                 WHERE pause.device_id = $1
+                   AND devices.id = pause.device_id
+                   AND devices.revoked_at IS NULL
+                   AND devices.capture_state = 'recording'
+                   AND pause.resumed_at IS NULL",
+            )
+            .bind(device_id)
+            .execute(pool)
+            .await?;
+        }
+        _ => {
+            return Err(DbError::Other(
+                "invalid device capture state transition for pause history".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn list_devices_for_org(
     pool: &PgPool,
     org_id: &str,
