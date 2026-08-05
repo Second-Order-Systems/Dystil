@@ -108,9 +108,18 @@ pub async fn resolve_app_identity(
         return Ok(identity);
     }
 
-    // Email verification is not part of individual authentication. New users
-    // receive a personal organization; never grant organization membership
-    // solely from an unverified, user-supplied email domain.
+    if let Some(domain) = email_domain(&user.email) {
+        let org_matches = find_org_ids_by_domain(pool, &domain).await?;
+        if org_matches.len() == 1 {
+            set_user_org(pool, &user_id, &org_matches[0]).await?;
+            if let Some(identity) = find_user_with_org(pool, &user_id).await? {
+                return Ok(identity);
+            }
+        }
+    }
+
+    // Domain matching is opportunistic and never blocks signup. No match or
+    // an ambiguous match receives an isolated personal organization.
     let org_id = create_personal_org(pool, user).await?;
     set_user_org(pool, &user_id, &org_id).await?;
     find_user_with_org(pool, &user_id)
@@ -546,6 +555,27 @@ async fn resolve_org_id(
     Ok(uuid::Uuid::new_v4().to_string())
 }
 
+fn email_domain(email: &str) -> Option<String> {
+    email
+        .rsplit_once('@')
+        .map(|(_, domain)| domain.trim().to_ascii_lowercase())
+        .filter(|domain| !domain.is_empty())
+}
+
+async fn find_org_ids_by_domain(pool: &PgPool, domain: &str) -> Result<Vec<String>, DbError> {
+    let rows = sqlx::query_scalar::<_, String>(
+        "SELECT id
+         FROM organizations
+         WHERE allowed_email_domains IS NOT NULL
+           AND $1 = ANY(allowed_email_domains)
+         ORDER BY id",
+    )
+    .bind(domain)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 fn device_from_row(row: DeviceRow) -> DeviceRecord {
     DeviceRecord {
         device_id: row.device_id,
@@ -578,7 +608,7 @@ fn normalize_domains(domains: &[String]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{hash_device_token, normalize_domains};
+    use super::{email_domain, hash_device_token, normalize_domains};
 
     #[test]
     fn normalize_domains_trims_lowercases_and_dedups() {
@@ -591,6 +621,17 @@ mod tests {
             normalize_domains(&domains),
             vec!["example.com".to_string(), "team.io".to_string()]
         );
+    }
+
+    #[test]
+    fn email_domain_normalizes_and_rejects_missing_domains() {
+        assert_eq!(email_domain("User@Example.COM"), Some("example.com".into()));
+        assert_eq!(
+            email_domain("user@  Example.COM  "),
+            Some("example.com".into())
+        );
+        assert_eq!(email_domain("user@"), None);
+        assert_eq!(email_domain("not-an-email"), None);
     }
 
     #[test]
