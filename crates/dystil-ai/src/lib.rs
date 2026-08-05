@@ -105,6 +105,10 @@ pub enum AiToolPolicy {
 pub struct AiStructuredRequest {
     /// Stable product purpose such as `worth_fixing_explorer`.
     pub purpose: String,
+    /// Stable, opaque affinity key for provider-native prompt caching. Product
+    /// features should scope this to one durable conversation or workload and
+    /// reuse it across turns. Adapters may ignore it when unsupported.
+    pub cache_key: Option<String>,
     pub model_tier: AiModelTier,
     /// Byte-stable policy prefix. Keep request/session data out of this value
     /// so provider prompt caches can reuse it between turns.
@@ -394,6 +398,7 @@ impl CliProvider {
                 self.run_codex(
                     &temp,
                     &schema_path,
+                    temp.path(),
                     &prompt,
                     Duration::from_secs(180),
                     model,
@@ -406,6 +411,7 @@ impl CliProvider {
                 self.run_claude(
                     &temp,
                     &schema_path,
+                    temp.path(),
                     "",
                     &prompt,
                     Duration::from_secs(180),
@@ -456,12 +462,14 @@ impl CliProvider {
         let temp = tempfile::tempdir()?;
         let schema_path = temp.path().join("output-schema.json");
         fs::write(&schema_path, schema)?;
+        let working_directory = self.structured_working_directory()?;
         let assembled_prompt = request.assembled_prompt();
         let (raw, provider_usage) = match self.provider {
             ProviderKind::Codex => {
                 self.run_codex(
                     &temp,
                     &schema_path,
+                    &working_directory,
                     &assembled_prompt,
                     request.timeout,
                     model,
@@ -474,6 +482,7 @@ impl CliProvider {
                 self.run_claude(
                     &temp,
                     &schema_path,
+                    &working_directory,
                     &request.stable_prompt,
                     &request.prompt,
                     request.timeout,
@@ -507,6 +516,18 @@ impl CliProvider {
             output,
             usage,
         })
+    }
+
+    fn structured_working_directory(&self) -> Result<PathBuf> {
+        let directory =
+            std::env::temp_dir().join(format!("dystil-ai-structured-{}", self.provider.slug()));
+        fs::create_dir_all(&directory)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+        }
+        Ok(fs::canonicalize(&directory).unwrap_or(directory))
     }
 
     pub async fn run_automation_with_model(
@@ -677,6 +698,7 @@ impl CliProvider {
         &self,
         temp: &TempDir,
         schema_path: &Path,
+        working_directory: &Path,
         prompt: &str,
         limit: Duration,
         model: Option<&str>,
@@ -697,7 +719,7 @@ impl CliProvider {
             runtime_version = self.runtime_version.as_deref().unwrap_or("<unknown>"),
             codex_home,
             model = model.unwrap_or("<provider-default>"),
-            workdir = %temp.path().display(),
+            workdir = %working_directory.display(),
             schema_path = %schema_path.display(),
             output_path = %output_path.display(),
             prompt_bytes = prompt.len(),
@@ -748,7 +770,7 @@ impl CliProvider {
         }
         command
             .arg("-")
-            .current_dir(temp.path())
+            .current_dir(working_directory)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -769,6 +791,7 @@ impl CliProvider {
         &self,
         temp: &TempDir,
         schema_path: &Path,
+        working_directory: &Path,
         stable_prompt: &str,
         prompt: &str,
         limit: Duration,
@@ -810,7 +833,7 @@ impl CliProvider {
         }
         command
             .arg(prompt)
-            .current_dir(temp.path())
+            .current_dir(working_directory)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -1188,6 +1211,7 @@ fn normalized_usage_key(key: &str) -> Option<&'static str> {
         "cached_input_tokens" | "cachedInputTokens" | "cache_read_input_tokens" => {
             Some("cached_input_tokens")
         }
+        "cache_write_tokens" | "cacheWriteTokens" | "cacheWrite" => Some("cache_write_tokens"),
         "output_tokens" | "outputTokens" => Some("output_tokens"),
         "reasoning_output_tokens" | "reasoningOutputTokens" => Some("reasoning_output_tokens"),
         _ => None,
@@ -1384,11 +1408,12 @@ mod tests {
 
     #[test]
     fn structured_provider_output_normalizes_usage_and_wrappers() {
-        let raw = r#"{"structured_output":{"schema_version":1},"usage":{"input_tokens":120,"cache_read_input_tokens":80,"output_tokens":9}}"#;
+        let raw = r#"{"structured_output":{"schema_version":1},"usage":{"input_tokens":120,"cache_read_input_tokens":80,"cache_write_tokens":32,"output_tokens":9}}"#;
         let (output, usage) = parse_structured_provider_output(raw).unwrap();
         assert_eq!(output["schema_version"], 1);
         assert_eq!(usage.get("input_tokens"), Some(&120));
         assert_eq!(usage.get("cached_input_tokens"), Some(&80));
+        assert_eq!(usage.get("cache_write_tokens"), Some(&32));
         assert_eq!(usage.get("output_tokens"), Some(&9));
 
         let ndjson = "{\"type\":\"turn.started\"}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"cached_input_tokens\":4,\"output_tokens\":2}}\n";
@@ -1604,6 +1629,7 @@ mod tests {
             .run_structured_with_model(
                 AiStructuredRequest {
                     purpose: "test".into(),
+                    cache_key: Some("test-session".into()),
                     model_tier: AiModelTier::Frontier,
                     stable_prompt: "STABLE PREFIX".into(),
                     prompt: "VOLATILE TURN".into(),
@@ -1630,5 +1656,28 @@ mod tests {
         let stdin = std::fs::read_to_string(stdin_path).unwrap();
         assert!(stdin.starts_with("STABLE PREFIX"));
         assert!(stdin.ends_with("VOLATILE TURN"));
+    }
+
+    #[test]
+    fn structured_inference_working_directory_is_stable() {
+        let provider = CliProvider {
+            provider: ProviderKind::Codex,
+            executable: PathBuf::from("codex"),
+            runtime_version: None,
+            environment: vec![],
+            mcp_server: None,
+        };
+        let first = provider.structured_working_directory().unwrap();
+        let second = provider.structured_working_directory().unwrap();
+        assert_eq!(first, second);
+        assert!(first.ends_with("dystil-ai-structured-codex"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(first).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
     }
 }

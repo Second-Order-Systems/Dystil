@@ -32,6 +32,7 @@ pub mod redaction_worker;
 pub mod screen;
 #[cfg(feature = "native")]
 pub mod screen_lock;
+pub mod semantic_tree;
 mod trigger;
 mod trigger_bus;
 #[cfg(feature = "native")]

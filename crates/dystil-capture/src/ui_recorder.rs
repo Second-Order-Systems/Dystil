@@ -93,21 +93,33 @@ async fn run_consumer(
     let session_id = Uuid::new_v4().to_string();
     let mut batch: Vec<(UiEventRecord, Option<u64>)> = Vec::with_capacity(config.batch_size);
     let mut tick = tokio::time::interval(Duration::from_millis(config.batch_timeout_ms.max(1)));
-    let mut last_private_key = None;
+    let typing_timer = tokio::time::sleep(Duration::from_secs(24 * 60 * 60));
+    tokio::pin!(typing_timer);
+    let mut typing_pending = false;
+    let mut typing_context = CaptureContext::default();
+    let mut typing_correlations = Vec::new();
     let mut last_scroll: Option<(Instant, u64)> = None;
     loop {
         tokio::select! {
             event = event_rx.recv() => match event {
                 Some(event) => {
                     let persist = should_persist(&event, &config);
+                    let keyboard_activity = matches!(event.data, EventData::Key { .. } | EventData::Text { .. });
                     let trigger = immediate_trigger(&event);
-                    if matches!(event.data, EventData::Key { .. }) && !config.record_keyboard_events {
-                        last_private_key = Some(Instant::now());
-                    }
-                    let mut correlation = if persist && trigger.is_some() && trigger_tx.receiver_count() > 0 {
+                    let mut correlation = if persist && (trigger.is_some() || keyboard_activity) && trigger_tx.receiver_count() > 0 {
                         Some(linker.next_correlation_id())
                     } else { None };
-                    if let Some(message) = trigger {
+                    if keyboard_activity {
+                        typing_pending = true;
+                        typing_context = event_context(&event);
+                        if let Some(id) = correlation {
+                            typing_correlations.push(id);
+                        }
+                        typing_timer.as_mut().reset(
+                            tokio::time::Instant::now()
+                                + Duration::from_millis(config.typing_pause_delay_ms),
+                        );
+                    } else if let Some(message) = trigger {
                         let message = CaptureTriggerMessage { correlation_id: correlation, ..message };
                         if trigger_tx.send(message).is_err() { correlation = None; }
                     }
@@ -131,12 +143,25 @@ async fn run_consumer(
                 }
                 None => break,
             },
+            _ = &mut typing_timer, if typing_pending => {
+                typing_pending = false;
+                if typing_correlations.is_empty() {
+                    let _ = trigger_tx.send(CaptureTriggerMessage::new(
+                        CaptureTrigger::TypingPause,
+                        typing_context.clone(),
+                    ));
+                } else {
+                    for correlation_id in typing_correlations.drain(..) {
+                        let _ = trigger_tx.send(CaptureTriggerMessage::with_correlation(
+                            CaptureTrigger::TypingPause,
+                            typing_context.clone(),
+                            correlation_id,
+                        ));
+                    }
+                }
+            }
             _ = tick.tick() => {
                 flush(&pool, &linker, &mut batch).await;
-                if last_private_key.is_some_and(|at| at.elapsed() >= Duration::from_millis(config.typing_pause_delay_ms)) {
-                    let _ = trigger_tx.send(CaptureTriggerMessage::new(CaptureTrigger::TypingPause, CaptureContext::default()));
-                    last_private_key = None;
-                }
                 if let Some((at, correlation_id)) = last_scroll {
                     if at.elapsed() >= Duration::from_millis(300) {
                         let _ = trigger_tx.send(CaptureTriggerMessage::with_correlation(
@@ -184,12 +209,7 @@ fn should_persist(event: &UiEvent, config: &DystilUiRecorderConfig) -> bool {
 }
 
 fn immediate_trigger(event: &UiEvent) -> Option<CaptureTriggerMessage> {
-    let mut context = CaptureContext {
-        application: event.app_name.clone(),
-        window: event.window_title.clone(),
-        browser_url: event.browser_url.clone(),
-        ..CaptureContext::default()
-    };
+    let mut context = event_context(event);
     let trigger = match &event.data {
         EventData::Click { x, y, .. } => {
             context.target = Some(ScreenPoint { x: *x, y: *y });
@@ -204,12 +224,22 @@ fn immediate_trigger(event: &UiEvent) -> Option<CaptureTriggerMessage> {
             context.window = title.clone();
             CaptureTrigger::WindowFocus
         }
-        EventData::Text { .. } => CaptureTrigger::TypingPause,
-        EventData::Key { .. } => CaptureTrigger::KeyPress,
         EventData::Clipboard { .. } => CaptureTrigger::Clipboard,
-        EventData::Scroll { .. } | EventData::Move { .. } => return None,
+        EventData::Key { .. }
+        | EventData::Text { .. }
+        | EventData::Scroll { .. }
+        | EventData::Move { .. } => return None,
     };
     Some(CaptureTriggerMessage::new(trigger, context))
+}
+
+fn event_context(event: &UiEvent) -> CaptureContext {
+    CaptureContext {
+        application: event.app_name.clone(),
+        window: event.window_title.clone(),
+        browser_url: event.browser_url.clone(),
+        ..CaptureContext::default()
+    }
 }
 
 #[cfg(test)]
@@ -231,7 +261,7 @@ mod tests {
             included_windows: vec![],
             batch_size: 100,
             batch_timeout_ms: 1000,
-            typing_pause_delay_ms: 300,
+            typing_pause_delay_ms: 1_500,
             prioritize_input_latency: false,
             extraction_thread_priority: Default::default(),
             pause_extraction_on_input_ms: 150,
@@ -239,13 +269,10 @@ mod tests {
     }
 
     #[test]
-    fn private_text_is_not_persisted_but_still_maps_to_typing_pause() {
+    fn private_text_is_not_persisted_and_does_not_trigger_immediate_capture() {
         let event = UiEvent::text(Utc::now(), 1, "person@example.com".to_string());
         assert!(!should_persist(&event, &config()));
-        assert_eq!(
-            immediate_trigger(&event).unwrap().trigger,
-            CaptureTrigger::TypingPause
-        );
+        assert!(immediate_trigger(&event).is_none());
     }
 
     #[test]

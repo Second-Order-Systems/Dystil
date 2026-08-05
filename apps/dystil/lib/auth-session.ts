@@ -120,12 +120,19 @@ export async function beginEmailSignUp(name: string, email: string, password: st
 
   try {
     const authClient = await getAuthClient();
-    const result = await authClient.signUp.email({
-      name,
-      email,
-      password,
-      callbackURL: AUTH_CALLBACK_URL,
-    });
+    const result = await authClient.signUp.email(
+      {
+        name,
+        email,
+        password,
+        callbackURL: AUTH_CALLBACK_URL,
+      },
+      {
+        onSuccess: async (ctx: { response: Response }) => {
+          await storeSessionFromResponse(ctx.response);
+        },
+      },
+    );
 
     if (result.error) {
       setAuthState({
@@ -136,8 +143,7 @@ export async function beginEmailSignUp(name: string, email: string, password: st
       throw new Error(result.error.message ?? "sign-up failed");
     }
 
-    setAwaitingEmailVerification(email);
-    return result.data;
+    return bootstrapAuthSession();
   } catch (error) {
     if (getAuthState().status === "awaiting_email_verification") {
       throw error;

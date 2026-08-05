@@ -1,10 +1,13 @@
 use dystil_capture::CaptureMode;
 
-/// Product-owned capture policy. The persisted `disable_vision` preference is
-/// the only selector: it makes the permission and privacy behavior explicit
-/// without build flags or environment-only modes.
+pub const fn enterprise_managed() -> bool {
+    cfg!(feature = "enterprise-client")
+}
+
+/// Product-owned capture policy. Enterprise builds always use FullCapture;
+/// community builds honor the persisted `disable_vision` preference.
 pub const fn product_capture_mode(disable_vision: bool) -> CaptureMode {
-    if disable_vision {
+    if !enterprise_managed() && disable_vision {
         CaptureMode::TextOnly
     } else {
         CaptureMode::FullCapture
@@ -25,9 +28,11 @@ mod tests {
     fn first_run_defaults_to_text_only() {
         let settings = crate::recording_settings::RecordingSettings::default();
         assert!(settings.disable_vision);
-        assert_eq!(
-            product_capture_mode(settings.disable_vision),
+        let expected = if enterprise_managed() {
+            CaptureMode::FullCapture
+        } else {
             CaptureMode::TextOnly
-        );
+        };
+        assert_eq!(product_capture_mode(settings.disable_vision), expected);
     }
 }

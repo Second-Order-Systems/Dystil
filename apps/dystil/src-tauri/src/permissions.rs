@@ -423,10 +423,11 @@ pub fn get_missing_permissions(app: tauri::AppHandle) -> Vec<OSPermission> {
     {
         let mut missing = Vec::new();
         let check = do_permissions_check(false);
-        let screenshots_enabled = crate::store::SettingsStore::get(&app)
-            .ok()
-            .flatten()
-            .is_some_and(|settings| !settings.recording.disable_vision);
+        let screenshots_enabled = crate::capture_policy::enterprise_managed()
+            || crate::store::SettingsStore::get(&app)
+                .ok()
+                .flatten()
+                .is_some_and(|settings| !settings.recording.disable_vision);
 
         if screenshots_enabled && !check.screen_recording.permitted() {
             missing.push(OSPermission::ScreenRecording);

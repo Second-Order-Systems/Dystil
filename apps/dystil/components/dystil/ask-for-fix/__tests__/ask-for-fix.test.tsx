@@ -120,6 +120,157 @@ describe("AskForFix", () => {
     await waitFor(() => expect(mockCommands.askForFixConfirm).toHaveBeenCalledWith("afs_test"));
   });
 
+  it("supports bounded multi-select and compare renderers with a free-text escape", async () => {
+    const multi = session({
+      phase: "follow_up",
+      questionCount: 2,
+      currentQuestionId: "afq_slow_parts",
+      currentQuestion: {
+        kind: "multi_select",
+        text: "Which parts regularly slow this down?",
+        helper: "Choose every part that is genuinely involved.",
+        options: [
+          { id: "finding", label: "Finding current inputs", description: "The right source is hard to locate." },
+          { id: "copying", label: "Copying between tools", description: "The same values are entered twice." },
+          { id: "approval", label: "Waiting for approval", description: "Another person must respond." },
+        ],
+        minSelections: 1,
+        maxSelections: 2,
+      },
+      messages: [{ messageId: "a1", role: "assistant", text: "Which parts regularly slow this down?", event: null, createdAt: "now" }],
+    });
+    const compare = session({
+      phase: "follow_up",
+      questionCount: 3,
+      currentQuestionId: "afq_reading",
+      currentQuestion: {
+        kind: "compare",
+        text: "Which reading is closer?",
+        helper: "Neither is required.",
+        options: [
+          { id: "steps", label: "The steps are the problem", description: "Repeating a known sequence costs the time." },
+          { id: "context", label: "Rebuilding context is the problem", description: "Finding the current information costs the time." },
+        ],
+        minSelections: 1,
+        maxSelections: 1,
+      },
+      messages: [{ messageId: "a2", role: "assistant", text: "Which reading is closer?", event: null, createdAt: "now" }],
+    });
+    mockCommands.askForFixLatest.mockResolvedValue({ status: "ok", data: multi });
+    mockCommands.askForFixSubmit.mockResolvedValue({ status: "ok", data: compare });
+
+    render(<AskForFix />);
+    fireEvent.click(await screen.findByRole("button", { name: /Finding current inputs/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Copying between tools/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Use 2 answers" }));
+    await waitFor(() => expect(mockCommands.askForFixSubmit).toHaveBeenCalledWith("afs_test", {
+      text: "Finding current inputs — The right source is hard to locate.; Copying between tools — The same values are entered twice.",
+      event: { kind: "multi_select", questionId: "afq_slow_parts", selectedOptionIds: ["finding", "copying"] },
+    }));
+
+    expect(await screen.findByText("The steps are the problem")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Answer in my own words" }));
+    expect(screen.getByPlaceholderText("Answer in your own words…")).toBeInTheDocument();
+  });
+
+  it("renders each application-owned final artifact kind", async () => {
+    const answered = (artifact: NonNullable<NonNullable<AskSessionView["presentation"]>["artifact"]>) => session({
+      phase: "present",
+      status: "answered",
+      locked: true,
+      presentation: {
+        route: "answer_now",
+        headline: "A useful answer",
+        explanation: "This is based on the confirmed understanding.",
+        limitations: ["Based on your answers only."],
+        artifact,
+      },
+    });
+
+    mockCommands.askForFixLatest.mockResolvedValue({ status: "ok", data: answered({
+      kind: "prompt",
+      title: "Reusable brief",
+      description: "Instructions to reuse.",
+      body: "Prepare the current inputs without making the final decision.",
+      steps: [], tool: "", capability: "", instructions: [],
+    }) });
+    const promptView = render(<AskForFix />);
+    expect(await screen.findByText("Reusable brief")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy prompt" })).toBeInTheDocument();
+    promptView.unmount();
+
+    mockCommands.askForFixLatest.mockResolvedValue({ status: "ok", data: answered({
+      kind: "runbook",
+      title: "Weekly preparation",
+      description: "A bounded sequence.",
+      body: "", steps: ["Collect the current inputs.", "Flag missing values."],
+      tool: "", capability: "", instructions: [],
+    }) });
+    const runbookView = render(<AskForFix />);
+    expect(await screen.findByText("Weekly preparation")).toBeInTheDocument();
+    expect(screen.getByText("Flag missing values.")).toBeInTheDocument();
+    runbookView.unmount();
+
+    mockCommands.askForFixLatest.mockResolvedValue({ status: "ok", data: answered({
+      kind: "existing_capability",
+      title: "Use the import rule",
+      description: "A capability already available.",
+      body: "", steps: [], tool: "Spreadsheet", capability: "Scheduled import",
+      instructions: ["Point the sheet at the existing export."],
+    }) });
+    render(<AskForFix />);
+    expect(await screen.findByText("Scheduled import")).toBeInTheDocument();
+    expect(screen.getByText("Point the sheet at the existing export.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy instructions" })).toBeInTheDocument();
+  });
+
+  it("revises a confirmed artifact in the same locked conversation", async () => {
+    const answered = session({
+      phase: "present",
+      status: "answered",
+      locked: true,
+      messages: [{ messageId: "a1", role: "assistant", text: "Here is the first answer.", event: null, createdAt: "now" }],
+      presentation: {
+        route: "answer_now",
+        headline: "Prepare the report context before review",
+        explanation: "Use a short runbook while keeping the final call with you.",
+        limitations: ["Based on your answers only."],
+        artifact: {
+          kind: "runbook",
+          title: "Weekly preparation",
+          description: "A bounded sequence.",
+          body: "",
+          steps: ["Collect the current inputs.", "Flag missing values."],
+          tool: "",
+          capability: "",
+          instructions: [],
+        },
+      },
+    });
+    mockCommands.askForFixLatest.mockResolvedValue({ status: "ok", data: answered });
+    mockCommands.askForFixSubmit.mockResolvedValue({
+      status: "ok",
+      data: {
+        ...answered,
+        presentation: {
+          ...answered.presentation!,
+          headline: "Prepare the report context and block duplicates before review",
+        },
+      },
+    });
+
+    render(<AskForFix />);
+    fireEvent.click(await screen.findByRole("button", { name: "Ask Dystil to change it" }));
+    const composer = screen.getByPlaceholderText("What should Dystil change in this answer?");
+    fireEvent.change(composer, { target: { value: "Add an explicit duplicate check." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
+
+    await waitFor(() => expect(mockCommands.askForFixSubmit).toHaveBeenCalledWith("afs_test", {
+      text: "Add an explicit duplicate check.",
+      event: { kind: "revise", questionId: null, selectedOptionIds: [] },
+    }));
+  });
+
   it("surfaces a durable provider error with a retry action", async () => {
     mockCommands.askForFixLatest.mockResolvedValue({
       status: "ok",

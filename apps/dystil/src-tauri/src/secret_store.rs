@@ -5,7 +5,11 @@
 //! stored as base64-encoded bytes (no AES-GCM layer).
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use sqlx::SqlitePool;
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+    SqlitePool,
+};
+use std::time::Duration;
 
 pub struct DystilSecretStore {
     pool: SqlitePool,
@@ -65,8 +69,15 @@ impl DystilSecretStore {
 pub async fn open_secret_store() -> Result<DystilSecretStore, String> {
     let data_dir = crate::dystil_paths::data_dir();
     let db_path = data_dir.join("db.sqlite");
-    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
-    let pool = sqlx::SqlitePool::connect(&db_url)
+    let options = SqliteConnectOptions::new()
+        .filename(&db_path)
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .busy_timeout(Duration::from_secs(30));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(2)
+        .connect_with(options)
         .await
         .map_err(|e| format!("failed to open db at {}: {}", db_path.display(), e))?;
     DystilSecretStore::new(pool).await

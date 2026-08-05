@@ -20,7 +20,46 @@ use crate::types::{
 use crate::utils::sha256_hex;
 
 const MAX_IMAGE_RETRY_COUNT: u8 = 1;
+const SNAPSHOT_MAX_AGE_HOURS: i64 = 2;
 impl DystilSync {
+    /// Delete local snapshot files older than the hard two-hour retention
+    /// window, independently of cloud sync state.
+    pub async fn cleanup_expired_snapshots_once(
+        db_path: &std::path::Path,
+    ) -> Result<(), SyncError> {
+        let cutoff = chrono::Utc::now() - Duration::hours(SNAPSHOT_MAX_AGE_HOURS);
+        let db_url = format!("sqlite:{}?mode=ro", db_path.display());
+        let pool = SqlitePool::connect(&db_url).await?;
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT snapshot_path
+            FROM frames
+            WHERE timestamp < ?1
+              AND snapshot_path IS NOT NULL
+              AND snapshot_path != ''
+            "#,
+        )
+        .bind(cutoff.to_rfc3339())
+        .fetch_all(&pool)
+        .await?;
+
+        let mut deleted_count = 0usize;
+        let mut failed_count = 0usize;
+        for row in rows {
+            let snapshot_path: String = row.try_get("snapshot_path")?;
+            match fs::remove_file(&snapshot_path) {
+                Ok(_) => deleted_count += 1,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    failed_count += 1;
+                    tracing::warn!(snapshot_path = %snapshot_path, error = %error, "dystil-sync: expired snapshot cleanup failed");
+                }
+            }
+        }
+        tracing::info!(cutoff = %cutoff.to_rfc3339(), deleted_count, failed_count, "dystil-sync: expired snapshot cleanup completed");
+        Ok(())
+    }
+
     pub(crate) async fn sync_images(
         &self,
         client: &reqwest::Client,
@@ -64,6 +103,7 @@ impl DystilSync {
             last_scanned_frame_id = cache.last_scanned_frame_id,
             "dystil-sync: image sync selected candidates"
         );
+        let selected_candidate_count = candidates.len();
 
         let mut prepared =
             Vec::with_capacity(candidates.len().min(policy.image_sync.max_uploads_per_pass));
@@ -125,7 +165,13 @@ impl DystilSync {
             }
         }
         if prepared.is_empty() {
-            if let Some(max_processed_frame_id) = max_processed_frame_id {
+            if attempted_count == selected_candidate_count {
+                if let Some(max_eligible_frame_id) = max_eligible_frame_id {
+                    cache.last_scanned_frame_id =
+                        cache.last_scanned_frame_id.max(max_eligible_frame_id);
+                    cache.monitor_state = next_monitor_state;
+                }
+            } else if let Some(max_processed_frame_id) = max_processed_frame_id {
                 cache.last_scanned_frame_id =
                     cache.last_scanned_frame_id.max(max_processed_frame_id);
                 persist_monitor_state_checkpoint(
@@ -231,7 +277,13 @@ impl DystilSync {
         completed_count += self
             .flush_pending_image_completions(client, &mut cache)
             .await?;
-        if let Some(max_processed_frame_id) = max_processed_frame_id {
+        if attempted_count == selected_candidate_count {
+            if let Some(max_eligible_frame_id) = max_eligible_frame_id {
+                cache.last_scanned_frame_id =
+                    cache.last_scanned_frame_id.max(max_eligible_frame_id);
+                cache.monitor_state = next_monitor_state;
+            }
+        } else if let Some(max_processed_frame_id) = max_processed_frame_id {
             cache.last_scanned_frame_id = cache.last_scanned_frame_id.max(max_processed_frame_id);
             persist_monitor_state_checkpoint(
                 &mut cache.monitor_state,
@@ -609,7 +661,12 @@ impl DystilSync {
                 candidate.selection_reason = "rate_limited".to_string();
             }
         }
-        let selected = apply_image_sync_mode(candidates, &image_policy.mode);
+        let selected = apply_image_sync_mode(
+            candidates,
+            &image_policy.mode,
+            image_policy.max_selected_per_minute,
+            image_policy.candidate_min_gap_seconds,
+        );
 
         tracing::info!(
             eligible_count,
@@ -627,6 +684,51 @@ impl DystilSync {
             monitor_state_checkpoints,
             max_eligible_frame_id,
         ))
+    }
+
+    pub(crate) async fn cleanup_snapshots_before_cursor(
+        pool: &SqlitePool,
+        cache: &ImageSyncCache,
+    ) -> Result<(), SyncError> {
+        let Some(max_cleanup_frame_id) = max_snapshot_cleanup_frame_id(cache) else {
+            return Ok(());
+        };
+        if max_cleanup_frame_id <= 0 {
+            return Ok(());
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT snapshot_path
+            FROM frames
+            WHERE id <= ?1
+              AND snapshot_path IS NOT NULL
+              AND snapshot_path != ''
+            "#,
+        )
+        .bind(max_cleanup_frame_id)
+        .fetch_all(pool)
+        .await?;
+        let mut deleted_count = 0usize;
+        let mut failed_count = 0usize;
+        for row in rows {
+            let snapshot_path: String = row.try_get("snapshot_path")?;
+            match fs::remove_file(&snapshot_path) {
+                Ok(_) => deleted_count += 1,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    failed_count += 1;
+                    tracing::warn!(snapshot_path = %snapshot_path, error = %error, "dystil-sync: synced snapshot cleanup failed");
+                }
+            }
+        }
+        tracing::info!(
+            max_cleanup_frame_id,
+            deleted_count,
+            failed_count,
+            "dystil-sync: synced snapshot cleanup completed"
+        );
+        Ok(())
     }
 
     async fn prepare_image(
@@ -827,6 +929,26 @@ fn image_fits_upload_batch(
         && current_bytes.saturating_add(next_bytes) <= policy.max_upload_bytes_per_pass
 }
 
+fn max_snapshot_cleanup_frame_id(cache: &ImageSyncCache) -> Option<i64> {
+    let retry_floor = cache
+        .pending_complete
+        .iter()
+        .flat_map(|pending| pending.item.linked_frame_ids.iter().copied())
+        .chain(
+            cache
+                .pending_upload_retry
+                .iter()
+                .map(|retry| retry.candidate.frame_id),
+        )
+        .min();
+
+    match retry_floor {
+        Some(frame_id) => Some((frame_id - 1).min(cache.last_scanned_frame_id)),
+        None if cache.last_scanned_frame_id > 0 => Some(cache.last_scanned_frame_id),
+        None => None,
+    }
+}
+
 fn persist_monitor_state_checkpoint(
     persisted: &mut BTreeMap<String, MonitorSelectionState>,
     checkpoints: &BTreeMap<i64, BTreeMap<String, MonitorSelectionState>>,
@@ -840,14 +962,19 @@ fn persist_monitor_state_checkpoint(
 fn apply_image_sync_mode(
     candidates: Vec<ImageCandidate>,
     mode: &ImageSyncMode,
+    max_candidates_per_minute: usize,
+    min_gap_secs: i64,
 ) -> Vec<ImageCandidate> {
-    match mode {
+    let eligible = match mode {
+        // All candidates continue through the shadow evaluator, but the
+        // configured per-capture-minute ceiling is a real selection limit.
         ImageSyncMode::AllWithShadow => candidates,
         ImageSyncMode::Filtered => candidates
             .into_iter()
             .filter(|candidate| candidate.filter_decision.selected)
             .collect(),
-    }
+    };
+    limit_candidates_per_minute(eligible, max_candidates_per_minute, min_gap_secs)
 }
 
 fn limit_candidates_per_minute(
@@ -931,6 +1058,7 @@ fn limit_candidates_per_minute(
 mod tests {
     use super::*;
     use chrono::Utc;
+    use tempfile::tempdir;
 
     fn candidate(frame_id: i64, selected: bool) -> ImageCandidate {
         ImageCandidate {
@@ -959,7 +1087,7 @@ mod tests {
     #[test]
     fn all_with_shadow_keeps_candidates_the_legacy_filter_would_drop() {
         let candidates = vec![candidate(1, true), candidate(2, false)];
-        let selected = apply_image_sync_mode(candidates, &ImageSyncMode::AllWithShadow);
+        let selected = apply_image_sync_mode(candidates, &ImageSyncMode::AllWithShadow, 3, 20);
         assert_eq!(selected.len(), 2);
         assert!(!selected[1].filter_decision.selected);
     }
@@ -967,9 +1095,27 @@ mod tests {
     #[test]
     fn filtered_mode_keeps_only_legacy_filter_matches() {
         let candidates = vec![candidate(1, true), candidate(2, false)];
-        let selected = apply_image_sync_mode(candidates, &ImageSyncMode::Filtered);
+        let selected = apply_image_sync_mode(candidates, &ImageSyncMode::Filtered, 3, 20);
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].frame_id, 1);
+    }
+
+    #[test]
+    fn all_with_shadow_enforces_the_per_capture_minute_ceiling() {
+        let mut candidates = (1..=5)
+            .map(|frame_id| candidate(frame_id, frame_id == 1))
+            .collect::<Vec<_>>();
+        let minute = Utc::now();
+        for (offset, candidate) in candidates.iter_mut().enumerate() {
+            candidate.occurred_at = minute + Duration::seconds(offset as i64 * 5);
+        }
+
+        let selected = apply_image_sync_mode(candidates, &ImageSyncMode::AllWithShadow, 3, 20);
+
+        assert_eq!(selected.len(), 3);
+        assert!(selected
+            .iter()
+            .any(|candidate| !candidate.filter_decision.selected));
     }
 
     #[test]
@@ -1007,5 +1153,64 @@ mod tests {
             persisted["display-1"].last_app_name.as_deref(),
             Some("first-app")
         );
+    }
+
+    #[test]
+    fn snapshot_cleanup_watermark_stays_before_pending_retry() {
+        let mut cache = ImageSyncCache {
+            last_scanned_frame_id: 100,
+            ..ImageSyncCache::default()
+        };
+        assert_eq!(max_snapshot_cleanup_frame_id(&cache), Some(100));
+
+        cache.pending_upload_retry.push(PendingUploadRetry {
+            candidate: candidate(40, true),
+            retry_count: 1,
+        });
+        assert_eq!(max_snapshot_cleanup_frame_id(&cache), Some(39));
+    }
+
+    #[tokio::test]
+    async fn expired_snapshot_cleanup_keeps_files_younger_than_two_hours() {
+        let temp = tempdir().unwrap();
+        let db_path = temp.path().join("capture.sqlite");
+        let old_snapshot = temp.path().join("old.jpg");
+        let recent_snapshot = temp.path().join("recent.jpg");
+        fs::write(&old_snapshot, b"old").unwrap();
+        fs::write(&recent_snapshot, b"recent").unwrap();
+
+        let pool = SqlitePool::connect(&format!("sqlite:{}?mode=rwc", db_path.display()))
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE frames (
+                id INTEGER PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                snapshot_path TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for (id, timestamp, path) in [
+            (1_i64, Utc::now() - Duration::hours(3), &old_snapshot),
+            (2_i64, Utc::now() - Duration::hours(1), &recent_snapshot),
+        ] {
+            sqlx::query("INSERT INTO frames VALUES (?1, ?2, ?3)")
+                .bind(id)
+                .bind(timestamp.to_rfc3339())
+                .bind(path.to_string_lossy().as_ref())
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        pool.close().await;
+
+        DystilSync::cleanup_expired_snapshots_once(&db_path)
+            .await
+            .unwrap();
+
+        assert!(!old_snapshot.exists());
+        assert!(recent_snapshot.exists());
     }
 }

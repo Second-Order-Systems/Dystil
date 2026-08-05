@@ -3057,7 +3057,7 @@ mod tests {
             .fetch_one(&migrated)
             .await
             .unwrap(),
-            "3"
+            SCHEMA_VERSION.to_string()
         );
         for table in [
             "artifacts",
@@ -3065,6 +3065,11 @@ mod tests {
             "artifact_events",
             "artifact_change_jobs",
             "artifact_change_attempts",
+            "ask_sessions",
+            "ask_messages",
+            "ask_questions",
+            "ask_jobs",
+            "ask_attempts",
         ] {
             assert_eq!(
                 sqlx::query_scalar::<_, i64>(

@@ -46,6 +46,9 @@ impl PiRpcAccumulator {
                             "cached_input_tokens" | "cachedInputTokens" | "cacheRead" => {
                                 Some("cached_input_tokens")
                             }
+                            "cache_write_tokens" | "cacheWriteTokens" | "cacheWrite" => {
+                                Some("cache_write_tokens")
+                            }
                             "output_tokens" | "outputTokens" | "output" => Some("output_tokens"),
                             "reasoning_output_tokens" | "reasoningOutputTokens" => {
                                 Some("reasoning_output_tokens")
@@ -303,26 +306,58 @@ pub async fn ai_preset_save(
         return Err("preset name and model are required".into());
     }
     let endpoint = normalize_endpoint(provider, endpoint.as_deref())?;
-    if matches!(
+    let needs_credential = matches!(
         provider,
         "anthropic" | "openai" | "openai_compatible" | "dystil_ai"
-    ) && api_key.as_deref().unwrap_or("").trim().is_empty()
-    {
+    );
+    let submitted_key = api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    if needs_credential && submitted_key.is_none() {
         return Err("an API key is required for a BYOK provider".into());
     }
+    if let Some(key) = submitted_key.as_deref() {
+        // Validate the exact form value before involving the operating-system
+        // credential store. This keeps setup errors attributable and avoids an
+        // empty or stale keyring read becoming a misleading provider 401.
+        ai_preset_discover_models(
+            provider.to_string(),
+            endpoint.clone(),
+            Some(key.to_string()),
+        )
+        .await?;
+        ensure_pi_installed().await?;
+    }
     let id = Uuid::new_v4().to_string();
-    if let Some(value) = api_key.filter(|value| !value.trim().is_empty()) {
+    if let Some(value) = submitted_key.as_ref() {
         if value.len() > 4096 {
             return Err("API key is too long".into());
         }
         let key_id = id.clone();
+        let value = value.clone();
         tokio::task::spawn_blocking(move || {
             credential_entry(&key_id)?
-                .set_password(value.trim())
+                .set_password(&value)
                 .map_err(|error| error.to_string())
         })
         .await
         .map_err(|error| error.to_string())??;
+        let stored = credential(id.clone()).await?;
+        if stored.as_deref() != submitted_key.as_deref() {
+            let key_id = id.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                credential_entry(&key_id)?
+                    .delete_credential()
+                    .map_err(|error| error.to_string())
+            })
+            .await;
+            return Err(
+                "The operating-system credential store did not return the saved API key intact. No preset was activated."
+                    .into(),
+            );
+        }
     }
     let database = pool(&state).await?;
     let mut tx = database.begin().await.map_err(|error| error.to_string())?;
@@ -330,9 +365,20 @@ pub async fn ai_preset_save(
         .execute(&mut *tx)
         .await
         .map_err(|error| error.to_string())?;
-    sqlx::query("INSERT INTO ai_presets(id, name, provider_kind, endpoint, model, active) VALUES (?1, ?2, ?3, ?4, ?5, 1)")
-        .bind(&id).bind(name).bind(provider).bind(&endpoint).bind(model)
-        .execute(&mut *tx).await.map_err(|error| error.to_string())?;
+    sqlx::query(
+        "INSERT INTO ai_presets(id, name, provider_kind, endpoint, model, active,
+                 validation_status,validation_message,validated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 1, 'ready',
+                 'Connection and AI runtime are ready.', datetime('now'))",
+    )
+    .bind(&id)
+    .bind(name)
+    .bind(provider)
+    .bind(&endpoint)
+    .bind(model)
+    .execute(&mut *tx)
+    .await
+    .map_err(|error| error.to_string())?;
     tx.commit().await.map_err(|error| error.to_string())?;
     preset_views(&database)
         .await?
@@ -607,11 +653,9 @@ fn write_pi_models(preset: &ActiveAiPreset) -> Result<PathBuf, String> {
         "anthropic" => "anthropic",
         _ => "custom",
     };
-    let api_key = if provider == "ollama" {
-        "ollama"
-    } else {
-        "CUSTOM_API_KEY"
-    };
+    // Pi resolves environment references only when they start with `$`.
+    // Without it, the variable name itself is sent as the provider key.
+    let api_key = pi_api_key_config(provider);
     let supports_reasoning_effort = matches!(
         preset.provider_kind.as_str(),
         "anthropic" | "openai" | "dystil_ai"
@@ -636,6 +680,14 @@ fn write_pi_models(preset: &ActiveAiPreset) -> Result<PathBuf, String> {
     )
     .map_err(|error| error.to_string())?;
     Ok(dir)
+}
+
+fn pi_api_key_config(provider: &str) -> &'static str {
+    if provider == "ollama" {
+        "ollama"
+    } else {
+        "$CUSTOM_API_KEY"
+    }
 }
 
 fn write_dystil_tools_extension() -> Result<PathBuf, String> {
@@ -776,33 +828,45 @@ pub(crate) async fn pi_structured(
     {
         return Err("structured request purpose or prompt is invalid".into());
     }
-    let schema =
-        serde_json::to_string(&request.output_schema).map_err(|error| error.to_string())?;
-    if schema.len() > 256 * 1024 {
-        return Err("structured schema is too large".into());
-    }
+    let (stable_system_prompt, prompt) = pi_structured_prompts(&request)?;
     let agent_dir = write_pi_models(preset)?;
     let provider = match preset.provider_kind.as_str() {
         "ollama" => "ollama",
         "anthropic" => "anthropic",
         _ => "custom",
     };
-    let prompt = format!("{}\n\nReturn only JSON matching this schema: {}", request.prompt, schema);
-    let stable_system_prompt = format!(
-        "You are a bounded Dystil structured inference worker. Use only the supplied packet, call no tools, preserve uncertainty, and return exactly the requested JSON.{}{}",
-        if request.stable_prompt.is_empty() { "" } else { "\n\n" },
-        request.stable_prompt
-    );
     let started = Instant::now();
     let thinking_level = pi_thinking_level(&preset.provider_kind, request.reasoning_effort);
-    let mut child = Command::new(executable)
-        .args([
-            "--mode", "rpc", "--provider", provider, "--model", &preset.model,
-            "--thinking", thinking_level,
-            "--system-prompt", &stable_system_prompt,
-            "--no-builtin-tools", "--tools", "", "--no-extensions", "--no-skills",
-            "--no-prompt-templates", "--no-context-files", "--no-approve", "--no-session", "--offline",
-        ])
+    let mut command = Command::new(executable);
+    command.args([
+        "--mode",
+        "rpc",
+        "--provider",
+        provider,
+        "--model",
+        &preset.model,
+        "--thinking",
+        thinking_level,
+        "--system-prompt",
+        &stable_system_prompt,
+        "--no-builtin-tools",
+        "--tools",
+        "",
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-context-files",
+        "--no-approve",
+        "--no-session",
+        "--offline",
+    ]);
+    if let Some(cache_key) = provider_cache_key(&request) {
+        // Pi forwards its in-memory session id as the provider's native cache
+        // affinity key. `--no-session` keeps the canonical transcript solely
+        // in Dystil while avoiding duplicate provider-side history.
+        command.args(["--session-id", &cache_key]);
+    }
+    let mut child = command
         .env("PI_CODING_AGENT_DIR", &agent_dir)
         .env("PI_SKIP_VERSION_CHECK", "1")
         .env("PI_TELEMETRY", "0")
@@ -857,10 +921,236 @@ pub(crate) async fn pi_structured(
     })
 }
 
-fn pi_thinking_level(
-    provider_kind: &str,
-    effort: dystil_ai::AiReasoningEffort,
-) -> &'static str {
+pub(crate) async fn openai_structured(
+    preset: &ActiveAiPreset,
+    request: dystil_ai::AiStructuredRequest,
+) -> Result<dystil_ai::AiStructuredRun, String> {
+    let endpoint = preset
+        .endpoint
+        .as_deref()
+        .unwrap_or("https://api.openai.com/v1")
+        .trim_end_matches('/');
+    let api_key = preset
+        .api_key
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("OpenAI API key is unavailable")?;
+    let body = openai_structured_request_body(&request, &preset.model)?;
+    let started = Instant::now();
+    let client = reqwest::Client::builder()
+        .timeout(request.timeout)
+        .build()
+        .map_err(|error| format!("Could not configure OpenAI: {error}"))?;
+    let response = client
+        .post(format!("{endpoint}/responses"))
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| {
+            if error.is_timeout() {
+                "OpenAI timed out".to_string()
+            } else {
+                format!("OpenAI request failed: {error}")
+            }
+        })?;
+    let status = response.status();
+    let payload: Value = response
+        .json()
+        .await
+        .map_err(|error| format!("OpenAI returned unreadable JSON: {error}"))?;
+    if !status.is_success() {
+        let detail = payload
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .unwrap_or("request was rejected");
+        return Err(format!("OpenAI provider failed: HTTP {status}: {detail}"));
+    }
+    let (output, usage, response_model) = parse_openai_structured_response(&payload)?;
+    Ok(dystil_ai::AiStructuredRun {
+        runtime: dystil_ai::AiRuntimeKind::Pi,
+        runtime_version: Some(format!("responses-api:{}", preset.id)),
+        model: response_model.unwrap_or_else(|| preset.model.clone()),
+        elapsed_ms: started.elapsed().as_millis() as u64,
+        output,
+        usage,
+    })
+}
+
+fn openai_structured_request_body(
+    request: &dystil_ai::AiStructuredRequest,
+    model: &str,
+) -> Result<Value, String> {
+    if request.tool_policy != dystil_ai::AiToolPolicy::None {
+        return Err("OpenAI structured inference does not accept tools".into());
+    }
+    let (stable_system_prompt, prompt) = pi_structured_prompts(request)?;
+    let schema_name = structured_schema_name(&request.purpose);
+    let mut body = json!({
+        "model": model,
+        "store": false,
+        "max_output_tokens": 8192,
+        "input": [
+            {
+                "role": "system",
+                "content": [{
+                    "type": "input_text",
+                    "text": stable_system_prompt,
+                    "prompt_cache_breakpoint": {"mode": "explicit"}
+                }]
+            },
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": prompt}]
+            }
+        ],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": schema_name,
+                "strict": true,
+                "schema": request.output_schema
+            }
+        },
+        "prompt_cache_options": {"mode": "explicit"}
+    });
+    if request.reasoning_effort == dystil_ai::AiReasoningEffort::High {
+        body["reasoning"] = json!({"effort": "high"});
+    }
+    if let Some(cache_key) = provider_cache_key(request) {
+        body["prompt_cache_key"] = Value::String(cache_key);
+    }
+    Ok(body)
+}
+
+fn provider_cache_key(request: &dystil_ai::AiStructuredRequest) -> Option<String> {
+    let source = request
+        .cache_key
+        .as_deref()
+        .unwrap_or(request.purpose.as_str())
+        .trim();
+    if source.is_empty() {
+        return None;
+    }
+    let mut key = String::from("dystil-");
+    for character in source.chars() {
+        if key.chars().count() >= 64 {
+            break;
+        }
+        key.push(
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
+                character
+            } else {
+                '-'
+            },
+        );
+    }
+    while key
+        .chars()
+        .last()
+        .is_some_and(|character| matches!(character, '.' | '_' | '-'))
+        && key.len() > "dystil".len()
+    {
+        key.pop();
+    }
+    Some(key)
+}
+
+fn structured_schema_name(purpose: &str) -> String {
+    let mut name = String::from("dystil_");
+    for character in purpose.chars() {
+        if name.len() >= 64 {
+            break;
+        }
+        name.push(
+            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+                character
+            } else {
+                '_'
+            },
+        );
+    }
+    name
+}
+
+fn parse_openai_structured_response(
+    payload: &Value,
+) -> Result<(Value, BTreeMap<String, u64>, Option<String>), String> {
+    if payload.get("status").and_then(Value::as_str) != Some("completed") {
+        let detail = payload
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                payload
+                    .pointer("/incomplete_details/reason")
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or("response did not complete");
+        return Err(format!(
+            "OpenAI structured response was incomplete: {detail}"
+        ));
+    }
+    let text = payload
+        .get("output")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("content").and_then(Value::as_array))
+        .flatten()
+        .find(|part| part.get("type").and_then(Value::as_str) == Some("output_text"))
+        .and_then(|part| part.get("text").and_then(Value::as_str))
+        .ok_or("OpenAI completed without structured output text")?;
+    let output = serde_json::from_str(text)
+        .map_err(|error| format!("OpenAI returned invalid structured JSON: {error}"))?;
+    let mut usage = BTreeMap::new();
+    for (key, pointer) in [
+        ("input_tokens", "/usage/input_tokens"),
+        (
+            "cached_input_tokens",
+            "/usage/input_tokens_details/cached_tokens",
+        ),
+        (
+            "cache_write_tokens",
+            "/usage/input_tokens_details/cache_write_tokens",
+        ),
+        ("output_tokens", "/usage/output_tokens"),
+        (
+            "reasoning_output_tokens",
+            "/usage/output_tokens_details/reasoning_tokens",
+        ),
+    ] {
+        if let Some(value) = payload.pointer(pointer).and_then(Value::as_u64) {
+            usage.insert(key.into(), value);
+        }
+    }
+    Ok((
+        output,
+        usage,
+        payload
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    ))
+}
+
+fn pi_structured_prompts(
+    request: &dystil_ai::AiStructuredRequest,
+) -> Result<(String, String), String> {
+    let schema =
+        serde_json::to_string(&request.output_schema).map_err(|error| error.to_string())?;
+    if schema.len() > 256 * 1024 {
+        return Err("structured schema is too large".into());
+    }
+    let stable_system_prompt = format!(
+        "You are a bounded Dystil structured inference worker. Use only the supplied packet, call no tools, preserve uncertainty, and return exactly the requested JSON.{}{}\n\nReturn only JSON matching this schema:\n{}",
+        if request.stable_prompt.is_empty() { "" } else { "\n\n" },
+        request.stable_prompt,
+        schema,
+    );
+    Ok((stable_system_prompt, request.prompt.clone()))
+}
+
+fn pi_thinking_level(provider_kind: &str, effort: dystil_ai::AiReasoningEffort) -> &'static str {
     if matches!(effort, dystil_ai::AiReasoningEffort::High)
         && matches!(provider_kind, "anthropic" | "openai" | "dystil_ai")
     {
@@ -1025,6 +1315,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn operating_system_credential_store_round_trips_a_secret() {
+        let id = format!("dystil-keyring-test-{}", Uuid::new_v4());
+        let entry = credential_entry(&id).unwrap();
+        let secret = "dystil-test-secret-not-a-real-key";
+        entry.set_password(secret).unwrap();
+        assert_eq!(entry.get_password().unwrap(), secret);
+        entry.delete_credential().unwrap();
+    }
+
+    #[test]
     fn endpoints_allow_https_and_local_http_only() {
         assert_eq!(
             normalize_endpoint("ollama", None).unwrap().unwrap(),
@@ -1078,6 +1378,13 @@ mod tests {
     }
 
     #[test]
+    fn pi_config_marks_api_keys_as_environment_references() {
+        assert_eq!(pi_api_key_config("custom"), "$CUSTOM_API_KEY");
+        assert_eq!(pi_api_key_config("anthropic"), "$CUSTOM_API_KEY");
+        assert_eq!(pi_api_key_config("ollama"), "ollama");
+    }
+
+    #[test]
     fn pi_rpc_uses_the_final_assistant_message() {
         let mut result = PiRpcAccumulator::default();
         result.observe(&json!({
@@ -1119,10 +1426,11 @@ mod tests {
         let mut result = PiRpcAccumulator::default();
         result.observe(&json!({
             "type": "message_end",
-            "message": {"usage": {"input": 40, "cacheRead": 30, "output": 5}}
+            "message": {"usage": {"input": 40, "cacheRead": 30, "cacheWrite": 12, "output": 5}}
         }));
         assert_eq!(result.usage.get("input_tokens"), Some(&40));
         assert_eq!(result.usage.get("cached_input_tokens"), Some(&30));
+        assert_eq!(result.usage.get("cache_write_tokens"), Some(&12));
         assert_eq!(result.usage.get("output_tokens"), Some(&5));
     }
 
@@ -1144,5 +1452,99 @@ mod tests {
             pi_thinking_level("anthropic", dystil_ai::AiReasoningEffort::Default),
             "off"
         );
+    }
+
+    #[test]
+    fn pi_structured_keeps_instructions_and_schema_before_volatile_turn_data() {
+        let request = dystil_ai::AiStructuredRequest {
+            purpose: "ask_for_fix_intake".into(),
+            cache_key: Some("ask-session-1".into()),
+            model_tier: dystil_ai::AiModelTier::Frontier,
+            stable_prompt: "STABLE ASK PROTOCOL".into(),
+            prompt: "VOLATILE TURN ONE".into(),
+            output_schema: json!({"type":"object","required":["move"]}),
+            timeout: Duration::from_secs(180),
+            reasoning_effort: dystil_ai::AiReasoningEffort::High,
+            tool_policy: dystil_ai::AiToolPolicy::None,
+        };
+        let (first_prefix, first_turn) = pi_structured_prompts(&request).unwrap();
+        let mut second = request.clone();
+        second.prompt = "VOLATILE TURN TWO".into();
+        let (second_prefix, second_turn) = pi_structured_prompts(&second).unwrap();
+
+        assert_eq!(first_prefix, second_prefix);
+        assert!(first_prefix.contains("STABLE ASK PROTOCOL"));
+        assert!(first_prefix.contains("\"required\":[\"move\"]"));
+        assert!(!first_prefix.contains("VOLATILE TURN"));
+        assert_eq!(first_turn, "VOLATILE TURN ONE");
+        assert_eq!(second_turn, "VOLATILE TURN TWO");
+    }
+
+    #[test]
+    fn openai_structured_marks_the_stable_prefix_and_preserves_cache_affinity() {
+        let request = dystil_ai::AiStructuredRequest {
+            purpose: "ask_for_fix_intake".into(),
+            cache_key: Some("afs_0123456789abcdef".into()),
+            model_tier: dystil_ai::AiModelTier::Frontier,
+            stable_prompt: "STABLE ASK PROTOCOL".into(),
+            prompt: "VOLATILE TURN ONE".into(),
+            output_schema: json!({
+                "type":"object",
+                "properties":{"move":{"type":"string"}},
+                "required":["move"],
+                "additionalProperties":false
+            }),
+            timeout: Duration::from_secs(180),
+            reasoning_effort: dystil_ai::AiReasoningEffort::High,
+            tool_policy: dystil_ai::AiToolPolicy::None,
+        };
+        let first = openai_structured_request_body(&request, "gpt-5.6-sol").unwrap();
+        let mut second_request = request.clone();
+        second_request.prompt = "VOLATILE TURN TWO".into();
+        let second = openai_structured_request_body(&second_request, "gpt-5.6-sol").unwrap();
+
+        assert_eq!(first["prompt_cache_key"], "dystil-afs_0123456789abcdef");
+        assert_eq!(first["prompt_cache_options"]["mode"], "explicit");
+        assert_eq!(first["reasoning"]["effort"], "high");
+        assert_eq!(
+            first.pointer("/input/0/content/0/prompt_cache_breakpoint/mode"),
+            Some(&json!("explicit"))
+        );
+        assert_eq!(
+            first.pointer("/input/0/content/0/text"),
+            second.pointer("/input/0/content/0/text")
+        );
+        assert_ne!(
+            first.pointer("/input/1/content/0/text"),
+            second.pointer("/input/1/content/0/text")
+        );
+        assert_eq!(first["text"]["format"]["strict"], true);
+        assert_eq!(first["text"]["format"]["schema"], request.output_schema);
+    }
+
+    #[test]
+    fn openai_structured_parses_output_and_complete_cache_receipts() {
+        let payload = json!({
+            "status": "completed",
+            "model": "gpt-5.6-sol-2026-07-01",
+            "output": [{
+                "type": "message",
+                "content": [{"type":"output_text","text":"{\"move\":\"ask\"}"}]
+            }],
+            "usage": {
+                "input_tokens": 2400,
+                "input_tokens_details": {"cached_tokens": 1800, "cache_write_tokens": 0},
+                "output_tokens": 240,
+                "output_tokens_details": {"reasoning_tokens": 170}
+            }
+        });
+        let (output, usage, model) = parse_openai_structured_response(&payload).unwrap();
+        assert_eq!(output, json!({"move":"ask"}));
+        assert_eq!(usage.get("input_tokens"), Some(&2400));
+        assert_eq!(usage.get("cached_input_tokens"), Some(&1800));
+        assert_eq!(usage.get("cache_write_tokens"), Some(&0));
+        assert_eq!(usage.get("output_tokens"), Some(&240));
+        assert_eq!(usage.get("reasoning_output_tokens"), Some(&170));
+        assert_eq!(model.as_deref(), Some("gpt-5.6-sol-2026-07-01"));
     }
 }

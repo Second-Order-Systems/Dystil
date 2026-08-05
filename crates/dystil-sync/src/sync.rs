@@ -11,6 +11,7 @@ use std::fs;
 use std::io::Write;
 
 use crate::cursor::{recompute_cursor, resolved_cursor};
+use crate::db::clear_frame_structural_json;
 use crate::evidence::{filter_events, EvidenceFilterConfig};
 use crate::segmenter::{build_segments, SegmentConfig};
 use crate::state::{PendingSegment, SegmentStore};
@@ -18,6 +19,9 @@ use crate::types::{DystilSync, SyncError, SyncOutcome};
 use crate::utils::sha256_hex;
 
 const MAX_SEGMENTS_PER_UPLOAD: usize = 32;
+// Must match the ingest service's decompressed-body limit. Batching changes
+// request grouping only; it never truncates or rewrites an envelope.
+const MAX_DECOMPRESSED_SEGMENT_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
 
 impl DystilSync {
     fn device_request(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -196,10 +200,22 @@ impl DystilSync {
         for envelope in &mut stable {
             envelope.refresh_content_hash()?;
         }
-        for chunk in stable.chunks(MAX_SEGMENTS_PER_UPLOAD) {
+        let mut next_segment = 0;
+        while next_segment < stable.len() {
+            let batch_len = next_segment_batch_len(&stable[next_segment..])?;
+            let chunk = &stable[next_segment..next_segment + batch_len];
             let response = self.upload_segments(&client, chunk.to_vec()).await?;
             uploaded_segments += response.accepted.len();
+            let acknowledged_frame_ids = acknowledged_screen_frame_ids(chunk, &response.accepted);
+            let cleared =
+                clear_frame_structural_json(&self.db_path, &acknowledged_frame_ids).await?;
+            tracing::info!(
+                acknowledged_frame_count = acknowledged_frame_ids.len(),
+                cleared_frame_count = cleared,
+                "dystil-sync: cleared acknowledged local structural frame JSON"
+            );
             store.acknowledge(&response.accepted).await?;
+            next_segment += batch_len;
         }
         let uploaded_images = if self.local_permissions.screenshots {
             self.sync_images(&client, &effective_config.policy).await?
@@ -359,6 +375,18 @@ impl DystilSync {
         Ok(response.json::<ImagePrepareResponse>().await?)
     }
 
+    /// Delete local files already covered by the persisted image-sync
+    /// watermark. This does not contact or mutate cloud storage.
+    pub async fn cleanup_synced_snapshots_once(
+        db_path: &std::path::Path,
+        state_db_path: &std::path::Path,
+    ) -> Result<(), SyncError> {
+        let cache = Self::read_image_cache_at(state_db_path)?;
+        let db_url = format!("sqlite:{}?mode=ro", db_path.display());
+        let pool = sqlx::SqlitePool::connect(&db_url).await?;
+        Self::cleanup_snapshots_before_cursor(&pool, &cache).await
+    }
+
     pub(crate) async fn complete_images(
         &self,
         client: &reqwest::Client,
@@ -389,6 +417,64 @@ impl DystilSync {
     }
 }
 
+fn acknowledged_screen_frame_ids(
+    envelopes: &[dystil_protocol::SegmentEnvelope],
+    accepted: &[dystil_protocol::SegmentRevisionAck],
+) -> Vec<i64> {
+    let accepted = accepted
+        .iter()
+        .map(|ack| (ack.segment_id.as_str(), ack.revision))
+        .collect::<std::collections::BTreeSet<_>>();
+    envelopes
+        .iter()
+        .filter(|envelope| accepted.contains(&(envelope.segment_id.as_str(), envelope.revision)))
+        .flat_map(|envelope| envelope.items.iter())
+        .filter(|item| item.kind == dystil_protocol::SegmentEvidenceKind::Screen)
+        .filter_map(|item| {
+            item.metadata
+                .get("frame_id")
+                .and_then(serde_json::Value::as_i64)
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn next_segment_batch_len(
+    segments: &[dystil_protocol::SegmentEnvelope],
+) -> Result<usize, SyncError> {
+    next_segment_batch_len_with_limit(segments, MAX_DECOMPRESSED_SEGMENT_UPLOAD_BYTES)
+}
+
+fn next_segment_batch_len_with_limit(
+    segments: &[dystil_protocol::SegmentEnvelope],
+    byte_limit: usize,
+) -> Result<usize, SyncError> {
+    let mut accepted_count = 0;
+    for count in 1..=segments.len().min(MAX_SEGMENTS_PER_UPLOAD) {
+        let request = SegmentUploadRequest {
+            schema_version: WORK_INSIGHTS_SEGMENT_SCHEMA_VERSION,
+            client_sent_at: Utc::now(),
+            segments: segments[..count].to_vec(),
+        };
+        let bytes = serde_json::to_vec(&request)?.len();
+        if bytes > byte_limit {
+            if count == 1 {
+                return Err(SyncError::Message(format!(
+                    "single segment {} revision {} serializes to {} bytes, exceeding the server's {} byte decompressed request limit",
+                    segments[0].segment_id,
+                    segments[0].revision,
+                    bytes,
+                    byte_limit
+                )));
+            }
+            break;
+        }
+        accepted_count = count;
+    }
+    Ok(accepted_count)
+}
+
 fn validate_policy(policy: &SyncPolicy) -> Result<(), SyncError> {
     let image = &policy.image_sync;
     let segmenting = &policy.segmenting;
@@ -413,6 +499,39 @@ mod tests {
     use super::*;
     use crate::SyncConfig;
     use tempfile::tempdir;
+
+    fn segment(id: &str, frame_id: i64, text: &str) -> dystil_protocol::SegmentEnvelope {
+        let now = Utc::now();
+        let mut envelope = dystil_protocol::SegmentEnvelope {
+            segment_id: id.to_string(),
+            revision: 1,
+            device_sequence: frame_id as u64,
+            previous_segment_id: None,
+            start_time: now,
+            end_time: now,
+            closed_at: now,
+            segmenter_version: "test".to_string(),
+            evidence_version: "test".to_string(),
+            content_hash: String::new(),
+            token_estimate: 1,
+            sync_policy_version: None,
+            items: vec![dystil_protocol::SegmentEvidenceItem {
+                item_id: format!("item-{frame_id}"),
+                kind: dystil_protocol::SegmentEvidenceKind::Screen,
+                occurred_at: now,
+                source_id: format!("frames:{frame_id}"),
+                source_payload_hash: "hash".to_string(),
+                text: text.to_string(),
+                app_name: None,
+                window_name: None,
+                browser_url: None,
+                metadata: serde_json::json!({"frame_id": frame_id}),
+            }],
+            image_refs: Vec::new(),
+        };
+        envelope.refresh_content_hash().unwrap();
+        envelope
+    }
 
     fn sync_with_permissions(local_permissions: crate::LocalSyncPermissions) -> DystilSync {
         let temp = tempdir().unwrap();
@@ -446,5 +565,40 @@ mod tests {
         assert_eq!(outcome.processed_events, 0);
         assert_eq!(outcome.uploaded_images, 0);
         assert!(!sync.state_db_path.exists());
+    }
+
+    #[test]
+    fn acknowledged_frame_ids_are_exact_and_screen_only() {
+        let accepted_segment = segment("accepted", 41, "screen");
+        let rejected_segment = segment("not-accepted", 42, "screen");
+        let accepted = vec![dystil_protocol::SegmentRevisionAck {
+            segment_id: "accepted".to_string(),
+            revision: 1,
+            status: "inserted".to_string(),
+        }];
+
+        assert_eq!(
+            acknowledged_screen_frame_ids(&[accepted_segment, rejected_segment], &accepted),
+            vec![41]
+        );
+    }
+
+    #[test]
+    fn byte_aware_batching_changes_grouping_without_changing_segments() {
+        let segments = vec![segment("one", 1, "first"), segment("two", 2, "second")];
+        let one_request_bytes = serde_json::to_vec(&SegmentUploadRequest {
+            schema_version: WORK_INSIGHTS_SEGMENT_SCHEMA_VERSION,
+            client_sent_at: Utc::now(),
+            segments: vec![segments[0].clone()],
+        })
+        .unwrap()
+        .len();
+
+        assert_eq!(
+            next_segment_batch_len_with_limit(&segments, one_request_bytes).unwrap(),
+            1
+        );
+        assert_eq!(segments[0].segment_id, "one");
+        assert_eq!(segments[1].segment_id, "two");
     }
 }

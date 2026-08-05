@@ -167,10 +167,14 @@ function UnderstandingCard({ understanding, busy, onConfirm, onRefine }: { under
   );
 }
 
-function ArtifactCard({ artifact, route, kept, busy, onKeep }: { artifact: AskArtifact; route: AskPresentation["route"]; kept: boolean; busy: boolean; onKeep: () => void }) {
+function ArtifactCard({ artifact, route, kept, busy, onKeep, onRevise }: { artifact: AskArtifact; route: AskPresentation["route"]; kept: boolean; busy: boolean; onKeep: () => void; onRevise: () => void }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
-    const content = artifact.kind === "prompt" ? artifact.body : artifact.steps.join("\n");
+    const content = artifact.kind === "prompt"
+      ? artifact.body
+      : artifact.kind === "runbook"
+        ? artifact.steps.join("\n")
+        : [artifact.tool, artifact.capability, ...artifact.instructions].filter(Boolean).join("\n");
     await navigator.clipboard.writeText(content);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1800);
@@ -188,24 +192,34 @@ function ArtifactCard({ artifact, route, kept, busy, onKeep }: { artifact: AskAr
         {artifact.kind === "existing_capability" && <div className="py-2"><p className="text-[12px] font-semibold text-[#16805c]">{artifact.tool}</p><h4 className="mt-1 text-[18px] font-semibold text-[#252b27]">{artifact.capability}</h4><ol className="mt-4 space-y-3">{artifact.instructions.map((instruction, index) => <li key={`${index}-${instruction}`} className="flex gap-3 text-[14px] leading-6 text-[#505952]"><span className="font-semibold text-[#16805c]">{index + 1}</span><span>{instruction}</span></li>)}</ol></div>}
       </div>
       <footer className="flex flex-wrap gap-2 border-t border-[#e3e7e3] px-5 py-4 sm:px-6">
-        {(artifact.kind === "prompt" || artifact.kind === "runbook") && <button type="button" onClick={() => void copy()} className="inline-flex min-h-9 items-center gap-2 rounded-[9px] bg-[#176f51] px-4 text-[13px] font-semibold text-white hover:bg-[#105d43] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c]"><Copy size={14} />{copied ? "Copied" : artifact.kind === "prompt" ? "Copy prompt" : "Copy runbook"}</button>}
+        <button type="button" onClick={() => void copy()} className="inline-flex min-h-9 items-center gap-2 rounded-[9px] bg-[#176f51] px-4 text-[13px] font-semibold text-white hover:bg-[#105d43] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c]"><Copy size={14} />{copied ? "Copied" : artifact.kind === "prompt" ? "Copy prompt" : artifact.kind === "runbook" ? "Copy runbook" : "Copy instructions"}</button>
         <button type="button" disabled={busy || kept} onClick={onKeep} className="min-h-9 rounded-[9px] border border-[#cbd3cd] px-4 text-[13px] font-medium text-[#4e5851] hover:bg-[#f0f3f0] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c] disabled:cursor-default disabled:bg-[#f1f3f1] disabled:text-[#7b847e]">{kept ? "Kept in Ready to use" : "Keep in Ready to use"}</button>
+        <button type="button" disabled={busy} onClick={onRevise} className="min-h-9 px-2 text-[13px] font-medium text-[#56605a] underline-offset-4 hover:text-[#116849] hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c] disabled:opacity-50">Ask Dystil to change it</button>
       </footer>
     </article>
   );
 }
 
-function PresentationCard({ presentation, session, busy, onKeep }: { presentation: AskPresentation; session: AskSessionView; busy: boolean; onKeep: () => void }) {
-  return <section className="mt-6 sm:ml-[50px]"><div className="rounded-[14px] bg-[#eef5f1] p-5 ring-1 ring-[#c9d9d0]"><p className="text-[11px] font-semibold text-[#116849]">Answer · based on your answers only</p><h2 className="mt-2 text-balance text-[23px] font-medium leading-[1.35] tracking-[-0.025em] text-[#202722]">{presentation.headline}</h2><p className="mt-3 max-w-[70ch] whitespace-pre-wrap text-[14px] leading-6 text-[#505a53]">{presentation.explanation}</p>{presentation.limitations.length > 0 && <div className="mt-4 border-t border-[#d5e1da] pt-4"><p className="text-[11px] font-semibold text-[#657169]">What this does not assume</p><ul className="mt-2 space-y-1.5 text-[13px] leading-5 text-[#5c655f]">{presentation.limitations.map((item) => <li key={item}>• {item}</li>)}</ul></div>}</div>{presentation.artifact && <ArtifactCard artifact={presentation.artifact} route={presentation.route} kept={Boolean(session.artifactKeptId)} busy={busy} onKeep={onKeep} />}</section>;
+function PresentationCard({ presentation, session, busy, onKeep, onRevise }: { presentation: AskPresentation; session: AskSessionView; busy: boolean; onKeep: () => void; onRevise: () => void }) {
+  return <section className="mt-6 sm:ml-[50px]"><div className="rounded-[14px] bg-[#eef5f1] p-5 ring-1 ring-[#c9d9d0]"><p className="text-[11px] font-semibold text-[#116849]">Answer · based on your answers only</p><h2 className="mt-2 text-balance text-[23px] font-medium leading-[1.35] tracking-[-0.025em] text-[#202722]">{presentation.headline}</h2><p className="mt-3 max-w-[70ch] whitespace-pre-wrap text-[14px] leading-6 text-[#505a53]">{presentation.explanation}</p>{presentation.limitations.length > 0 && <div className="mt-4 border-t border-[#d5e1da] pt-4"><p className="text-[11px] font-semibold text-[#657169]">What this does not assume</p><ul className="mt-2 space-y-1.5 text-[13px] leading-5 text-[#5c655f]">{presentation.limitations.map((item) => <li key={item}>• {item}</li>)}</ul></div>}</div>{presentation.artifact && <ArtifactCard artifact={presentation.artifact} route={presentation.route} kept={Boolean(session.artifactKeptId)} busy={busy} onKeep={onKeep} onRevise={onRevise} />}</section>;
 }
 
 function Composer({ value, onChange, onSubmit, disabled, placeholder, autoFocus = false }: { value: string; onChange: (value: string) => void; onSubmit: () => void; disabled: boolean; placeholder: string; autoFocus?: boolean }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { if (autoFocus) ref.current?.focus(); }, [autoFocus]);
+  useEffect(() => {
+    const textarea = ref.current;
+    if (!textarea) return;
+    textarea.style.height = "0px";
+    textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 32), 176)}px`;
+  }, [value]);
   return (
-    <div className="rounded-[15px] bg-white shadow-[0_12px_35px_rgba(30,44,35,0.08)] ring-1 ring-[#cdd4cf] transition-shadow focus-within:shadow-[0_16px_38px_rgba(25,70,48,0.12)] focus-within:ring-[#78a890]">
-      <textarea ref={ref} value={value} disabled={disabled} maxLength={1600} rows={3} onChange={(event) => onChange(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); onSubmit(); } }} placeholder={placeholder} className="block min-h-[92px] max-h-[220px] w-full resize-y rounded-t-[15px] bg-transparent px-4 py-3.5 text-[15px] leading-6 text-[#222824] outline-none placeholder:text-[#7f8781] disabled:cursor-not-allowed disabled:opacity-60" />
-      <div className="flex flex-wrap items-center gap-3 border-t border-[#e7eae7] bg-[#fafbf9] px-3 py-2.5"><span className="text-[12px] text-[#747d76]">Stays on this computer · {value.length}/1600</span><span className="hidden text-[12px] text-[#9aa19b] sm:inline">⌘ Enter to send</span><button type="button" aria-label="Send answer" disabled={disabled || !value.trim()} onClick={onSubmit} className="ml-auto grid h-9 w-9 place-items-center rounded-[9px] bg-[#176f51] text-white hover:bg-[#105d43] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c] disabled:cursor-not-allowed disabled:bg-[#d6ddd8] disabled:text-[#8c948e]"><ArrowUp size={17} strokeWidth={2.4} /></button></div>
+    <div className="flex min-h-[74px] items-end gap-2 overflow-hidden rounded-[30px] bg-white px-2.5 py-2.5 shadow-[0_10px_30px_rgba(27,39,31,0.10)] ring-1 ring-[#c9d1cb] transition-[box-shadow] focus-within:shadow-[0_14px_34px_rgba(24,62,43,0.13)] focus-within:ring-[#78a28e]">
+      <div className="min-w-0 flex-1 py-0.5">
+        <textarea ref={ref} value={value} disabled={disabled} maxLength={1600} rows={1} onChange={(event) => onChange(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); onSubmit(); } }} placeholder={placeholder} className="block min-h-8 max-h-44 w-full resize-none overflow-y-auto bg-transparent px-3 text-[15px] leading-8 text-[#222824] outline-none placeholder:text-[#747d76] disabled:cursor-not-allowed disabled:opacity-60" />
+        <div className="flex items-center gap-3 px-3 text-[11px] leading-4 text-[#737c76]"><span>Stays on this computer · {value.length}/1600</span><span className="hidden text-[#8b938d] sm:inline">⌘ Enter to send</span></div>
+      </div>
+      <button type="button" aria-label="Send answer" disabled={disabled || !value.trim()} onClick={onSubmit} className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#176f51] text-white shadow-[0_4px_12px_rgba(18,82,58,0.20)] transition-[background-color,transform] hover:bg-[#105d43] active:scale-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c] disabled:cursor-not-allowed disabled:bg-[#d6ddd8] disabled:text-[#87918a] disabled:shadow-none"><ArrowUp size={18} strokeWidth={2.4} /></button>
     </div>
   );
 }
@@ -214,22 +228,24 @@ export function AskForFix() {
   const { session, loading, busy, error, optimisticText, submit, confirm, retry, cancel, keepArtifact, startNew } = useAskForFix();
   const [draft, setDraft] = useState("");
   const [customAnswer, setCustomAnswer] = useState(false);
+  const [revisionMode, setRevisionMode] = useState(false);
   const question = session?.currentQuestion ?? null;
   const isConsolidating = session?.phase === "consolidate" && !session.locked;
   const isAnswered = session?.status === "answered" && Boolean(session.presentation);
-  const showComposer = !isAnswered && (!isConsolidating || customAnswer) && (question?.kind === "free_text" || customAnswer || !question);
+  const showComposer = revisionMode || (!isAnswered && (!isConsolidating || customAnswer) && (question?.kind === "free_text" || customAnswer || !question));
 
-  useEffect(() => { setCustomAnswer(false); setDraft(""); }, [session?.currentQuestionId, session?.phase]);
+  useEffect(() => { setCustomAnswer(false); setRevisionMode(false); setDraft(""); }, [session?.sessionId, session?.currentQuestionId, session?.phase]);
 
   const sendDraft = () => {
     if (!draft.trim()) return;
     const event: AskInputEvent = {
-      kind: session?.messages.length ? (isConsolidating ? "refine" : "free_text") : "initial_problem",
-      questionId: session?.currentQuestionId ?? null,
+      kind: isAnswered ? "revise" : session?.messages.length ? (isConsolidating ? "refine" : "free_text") : "initial_problem",
+      questionId: isAnswered ? null : session?.currentQuestionId ?? null,
       selectedOptionIds: [],
     };
     const text = draft;
     setDraft("");
+    setRevisionMode(false);
     void submit(text, event);
   };
 
@@ -249,12 +265,12 @@ export function AskForFix() {
 
         {!busy && question && <QuestionCard question={question} questionId={session?.currentQuestionId ?? null} questionNumber={session?.questionCount ?? 1} disabled={busy} onCustom={() => setCustomAnswer(true)} onSubmit={(text, event) => void submit(text, event)} />}
         {!busy && isConsolidating && session && <UnderstandingCard understanding={session.understanding} busy={busy} onConfirm={() => void confirm()} onRefine={() => setCustomAnswer(true)} />}
-        {!busy && session?.presentation && <PresentationCard presentation={session.presentation} session={session} busy={busy} onKeep={() => void keepArtifact()} />}
+        {!busy && session?.presentation && <PresentationCard presentation={session.presentation} session={session} busy={busy} onKeep={() => void keepArtifact()} onRevise={() => setRevisionMode(true)} />}
 
         {error && <div role="alert" className="mt-6 flex flex-wrap items-center gap-3 rounded-[12px] bg-[#f7eeeb] px-4 py-3 text-[13px] leading-5 text-[#753d33] ring-1 ring-[#e3c4bc]"><span className="min-w-0 flex-1">{error}</span>{session?.lastErrorCode && <button type="button" disabled={busy} onClick={() => void retry()} className="min-h-8 rounded-[8px] bg-white px-3 font-semibold text-[#753d33] ring-1 ring-[#d8b6ad] hover:bg-[#fffaf8] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8b3f32]">Try again</button>}</div>}
       </div>
 
-      {!loading && !busy && showComposer && <div className="sticky bottom-0 z-10 bg-[linear-gradient(to_bottom,rgba(247,248,246,0),#f7f8f6_22%)] pt-8"><Composer value={draft} onChange={setDraft} onSubmit={sendDraft} disabled={busy} autoFocus={customAnswer} placeholder={isConsolidating ? "What did Dystil misunderstand or miss?" : question ? "Answer in your own words…" : "Describe the problem, where it happens, and why it is annoying…"} />{!session?.messages.length && <div className="mt-4 flex flex-wrap gap-2">{examples.map((example) => <button key={example} type="button" onClick={() => setDraft(example)} className="rounded-full border border-[#d2d8d3] bg-[#fbfcfa] px-3 py-1.5 text-[12px] text-[#616a64] hover:border-[#9fb9aa] hover:text-[#116849] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c]">{example}</button>)}</div>}</div>}
+      {!loading && !busy && showComposer && <div className="sticky bottom-0 z-10 pt-5 pb-2"><Composer value={draft} onChange={setDraft} onSubmit={sendDraft} disabled={busy} autoFocus={customAnswer || revisionMode} placeholder={revisionMode ? "What should Dystil change in this answer?" : isConsolidating ? "What did Dystil misunderstand or miss?" : question ? "Answer in your own words…" : "Describe the problem, where it happens, and why it is annoying…"} />{!session?.messages.length && <div className="mt-4 flex flex-wrap gap-2">{examples.map((example) => <button key={example} type="button" onClick={() => setDraft(example)} className="rounded-full border border-[#d2d8d3] bg-[#fbfcfa] px-3 py-1.5 text-[12px] text-[#616a64] hover:border-[#9fb9aa] hover:text-[#116849] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c]">{example}</button>)}</div>}</div>}
       {isAnswered && <div className="flex justify-center border-t border-[#e0e4e0] pt-5"><button type="button" disabled={busy} onClick={() => void startNew()} className="inline-flex min-h-9 items-center gap-2 rounded-[9px] border border-[#cbd3cd] bg-white px-4 text-[13px] font-medium text-[#4e5851] hover:bg-[#f0f3f0] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c]"><RotateCcw size={14} />Ask about another problem</button></div>}
     </div>
   );

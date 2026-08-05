@@ -24,6 +24,8 @@ pub struct CaptureCoordinator {
     // Per-window cache used to turn rapid duplicate AX observations into a
     // link to the existing frame rather than a new syncable frame row.
     dedup: Mutex<DedupState>,
+    visual_dedup: Mutex<VisualDedupState>,
+    fingerprint_gate: Arc<tokio::sync::Semaphore>,
     // Serializes `dedup decision -> persist -> cache update`; AX acquisition
     // itself stays outside this lock.
     commit_gate: Mutex<()>,
@@ -46,6 +48,8 @@ impl CaptureCoordinator {
             store,
             accessibility_gate: Mutex::new(()),
             dedup: Mutex::new(DedupState::default()),
+            visual_dedup: Mutex::new(VisualDedupState::default()),
+            fingerprint_gate: Arc::new(tokio::sync::Semaphore::new(1)),
             commit_gate: Mutex::new(()),
             visual_gate: Mutex::new(()),
         }
@@ -139,12 +143,14 @@ impl CaptureCoordinator {
                         visual: None,
                     },
                     false,
+                    None,
                 )
                 .await;
         }
 
         let mut first_stored = None;
         let mut first_error = None;
+        let fingerprint_deadline = Instant::now() + Duration::from_millis(750);
         for visual in visuals {
             let visual_context = with_visual_context(context.clone(), Some(&visual));
             let monitor_id = visual_context.monitor_id;
@@ -155,7 +161,10 @@ impl CaptureCoordinator {
                 accessibility: accessibility.clone(),
                 visual: Some(visual),
             };
-            match self.persist_or_reuse(observation, false).await {
+            match self
+                .persist_or_reuse(observation, false, Some(fingerprint_deadline))
+                .await
+            {
                 Ok(stored) => {
                     if first_stored.is_none() {
                         first_stored = Some(stored);
@@ -192,6 +201,7 @@ impl CaptureCoordinator {
                         visual: None,
                     },
                     false,
+                    None,
                 )
                 .await;
         }
@@ -227,6 +237,7 @@ impl CaptureCoordinator {
                     visual: None,
                 },
                 true,
+                None,
             )
             .await?
         {
@@ -263,9 +274,10 @@ impl CaptureCoordinator {
         &self,
         observation: CaptureObservation,
         heartbeat: bool,
+        fingerprint_deadline: Option<Instant>,
     ) -> Result<StoredCapture, CaptureError> {
         match self
-            .persist_or_reuse_decision(observation, heartbeat)
+            .persist_or_reuse_decision(observation, heartbeat, fingerprint_deadline)
             .await?
         {
             PersistDecision::Persisted(stored) | PersistDecision::Reused(stored) => Ok(stored),
@@ -276,13 +288,15 @@ impl CaptureCoordinator {
         &self,
         observation: CaptureObservation,
         heartbeat: bool,
+        fingerprint_deadline: Option<Instant>,
     ) -> Result<PersistDecision, CaptureError> {
-        // Image observations are durable by definition; avoid silently
-        // throwing away a just-acquired visual checkpoint.
-        if observation.visual.is_some() || observation.accessibility.is_none() {
-            let stored = self.store.persist(observation.clone()).await?;
-            self.remember_persisted_accessibility(&observation, &stored)
+        if observation.visual.is_some() {
+            return self
+                .persist_or_reuse_visual(observation, fingerprint_deadline)
                 .await;
+        }
+        if observation.accessibility.is_none() {
+            let stored = self.store.persist(observation.clone()).await?;
             return Ok(PersistDecision::Persisted(stored));
         }
 
@@ -300,9 +314,13 @@ impl CaptureCoordinator {
                 && !snapshot.truncated
                 && simhash_distance(previous.simhash, snapshot.simhash)
                     <= SIMHASH_DISTANCE_THRESHOLD;
-            if same_context
+            let exact_typing_duplicate =
+                matches!(observation.trigger, CaptureTrigger::TypingPause) && exact;
+            if !is_forced_checkpoint(&observation.trigger)
+                && same_context
                 && ((heartbeat && exact)
                     || (rapid && exact)
+                    || exact_typing_duplicate
                     || (rapid && fuzzy && allows_fuzzy_dedup(&observation.trigger)))
             {
                 return Ok(PersistDecision::Reused(previous.stored.clone()));
@@ -311,6 +329,110 @@ impl CaptureCoordinator {
 
         let stored = self.store.persist(observation.clone()).await?;
         remember_entry(&mut dedup, key, fingerprint, snapshot, stored.clone(), now);
+        Ok(PersistDecision::Persisted(stored))
+    }
+
+    async fn persist_or_reuse_visual(
+        &self,
+        observation: CaptureObservation,
+        fingerprint_deadline: Option<Instant>,
+    ) -> Result<PersistDecision, CaptureError> {
+        let visual = observation.visual.as_ref().expect("checked by caller");
+        let visual_key = VisualKey::from_observation(&observation);
+        let fingerprint = if let (Some(deadline), Ok(permit)) = (
+            fingerprint_deadline,
+            Arc::clone(&self.fingerprint_gate).try_acquire_owned(),
+        ) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                None
+            } else {
+                let image = Arc::clone(&visual.image);
+                match tokio::time::timeout(
+                    remaining,
+                    tokio::task::spawn_blocking(move || {
+                        let _permit = permit;
+                        visual_fingerprint(image.as_ref())
+                    }),
+                )
+                .await
+                {
+                    Ok(Ok(fingerprint)) => Some(fingerprint),
+                    Ok(Err(error)) => {
+                        warn!(%error, "visual fingerprint worker failed; preserving screenshot");
+                        None
+                    }
+                    Err(_) => {
+                        warn!("visual fingerprint budget exhausted; preserving screenshot");
+                        None
+                    }
+                }
+            }
+        } else {
+            None
+        };
+
+        let _commit = self.commit_gate.lock().await;
+        let context = ContextFingerprint::from_context(&observation.context);
+        if !is_forced_checkpoint(&observation.trigger) {
+            if let (Some(current), Some(previous)) = (
+                fingerprint.as_ref(),
+                self.visual_dedup
+                    .lock()
+                    .await
+                    .entries
+                    .get(&visual_key)
+                    .cloned(),
+            ) {
+                let same_context = previous.context == context;
+                let visual_delta = compare_visual_fingerprints(&previous.visual, current);
+                let ax_changed = match (
+                    previous.accessibility.as_ref(),
+                    observation.accessibility.as_ref(),
+                ) {
+                    (Some(previous), Some(current)) => {
+                        previous.content_hash != current.content_hash
+                    }
+                    (None, None) => false,
+                    _ => true,
+                };
+                tracing::debug!(
+                    changed_pixel_ratio = visual_delta.changed_pixel_ratio,
+                    mean_absolute_delta = visual_delta.mean_absolute_delta,
+                    dhash_distance = visual_delta.dhash_distance,
+                    near_identical = visual_delta.near_identical,
+                    ax_changed,
+                    trigger = observation.trigger.as_str(),
+                    "evaluated visual checkpoint change"
+                );
+                if same_context && visual_delta.near_identical && !ax_changed {
+                    return Ok(PersistDecision::Reused(previous.stored));
+                }
+            }
+        }
+
+        let stored = self.store.persist(observation.clone()).await?;
+        self.remember_persisted_accessibility(&observation, &stored)
+            .await;
+        if let Some(fingerprint) = fingerprint {
+            let mut state = self.visual_dedup.lock().await;
+            let can_store = state.entries.contains_key(&visual_key)
+                || state.entries.len() < MAX_VISUAL_MONITORS;
+            if can_store {
+                state.entries.insert(
+                    visual_key,
+                    VisualDedupEntry {
+                        stored: stored.clone(),
+                        context,
+                        visual: fingerprint,
+                        accessibility: observation
+                            .accessibility
+                            .as_ref()
+                            .map(AxFingerprint::from_snapshot),
+                    },
+                );
+            }
+        }
         Ok(PersistDecision::Persisted(stored))
     }
 
@@ -337,6 +459,13 @@ impl CaptureCoordinator {
 const DEDUP_RAPID_HORIZON: Duration = Duration::from_secs(10);
 const SIMHASH_DISTANCE_THRESHOLD: u32 = 2;
 const MAX_DEDUP_WINDOWS: usize = 128;
+const MAX_VISUAL_MONITORS: usize = 8;
+const VISUAL_MAX_WIDTH: u32 = 960;
+const VISUAL_MAX_HEIGHT: u32 = 540;
+const VISUAL_PIXEL_DELTA: u8 = 12;
+const VISUAL_CHANGED_PIXEL_RATIO: f64 = 0.0005;
+const VISUAL_MEAN_ABSOLUTE_DELTA: f64 = 0.10;
+const VISUAL_DHASH_DISTANCE: u32 = 0;
 
 #[derive(Default)]
 struct DedupState {
@@ -351,6 +480,62 @@ struct DedupEntry {
     simhash: u64,
     context: ContextFingerprint,
     truncated: bool,
+}
+
+#[derive(Default)]
+struct VisualDedupState {
+    entries: HashMap<VisualKey, VisualDedupEntry>,
+}
+
+#[derive(Clone)]
+struct VisualDedupEntry {
+    stored: StoredCapture,
+    context: ContextFingerprint,
+    visual: VisualFingerprint,
+    accessibility: Option<AxFingerprint>,
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct VisualKey(String);
+
+impl VisualKey {
+    fn from_observation(observation: &CaptureObservation) -> Self {
+        let visual = observation.visual.as_ref().expect("visual observation");
+        Self(match (visual.monitor_id, visual.device_name.as_deref()) {
+            (Some(id), Some(name)) => format!("{id}:{name}"),
+            (Some(id), None) => id.to_string(),
+            (None, Some(name)) => name.to_string(),
+            (None, None) => "unknown_monitor".to_string(),
+        })
+    }
+}
+
+#[derive(Clone)]
+struct VisualFingerprint {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+    dhash: u64,
+}
+
+struct VisualDelta {
+    changed_pixel_ratio: f64,
+    mean_absolute_delta: f64,
+    dhash_distance: u32,
+    near_identical: bool,
+}
+
+#[derive(Clone)]
+struct AxFingerprint {
+    content_hash: u64,
+}
+
+impl AxFingerprint {
+    fn from_snapshot(snapshot: &crate::AccessibilitySnapshot) -> Self {
+        Self {
+            content_hash: snapshot.content_hash,
+        }
+    }
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]
@@ -397,6 +582,73 @@ fn allows_fuzzy_dedup(trigger: &CaptureTrigger) -> bool {
             | CaptureTrigger::VisualChange
             | CaptureTrigger::Idle
     )
+}
+
+fn is_forced_checkpoint(trigger: &CaptureTrigger) -> bool {
+    matches!(
+        trigger,
+        CaptureTrigger::AppSwitch | CaptureTrigger::WindowFocus | CaptureTrigger::Manual
+    )
+}
+
+fn visual_fingerprint(image: &image::DynamicImage) -> VisualFingerprint {
+    use image::imageops::FilterType;
+    let grayscale = image
+        .resize(VISUAL_MAX_WIDTH, VISUAL_MAX_HEIGHT, FilterType::Triangle)
+        .to_luma8();
+    let hash_image = image::DynamicImage::ImageLuma8(grayscale.clone())
+        .resize_exact(9, 8, FilterType::Triangle)
+        .to_luma8();
+    let mut dhash = 0_u64;
+    for y in 0..8 {
+        for x in 0..8 {
+            dhash <<= 1;
+            if hash_image.get_pixel(x, y)[0] > hash_image.get_pixel(x + 1, y)[0] {
+                dhash |= 1;
+            }
+        }
+    }
+    VisualFingerprint {
+        width: grayscale.width(),
+        height: grayscale.height(),
+        pixels: grayscale.into_raw(),
+        dhash,
+    }
+}
+
+fn compare_visual_fingerprints(
+    previous: &VisualFingerprint,
+    current: &VisualFingerprint,
+) -> VisualDelta {
+    if previous.width != current.width || previous.height != current.height {
+        return VisualDelta {
+            changed_pixel_ratio: 1.0,
+            mean_absolute_delta: 255.0,
+            dhash_distance: 64,
+            near_identical: false,
+        };
+    }
+    let mut changed = 0usize;
+    let mut absolute_delta = 0u64;
+    for (left, right) in previous.pixels.iter().zip(&current.pixels) {
+        let delta = left.abs_diff(*right);
+        absolute_delta += u64::from(delta);
+        if delta > VISUAL_PIXEL_DELTA {
+            changed += 1;
+        }
+    }
+    let pixel_count = previous.pixels.len().max(1);
+    let changed_pixel_ratio = changed as f64 / pixel_count as f64;
+    let mean_absolute_delta = absolute_delta as f64 / pixel_count as f64;
+    let dhash_distance = (previous.dhash ^ current.dhash).count_ones();
+    VisualDelta {
+        changed_pixel_ratio,
+        mean_absolute_delta,
+        dhash_distance,
+        near_identical: changed_pixel_ratio <= VISUAL_CHANGED_PIXEL_RATIO
+            && mean_absolute_delta <= VISUAL_MEAN_ABSOLUTE_DELTA
+            && dhash_distance <= VISUAL_DHASH_DISTANCE,
+    }
 }
 
 fn simhash_distance(left: u64, right: u64) -> u32 {
@@ -904,6 +1156,23 @@ mod full_capture_tests {
         }
     }
 
+    #[derive(Default)]
+    struct CountingStore(AtomicUsize);
+
+    #[async_trait]
+    impl CaptureStore for CountingStore {
+        async fn persist(
+            &self,
+            observation: CaptureObservation,
+        ) -> Result<StoredCapture, CaptureError> {
+            let frame_id = self.0.fetch_add(1, Ordering::SeqCst) as i64 + 1;
+            Ok(StoredCapture {
+                frame_id,
+                snapshot_path: observation.visual.map(|_| format!("frame-{frame_id}.jpg")),
+            })
+        }
+    }
+
     struct MultiMonitorVisual;
     #[async_trait]
     impl VisualProvider for MultiMonitorVisual {
@@ -988,6 +1257,57 @@ mod full_capture_tests {
     }
 
     #[tokio::test]
+    async fn repeated_near_identical_typing_capture_reuses_the_monitor_frame() {
+        let visual = Arc::new(Visual(AtomicUsize::new(0)));
+        let store = Arc::new(CountingStore::default());
+        let coordinator = CaptureCoordinator::new(
+            CaptureConfig {
+                capture_mode: CaptureMode::FullCapture,
+            },
+            Arc::new(Ax),
+            Some(visual),
+            store.clone(),
+        );
+
+        let first = coordinator
+            .capture(CaptureTrigger::TypingPause, CaptureContext::default())
+            .await
+            .unwrap();
+        let second = coordinator
+            .capture(CaptureTrigger::TypingPause, CaptureContext::default())
+            .await
+            .unwrap();
+
+        assert_eq!(first.frame_id, second.frame_id);
+        assert_eq!(store.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn app_switch_remains_forced_when_pixels_and_ax_are_identical() {
+        let visual = Arc::new(Visual(AtomicUsize::new(0)));
+        let store = Arc::new(CountingStore::default());
+        let coordinator = CaptureCoordinator::new(
+            CaptureConfig {
+                capture_mode: CaptureMode::FullCapture,
+            },
+            Arc::new(Ax),
+            Some(visual),
+            store.clone(),
+        );
+
+        coordinator
+            .capture(CaptureTrigger::AppSwitch, CaptureContext::default())
+            .await
+            .unwrap();
+        coordinator
+            .capture(CaptureTrigger::AppSwitch, CaptureContext::default())
+            .await
+            .unwrap();
+
+        assert_eq!(store.0.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
     async fn full_capture_persists_one_frame_for_each_returned_monitor() {
         let store = Arc::new(MonitorRecordingStore::default());
         let coordinator = CaptureCoordinator::new(
@@ -1047,5 +1367,48 @@ mod full_capture_tests {
             .unwrap();
         assert_eq!(stored.snapshot_path, None);
         assert_eq!(visual.0.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[cfg(test)]
+mod change_detection_tests {
+    use super::*;
+
+    #[test]
+    fn visual_fingerprint_is_bounded_and_detects_large_changes() {
+        let dark = image::DynamicImage::new_luma8(2_560, 1_440);
+        let bright = image::DynamicImage::ImageLuma8(image::GrayImage::from_pixel(
+            2_560,
+            1_440,
+            image::Luma([255]),
+        ));
+        let dark = visual_fingerprint(&dark);
+        let bright = visual_fingerprint(&bright);
+
+        assert_eq!((dark.width, dark.height), (960, 540));
+        assert!(dark.pixels.len() <= (VISUAL_MAX_WIDTH * VISUAL_MAX_HEIGHT) as usize);
+        assert!(!compare_visual_fingerprints(&dark, &bright).near_identical);
+        assert!(compare_visual_fingerprints(&dark, &dark).near_identical);
+    }
+
+    #[test]
+    fn visual_dedupe_only_accepts_tiny_capture_noise() {
+        let previous = VisualFingerprint {
+            width: 100,
+            height: 100,
+            pixels: vec![0; 10_000],
+            dhash: 0,
+        };
+        let mut within_cutoff = previous.clone();
+        within_cutoff.pixels[..5].fill(13);
+        assert!(compare_visual_fingerprints(&previous, &within_cutoff).near_identical);
+
+        let mut beyond_cutoff = previous.clone();
+        beyond_cutoff.pixels[..6].fill(13);
+        assert!(!compare_visual_fingerprints(&previous, &beyond_cutoff).near_identical);
+
+        let mut hash_changed = previous.clone();
+        hash_changed.dhash = 1;
+        assert!(!compare_visual_fingerprints(&previous, &hash_changed).near_identical);
     }
 }

@@ -74,11 +74,12 @@ fn screen_item(
 ) -> Result<(Option<SegmentEvidenceItem>, String), SyncError> {
     let payload: ScreenFramePayload = serde_json::from_value(event.payload.clone())?;
     let text = normalize_text(payload.frame_text.as_deref().unwrap_or_default());
-    if text.is_empty() {
-        return Ok((None, "empty text".to_string()));
+    if text.is_empty() && payload.ax_capture_diagnostics.is_none() {
+        return Ok((None, "empty text and structural evidence".to_string()));
     }
-    if let Some((prev_text, prev_time)) = last_screen.as_ref() {
-        if prev_text == &text
+    let dedupe_key = serde_json::to_string(&(&text, &payload.ax_capture_diagnostics))?;
+    if let Some((previous_key, prev_time)) = last_screen.as_ref() {
+        if previous_key == &dedupe_key
             && event.occurred_at - *prev_time <= Duration::seconds(config.screen_dedupe_seconds)
         {
             let secs = (event.occurred_at - *prev_time).num_seconds();
@@ -92,7 +93,25 @@ fn screen_item(
             ));
         }
     }
-    *last_screen = Some((text.clone(), event.occurred_at));
+    *last_screen = Some((dedupe_key, event.occurred_at));
+    let evidence_text = if text.is_empty() {
+        "Accessibility structure captured".to_string()
+    } else {
+        text
+    };
+
+    let mut metadata = json!({
+        "frame_id": payload.frame_id,
+        "document_path": payload.document_path,
+        "text_source": payload.text_source,
+        "capture_trigger": payload.capture_trigger,
+        "content_hash": payload.content_hash,
+        "simhash": payload.simhash,
+        "focused": payload.focused,
+    });
+    if let Some(value) = payload.ax_capture_diagnostics {
+        metadata["ax_capture_diagnostics"] = value;
+    }
 
     Ok((
         Some(SegmentEvidenceItem {
@@ -101,19 +120,11 @@ fn screen_item(
             occurred_at: event.occurred_at,
             source_id: event.event_id.clone(),
             source_payload_hash: event.payload_hash.clone(),
-            text,
+            text: evidence_text,
             app_name: payload.app_name,
             window_name: payload.window_name,
             browser_url: payload.browser_url,
-            metadata: json!({
-                "frame_id": payload.frame_id,
-                "document_path": payload.document_path,
-                "text_source": payload.text_source,
-                "capture_trigger": payload.capture_trigger,
-                "content_hash": payload.content_hash,
-                "simhash": payload.simhash,
-                "focused": payload.focused,
-            }),
+            metadata,
         }),
         String::new(),
     ))
@@ -282,8 +293,36 @@ mod tests {
             frame_text: Some(text.to_string()),
             content_hash: None,
             simhash: None,
+            ax_capture_diagnostics: None,
         })
         .unwrap()
+    }
+
+    #[test]
+    fn keeps_diagnostics_without_text_and_never_embeds_raw_trees() {
+        let mut first: ScreenFramePayload = serde_json::from_value(screen_payload("")).unwrap();
+        first.ax_capture_diagnostics = Some(json!({"source": "ax"}));
+
+        let outcome = filter_events(
+            &[event(
+                CaptureEventType::ScreenFrame,
+                1,
+                serde_json::to_value(first).unwrap(),
+            )],
+            &EvidenceFilterConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(outcome.items.len(), 1);
+        assert_eq!(outcome.items[0].text, "Accessibility structure captured");
+        assert!(outcome.items[0]
+            .metadata
+            .get("accessibility_tree")
+            .is_none());
+        assert_eq!(
+            outcome.items[0].metadata["ax_capture_diagnostics"]["source"],
+            "ax"
+        );
     }
 
     #[test]

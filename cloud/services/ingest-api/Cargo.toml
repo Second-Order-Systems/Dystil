@@ -37,3 +37,4 @@ url = { workspace = true }
 uuid = { workspace = true }
 work-insights-db = { path = "../../crates/work-insights-db" }
 work-insights-ingest = { path = "../../crates/work-insights-ingest" }
+zstd = { workspace = true }

@@ -19,8 +19,6 @@ struct BetterAuthSessionResponse {
 struct BetterAuthUserResponse {
     id: String,
     email: Option<String>,
-    #[serde(alias = "emailVerified", alias = "email_verified")]
-    email_verified: Option<bool>,
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
@@ -98,15 +96,10 @@ async fn fetch_better_auth_user_from_cookie(
     let email = session.user.email.ok_or_else(|| {
         AppError::BadRequest("better auth user is missing an email address".to_string())
     })?;
-    if session.user.email_verified != Some(true) {
-        return Ok(None);
-    }
-
     Ok(Some(AuthenticatedUser {
         user_id: session.user.id,
         email,
         display_name,
-        email_verified: true,
     }))
 }
 
@@ -205,17 +198,10 @@ async fn fetch_better_auth_user(
     let email = session.user.email.ok_or_else(|| {
         AppError::BadRequest("better auth user is missing an email address".to_string())
     })?;
-    if session.user.email_verified != Some(true) {
-        return Err(AppError::Forbidden(
-            "email must be verified before organization onboarding".to_string(),
-        ));
-    }
-
     Ok(AuthenticatedUser {
         user_id: session.user.id,
         email,
         display_name,
-        email_verified: true,
     })
 }
 

@@ -3,6 +3,7 @@ pub mod ai_gateway;
 pub mod identity;
 pub mod ingest;
 pub mod segments;
+pub mod semantic_trees;
 
 pub async fn migrate(pool: &sqlx::PgPool) -> Result<(), sqlx::migrate::MigrateError> {
     sqlx::migrate!("./migrations").run(pool).await

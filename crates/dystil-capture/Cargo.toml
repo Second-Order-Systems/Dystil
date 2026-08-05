@@ -21,6 +21,8 @@ chrono.workspace = true
 image.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 once_cell.workspace = true
@@ -37,6 +39,7 @@ arc-swap.workspace = true
 arboard = "3"
 dirs.workspace = true
 rusqlite = { version = "0.29", features = ["bundled"] }
+zstd = "0.13"
 url.workspace = true
 
 tracing.workspace = true

@@ -59,12 +59,16 @@ impl DystilFullCaptureVisualProvider {
                 )
             })
             .collect::<Vec<_>>();
-        // The trigger point/context is the only reliable routing input across
-        // Linux and Windows. Unknown focus is represented explicitly and
-        // safely fans out to every connected monitor; no coordinate transform
-        // is guessed here.
+        #[cfg(target_os = "linux")]
+        let selection_context = resolve_wayland_monitor_context(&connected, &request.context);
+        #[cfg(not(target_os = "linux"))]
+        let selection_context = request.context.clone();
+
+        // Unknown focus is represented explicitly and safely fans out when
+        // neither the platform-native output geometry nor the capture API can
+        // reconcile the trigger point.
         let focused = None;
-        let selection = select_monitors(connected.clone(), &request.context, focused);
+        let selection = select_monitors(connected.clone(), &selection_context, focused);
         let selected_ids = selection
             .monitors
             .iter()
@@ -98,6 +102,54 @@ impl DystilFullCaptureVisualProvider {
         );
         Ok(selected)
     }
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_wayland_monitor_context(
+    monitors: &[SafeMonitor],
+    context: &crate::CaptureContext,
+) -> crate::CaptureContext {
+    if context.monitor_id.is_some() || context.target.is_none() {
+        return context.clone();
+    }
+    let Some(target) = context.target else {
+        return context.clone();
+    };
+    let Ok(connection) = libwayshot_xcap::WayshotConnection::new() else {
+        return context.clone();
+    };
+    let matching_name = connection.get_all_outputs().iter().find_map(|output| {
+        let region = output.logical_region.inner;
+        point_in_logical_output(
+            target.x,
+            target.y,
+            region.position.x,
+            region.position.y,
+            region.size.width,
+            region.size.height,
+        )
+        .then_some(output.name.as_str())
+    });
+    let Some(monitor_id) = matching_name.and_then(|name| {
+        monitors
+            .iter()
+            .find(|monitor| monitor.name() == name)
+            .map(SafeMonitor::id)
+    }) else {
+        return context.clone();
+    };
+    let mut resolved = context.clone();
+    resolved.monitor_id = Some(monitor_id);
+    resolved
+}
+
+#[cfg(target_os = "linux")]
+fn point_in_logical_output(x: i32, y: i32, left: i32, top: i32, width: u32, height: u32) -> bool {
+    let x = i64::from(x);
+    let y = i64::from(y);
+    let left = i64::from(left);
+    let top = i64::from(top);
+    x >= left && x < left + i64::from(width) && y >= top && y < top + i64::from(height)
 }
 
 impl Default for DystilFullCaptureVisualProvider {
@@ -259,6 +311,12 @@ fn capture_wayland_output(output_name: &str) -> Result<DynamicImage, String> {
 #[cfg(all(test, target_os = "linux"))]
 mod live_wayland_tests {
     use super::*;
+
+    #[test]
+    fn logical_output_matching_supports_negative_origins() {
+        assert!(point_in_logical_output(-1_425, 414, -1_600, 0, 1_600, 900));
+        assert!(!point_in_logical_output(-1_425, 414, 0, 0, 1_600, 900));
+    }
 
     /// Native smoke test for wlroots compositors. It is ignored in ordinary
     /// test runs because it requires a live graphical session.

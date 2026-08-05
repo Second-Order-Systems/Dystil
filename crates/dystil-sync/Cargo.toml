@@ -9,6 +9,7 @@ edition = { workspace = true }
 
 [dependencies]
 chrono = { workspace = true }
+dystil-capture = { path = "../dystil-capture" }
 dystil-protocol = { path = "../dystil-protocol" }
 flate2 = "1"
 hex = { workspace = true }
@@ -19,10 +20,10 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 sqlx = { workspace = true, features = ["sqlite", "runtime-tokio-rustls", "chrono", "json"] }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
 clap = { workspace = true }
 tempfile = { workspace = true }
 tracing-subscriber = { workspace = true }

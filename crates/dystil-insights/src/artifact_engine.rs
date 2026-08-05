@@ -164,6 +164,7 @@ async fn run_job<R: AiRuntime + ?Sized>(
         let run = match runtime
             .infer_structured(AiStructuredRequest {
                 purpose: "worth_fixing_artifact_change".into(),
+                cache_key: None,
                 model_tier: CHANGE_MODEL_TIER,
                 stable_prompt: String::new(),
                 prompt: prompt.clone(),
