@@ -51,7 +51,7 @@ http-cache-reqwest = "0.15.0"
 # variants into `rustls-platform-verifier` (which the `rustls` feature pulls
 # in automatically). The `rustls` feature bundles aws-lc-rs as the provider;
 # Windows MSVC links cleanly because of bswap_shim.c in the tauri app crate.
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "multipart", "json", "form", "query", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "multipart", "json", "form", "query", "rustls", "system-proxy"] }
 reqwest-middleware = "0.4.1"
 
 # Serialization
