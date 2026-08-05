@@ -12,7 +12,10 @@ const mocks = vi.hoisted(() => ({
 }));
 const { reloadStore, getWhenItRunsSettings, setAutostart, pauseCaptureFor, resumeCaptureNow } = mocks;
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => mocks.invoke(...args) }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (...args: unknown[]) => mocks.invoke(...args),
+  isTauri: () => false,
+}));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 vi.mock("@/lib/hooks/use-settings", () => ({ useSettings: () => ({ reloadStore: mocks.reloadStore }) }));
 vi.mock("@/lib/utils/permission-flow", () => ({ requestPermissionWithFlow: vi.fn() }));

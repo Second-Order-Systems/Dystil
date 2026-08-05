@@ -505,8 +505,11 @@ pub async fn auth_store_session(
     tracing::info!("[auth-flow][native] auth_store_session command invoked");
     let state = store_session_token(token).await?;
     #[cfg(feature = "cloud-sync")]
-    if let Err(error) = crate::work_insights_engine::reconcile(app_handle).await {
-        tracing::warn!(%error, "failed to reconcile cloud sync after storing auth session");
+    {
+        if let Err(error) = crate::work_insights_engine::reconcile(app_handle).await {
+            tracing::warn!(%error, "failed to reconcile cloud sync after storing auth session");
+        }
+        crate::capture_state_reporter::schedule();
     }
     #[cfg(not(feature = "cloud-sync"))]
     let _ = app_handle;
@@ -555,8 +558,11 @@ pub async fn auth_fetch_profile(app_handle: tauri::AppHandle) -> Result<DystilAu
     tracing::info!("[auth-flow][native] auth_fetch_profile command invoked");
     let state = bootstrap_from_cloud().await?;
     #[cfg(feature = "cloud-sync")]
-    if let Err(error) = crate::work_insights_engine::reconcile(app_handle).await {
-        tracing::warn!(%error, "failed to reconcile cloud sync after fetching auth profile");
+    {
+        if let Err(error) = crate::work_insights_engine::reconcile(app_handle).await {
+            tracing::warn!(%error, "failed to reconcile cloud sync after fetching auth profile");
+        }
+        crate::capture_state_reporter::schedule();
     }
     #[cfg(not(feature = "cloud-sync"))]
     let _ = app_handle;
@@ -568,8 +574,11 @@ pub async fn auth_fetch_profile(app_handle: tauri::AppHandle) -> Result<DystilAu
 pub async fn auth_register_device(app_handle: tauri::AppHandle) -> Result<DystilAuthState, String> {
     let state = bootstrap_from_cloud().await?;
     #[cfg(feature = "cloud-sync")]
-    if let Err(error) = crate::work_insights_engine::reconcile(app_handle).await {
-        tracing::warn!(%error, "failed to reconcile cloud sync after device registration");
+    {
+        if let Err(error) = crate::work_insights_engine::reconcile(app_handle).await {
+            tracing::warn!(%error, "failed to reconcile cloud sync after device registration");
+        }
+        crate::capture_state_reporter::schedule();
     }
     #[cfg(not(feature = "cloud-sync"))]
     let _ = app_handle;

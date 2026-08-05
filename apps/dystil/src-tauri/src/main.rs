@@ -38,6 +38,8 @@ mod build_capabilities;
 mod capture_config;
 mod capture_policy;
 mod capture_session;
+#[cfg(feature = "cloud-sync")]
+mod capture_state_reporter;
 #[allow(deprecated)]
 mod commands;
 mod deletion;
@@ -631,6 +633,8 @@ async fn main() {
                 app.deep_link().register_all()?;
             }
             let app_handle = app.handle();
+            #[cfg(feature = "cloud-sync")]
+            capture_state_reporter::start(app_handle.clone());
             automation_commands::start_manager(app_handle.clone());
             worth_fixing_engine::start(app_handle.clone());
 

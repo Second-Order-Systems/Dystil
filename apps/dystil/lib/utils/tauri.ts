@@ -1960,8 +1960,8 @@ scheduleRules?: ScheduleRule[] }) &
  */
 capturePaused?: boolean;
 /**
- * Absolute UTC deadline for a timed pause. `None` while paused means the
- * pause is indefinite and requires an explicit resume.
+ * Absolute UTC deadline for a timed pause. Paused state without a valid
+ * deadline is treated as stale legacy state and cleared at startup.
  */
 capturePauseUntil?: string | null;
 /**

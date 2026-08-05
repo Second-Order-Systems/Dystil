@@ -441,15 +441,14 @@ fn create_dynamic_menu(
                 RecordingStatus::Recording | RecordingStatus::Starting
             )
         });
-    let capture_label = if capture_running { "Pause" } else { "Resume" };
-
     let mut menu = MenuBuilder::new(app)
-        .item(&MenuItemBuilder::with_id("open_app", "Open app").build(app)?)
-        .item(&MenuItemBuilder::with_id("toggle_capture", capture_label).build(app)?);
+        .item(&MenuItemBuilder::with_id("open_app", "Open app").build(app)?);
     if capture_running {
         menu = menu
             .item(&MenuItemBuilder::with_id("pause_60", "Pause for 1 hour").build(app)?)
             .item(&MenuItemBuilder::with_id("pause_today", "Pause for today").build(app)?);
+    } else {
+        menu = menu.item(&MenuItemBuilder::with_id("toggle_capture", "Resume").build(app)?);
     }
     menu.build().map_err(Into::into)
 }
@@ -458,11 +457,7 @@ async fn handle_tray_capture_toggle(app_handle: AppHandle) {
     let state = app_handle.state::<RecordingState>();
     let is_recording = state.capture_active.load(Ordering::SeqCst);
 
-    if is_recording {
-        if let Err(e) = pause_capture_until(app_handle.clone(), None).await {
-            error!("tray pause failed: {}", e);
-        }
-    } else {
+    if !is_recording {
         if let Err(e) = resume_capture_from_pause(app_handle.clone()).await {
             error!("tray resume failed: {}", e);
         }
@@ -580,7 +575,7 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                     set_optimistic_status(RecordingStatus::Paused);
                     let app = app_handle.clone();
                     tauri::async_runtime::spawn(async move {
-                        if let Err(error) = pause_capture_until(app.clone(), Some(deadline)).await {
+                        if let Err(error) = pause_capture_until(app.clone(), deadline).await {
                             error!(%error, "tray timed pause failed");
                         }
                     });

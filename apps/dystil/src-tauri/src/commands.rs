@@ -2451,7 +2451,7 @@ pub(crate) fn pause_deadline(
 #[specta::specta]
 pub async fn pause_capture_for(app_handle: tauri::AppHandle, mode: String) -> Result<(), String> {
     let deadline = pause_deadline(&mode, chrono::Local::now())?;
-    crate::recording::pause_capture_until(app_handle, Some(deadline)).await
+    crate::recording::pause_capture_until(app_handle, deadline).await
 }
 
 #[tauri::command]

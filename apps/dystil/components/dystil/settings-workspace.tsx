@@ -335,7 +335,7 @@ type CaptureSource = { id: string; kind: "app" | "site"; name: string; activeMin
 type CaptureVisibility = { categories: CaptureCategory[]; sources: CaptureSource[]; sourcesError?: string | null };
 
 function pauseStatusCopy(pauseUntil?: string | null) {
-  if (!pauseUntil) return "Paused until you resume";
+  if (!pauseUntil) return "Paused";
   const deadline = new Date(pauseUntil);
   if (Number.isNaN(deadline.getTime())) return "Paused";
   const now = new Date();

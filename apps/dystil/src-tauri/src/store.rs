@@ -610,8 +610,8 @@ pub struct SettingsStore {
     /// the live capture session so a privacy pause survives an app restart.
     #[serde(rename = "capturePaused", default)]
     pub capture_paused: bool,
-    /// Absolute UTC deadline for a timed pause. `None` while paused means the
-    /// pause is indefinite and requires an explicit resume.
+    /// Absolute UTC deadline for a timed pause. Paused state without a valid
+    /// deadline is treated as stale legacy state and cleared at startup.
     #[serde(rename = "capturePauseUntil", default)]
     pub capture_pause_until: Option<String>,
     /// Number of days of raw capture to retain locally. Zero means forever.
