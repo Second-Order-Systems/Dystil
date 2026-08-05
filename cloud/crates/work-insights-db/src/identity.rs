@@ -44,6 +44,9 @@ pub struct DeviceRecord {
     pub platform: String,
     pub revoked_at: Option<DateTime<Utc>>,
     pub last_seen_at: Option<DateTime<Utc>>,
+    pub capture_state: Option<String>,
+    pub capture_pause_until: Option<DateTime<Utc>>,
+    pub capture_state_updated_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -95,6 +98,9 @@ struct DeviceRow {
     platform: String,
     revoked_at: Option<DateTime<Utc>>,
     last_seen_at: Option<DateTime<Utc>>,
+    capture_state: Option<String>,
+    capture_pause_until: Option<DateTime<Utc>>,
+    capture_state_updated_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
 }
 
@@ -262,6 +268,9 @@ pub async fn register_device(
              platform,
              revoked_at,
              last_seen_at,
+             capture_state,
+             capture_pause_until,
+             capture_state_updated_at,
              created_at",
     )
     .bind(&device_id)
@@ -293,6 +302,9 @@ pub async fn resolve_active_device(
              platform,
              revoked_at,
              last_seen_at,
+             capture_state,
+             capture_pause_until,
+             capture_state_updated_at,
              created_at
          FROM devices
          WHERE token_hash = $1
@@ -342,6 +354,33 @@ pub async fn update_device_client_metadata(
     Ok(())
 }
 
+pub async fn update_device_capture_state(
+    pool: &PgPool,
+    device_id: &str,
+    capture_state: &str,
+    capture_pause_until: Option<DateTime<Utc>>,
+) -> Result<DateTime<Utc>, DbError> {
+    let updated_at = sqlx::query_scalar::<_, DateTime<Utc>>(
+        "UPDATE devices
+         SET capture_state = $2,
+             capture_pause_until = $3,
+             capture_state_updated_at = CASE
+                 WHEN capture_state IS DISTINCT FROM $2
+                   OR capture_pause_until IS DISTINCT FROM $3
+                 THEN now()
+                 ELSE COALESCE(capture_state_updated_at, now())
+             END
+         WHERE id = $1 AND revoked_at IS NULL
+         RETURNING capture_state_updated_at",
+    )
+    .bind(device_id)
+    .bind(capture_state)
+    .bind(capture_pause_until)
+    .fetch_one(pool)
+    .await?;
+    Ok(updated_at)
+}
+
 pub async fn list_devices_for_org(
     pool: &PgPool,
     org_id: &str,
@@ -355,6 +394,9 @@ pub async fn list_devices_for_org(
              platform,
              revoked_at,
              last_seen_at,
+             capture_state,
+             capture_pause_until,
+             capture_state_updated_at,
              created_at
          FROM devices
          WHERE org_id = $1
@@ -381,6 +423,9 @@ pub async fn find_device_for_org(
              platform,
              revoked_at,
              last_seen_at,
+             capture_state,
+             capture_pause_until,
+             capture_state_updated_at,
              created_at
          FROM devices
          WHERE org_id = $1 AND id = $2",
@@ -585,6 +630,9 @@ fn device_from_row(row: DeviceRow) -> DeviceRecord {
         platform: row.platform,
         revoked_at: row.revoked_at,
         last_seen_at: row.last_seen_at,
+        capture_state: row.capture_state,
+        capture_pause_until: row.capture_pause_until,
+        capture_state_updated_at: row.capture_state_updated_at,
         created_at: row.created_at,
     }
 }

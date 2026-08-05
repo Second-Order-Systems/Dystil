@@ -158,12 +158,17 @@ async fn run_linker(
                 }
             },
             _ = tick.tick() => {
-                let cutoff = Instant::now() - LINKER_TTL;
-                pending_events.retain(|_, (_, inserted_at)| *inserted_at >= cutoff);
-                pending_frames.retain(|_, (_, inserted_at)| *inserted_at >= cutoff);
+                let now = Instant::now();
+                pending_events.retain(|_, (_, inserted_at)| is_within_ttl(now, *inserted_at));
+                pending_frames.retain(|_, (_, inserted_at)| is_within_ttl(now, *inserted_at));
             }
         }
     }
+}
+
+fn is_within_ttl(now: Instant, inserted_at: Instant) -> bool {
+    now.checked_duration_since(inserted_at)
+        .is_none_or(|age| age <= LINKER_TTL)
 }
 
 fn bounded_insert<T>(entries: &mut HashMap<u64, (T, Instant)>, id: u64, value: (T, Instant)) {
@@ -194,6 +199,22 @@ async fn apply_update(pool: &SqlitePool, row_id: i64, frame_id: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ttl_check_does_not_subtract_from_a_fresh_instant() {
+        let inserted_at = Instant::now();
+
+        assert!(is_within_ttl(inserted_at, inserted_at));
+        assert!(is_within_ttl(inserted_at + LINKER_TTL, inserted_at));
+        assert!(!is_within_ttl(
+            inserted_at + LINKER_TTL + Duration::from_millis(1),
+            inserted_at,
+        ));
+        assert!(is_within_ttl(
+            inserted_at,
+            inserted_at + Duration::from_millis(1),
+        ));
+    }
 
     async fn frame_id(pool: &SqlitePool, row_id: i64) -> Option<i64> {
         sqlx::query_scalar("SELECT frame_id FROM ui_events WHERE id = ?1")

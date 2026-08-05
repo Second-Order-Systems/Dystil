@@ -38,16 +38,14 @@ pub fn persisted_pause_deadline(settings: &SettingsStore) -> Option<DateTime<Utc
         .map(|value| value.with_timezone(&Utc))
 }
 
-/// Clear an expired or malformed timed pause before startup decides whether to
-/// create a capture session. Indefinite pauses deliberately remain active.
+/// Clear an expired, missing, or malformed timed pause before startup decides
+/// whether to create a capture session.
 pub fn normalize_pause_for_startup(settings: &mut SettingsStore) -> bool {
     if !settings.capture_paused {
         settings.capture_pause_until = None;
         return false;
     }
-    if settings.capture_pause_until.is_some()
-        && persisted_pause_deadline(settings).is_none_or(|deadline| deadline <= Utc::now())
-    {
+    if persisted_pause_deadline(settings).is_none_or(|deadline| deadline <= Utc::now()) {
         settings.capture_paused = false;
         settings.capture_pause_until = None;
         return false;
@@ -89,12 +87,12 @@ pub fn restore_pause_timer(app: tauri::AppHandle, settings: &SettingsStore) {
 
 pub async fn pause_capture_until(
     app: tauri::AppHandle,
-    deadline: Option<DateTime<Utc>>,
+    deadline: DateTime<Utc>,
 ) -> Result<(), String> {
     let previous = SettingsStore::get(&app)?.unwrap_or_default();
     let mut updated = previous.clone();
     updated.capture_paused = true;
-    updated.capture_pause_until = deadline.map(|value| value.to_rfc3339());
+    updated.capture_pause_until = Some(deadline.to_rfc3339());
     updated.save(&app)?;
 
     let state = app.state::<RecordingState>();
@@ -103,9 +101,7 @@ pub async fn pause_capture_until(
         return Err(error);
     }
     cancel_pause_timer();
-    if let Some(deadline) = deadline {
-        schedule_pause_resume(app.clone(), deadline);
-    }
+    schedule_pause_resume(app.clone(), deadline);
     notify_recording_state_changed(&app);
     Ok(())
 }
@@ -147,6 +143,8 @@ fn build_config(app: &tauri::AppHandle) -> Result<DystilCaptureConfig, String> {
 
 pub(crate) fn notify_recording_state_changed(app: &tauri::AppHandle) {
     let _ = app.emit("recording-status-changed", ());
+    #[cfg(feature = "cloud-sync")]
+    crate::capture_state_reporter::schedule();
     let app_clone = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Err(e) = crate::tray::force_tray_rebuild(&app_clone) {
@@ -768,12 +766,7 @@ mod pause_tests {
     use super::*;
 
     #[test]
-    fn startup_preserves_active_and_indefinite_pauses() {
-        let mut indefinite = SettingsStore::default();
-        indefinite.capture_paused = true;
-        assert!(normalize_pause_for_startup(&mut indefinite));
-        assert!(indefinite.capture_paused);
-
+    fn startup_preserves_active_timed_pause() {
         let mut timed = SettingsStore::default();
         timed.capture_paused = true;
         timed.capture_pause_until = Some((Utc::now() + chrono::Duration::hours(1)).to_rfc3339());
@@ -782,14 +775,15 @@ mod pause_tests {
     }
 
     #[test]
-    fn startup_clears_expired_or_malformed_timed_pauses() {
+    fn startup_clears_expired_missing_or_malformed_timed_pauses() {
         for deadline in [
-            (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339(),
-            "not-a-date".to_string(),
+            Some((Utc::now() - chrono::Duration::minutes(1)).to_rfc3339()),
+            Some("not-a-date".to_string()),
+            None,
         ] {
             let mut settings = SettingsStore::default();
             settings.capture_paused = true;
-            settings.capture_pause_until = Some(deadline);
+            settings.capture_pause_until = deadline;
             assert!(!normalize_pause_for_startup(&mut settings));
             assert!(!settings.capture_paused);
             assert!(settings.capture_pause_until.is_none());

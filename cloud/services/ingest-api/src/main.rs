@@ -12,10 +12,11 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Duration, Utc};
 use dystil_protocol::{
-    DeviceSummary, DeviceSyncStateResponse, ImageCompleteRequest, ImageCompleteResponse,
-    ImagePrepareRequest, ImagePrepareResponse, ImagePrepareResult, ImageSyncMode, ImageSyncPolicy,
-    ImageUploadTicket, ListDevicesResponse, RegisterDeviceRequest, RegisterDeviceResponse,
-    RevokeDeviceResponse, SegmentUploadResponse, SegmentingPolicy, SyncPolicy,
+    DeviceCaptureState, DeviceSummary, DeviceSyncStateResponse, ImageCompleteRequest,
+    ImageCompleteResponse, ImagePrepareRequest, ImagePrepareResponse, ImagePrepareResult,
+    ImageSyncMode, ImageSyncPolicy, ImageUploadTicket, ListDevicesResponse, RegisterDeviceRequest,
+    RegisterDeviceResponse, RevokeDeviceResponse, SegmentUploadResponse, SegmentingPolicy,
+    SyncPolicy, UpdateDeviceCaptureStateRequest, UpdateDeviceCaptureStateResponse,
     WORK_INSIGHTS_IMAGE_SCHEMA_VERSION,
 };
 use hmac::{Hmac, Mac};
@@ -292,6 +293,7 @@ fn router(state: AppState) -> Router {
         .route("/me/onboarding", put(put_me_onboarding))
         .route("/devices/register", post(register_device))
         .route("/devices", get(list_devices))
+        .route("/devices/self/capture-state", put(put_device_capture_state))
         .route("/devices/:device_id/revoke", post(revoke_device))
         .route("/v1/models", get(ai_gateway::get_models))
         .route(
@@ -436,6 +438,42 @@ async fn list_devices(
     Ok(Json(ListDevicesResponse {
         ok: true,
         devices: devices.into_iter().map(device_summary).collect(),
+    }))
+}
+
+async fn put_device_capture_state(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<UpdateDeviceCaptureStateRequest>,
+) -> Result<Json<UpdateDeviceCaptureStateResponse>, AppError> {
+    match (body.capture_state, body.capture_pause_until) {
+        (DeviceCaptureState::Recording, Some(_)) => {
+            return Err(AppError::BadRequest(
+                "recording state cannot include capture_pause_until".to_string(),
+            ));
+        }
+        (DeviceCaptureState::Paused, None) => {
+            return Err(AppError::BadRequest(
+                "paused state requires capture_pause_until".to_string(),
+            ));
+        }
+        _ => {}
+    }
+
+    let principal = auth::authenticate_device(&state, &headers).await?;
+    let updated_at = identity::update_device_capture_state(
+        &state.pool,
+        &principal.device_id,
+        body.capture_state.as_str(),
+        body.capture_pause_until,
+    )
+    .await?;
+
+    Ok(Json(UpdateDeviceCaptureStateResponse {
+        ok: true,
+        capture_state: body.capture_state,
+        capture_pause_until: body.capture_pause_until,
+        capture_state_updated_at: updated_at,
     }))
 }
 
@@ -812,6 +850,13 @@ fn device_summary(device: work_insights_db::identity::DeviceRecord) -> DeviceSum
         platform: device.platform,
         revoked_at: device.revoked_at,
         last_seen_at: device.last_seen_at,
+        capture_state: device.capture_state.as_deref().and_then(|state| match state {
+            "recording" => Some(DeviceCaptureState::Recording),
+            "paused" => Some(DeviceCaptureState::Paused),
+            _ => None,
+        }),
+        capture_pause_until: device.capture_pause_until,
+        capture_state_updated_at: device.capture_state_updated_at,
         created_at: device.created_at,
     }
 }

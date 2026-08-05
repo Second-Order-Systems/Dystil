@@ -304,7 +304,40 @@ pub struct DeviceSummary {
     pub platform: String,
     pub revoked_at: Option<DateTime<Utc>>,
     pub last_seen_at: Option<DateTime<Utc>>,
+    pub capture_state: Option<DeviceCaptureState>,
+    pub capture_pause_until: Option<DateTime<Utc>>,
+    pub capture_state_updated_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceCaptureState {
+    Recording,
+    Paused,
+}
+
+impl DeviceCaptureState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Recording => "recording",
+            Self::Paused => "paused",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateDeviceCaptureStateRequest {
+    pub capture_state: DeviceCaptureState,
+    pub capture_pause_until: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateDeviceCaptureStateResponse {
+    pub ok: bool,
+    pub capture_state: DeviceCaptureState,
+    pub capture_pause_until: Option<DateTime<Utc>>,
+    pub capture_state_updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
