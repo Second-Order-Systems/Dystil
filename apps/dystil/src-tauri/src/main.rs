@@ -866,17 +866,6 @@ async fn main() {
                                 }
                             };
 
-                            // Dystil owns the capture schema and redaction-state table.
-                            if let Err(error) = dystil_storage::initialize_capture_schema(&server.db.pool).await {
-                                error!("Dystil capture schema initialization failed: {}", error);
-                                crate::health::set_boot_error(&error.to_string());
-                                crate::health::set_recording_status(
-                                    crate::health::RecordingStatus::Error,
-                                );
-                                is_starting_clone.store(false, std::sync::atomic::Ordering::SeqCst);
-                                return;
-                            }
-
                             // Retention is owned by the local app, independently of
                             // cloud sync. The first pass runs immediately, followed
                             // by one pass per day for the lifetime of this runtime.

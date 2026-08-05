@@ -12,7 +12,10 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { platform as getPlatform } from "@tauri-apps/plugin-os";
 import { getAuthClient } from "@/lib/auth-client";
-import { getBuildCapabilities } from "@/lib/build-capabilities";
+import {
+  getBuildCapabilities,
+  shouldShowWorkEmailGuidance,
+} from "@/lib/build-capabilities";
 import { Button } from "@/components/ui/button";
 import {
   getAuthState,
@@ -57,6 +60,7 @@ export function LoginScreen() {
   const [notice, setNotice] = useState<string | null>(null);
   const [signUpEmailError, setSignUpEmailError] = useState<string | null>(null);
   const [workspaceBuild, setWorkspaceBuild] = useState(false);
+  const [showWorkEmailGuidance, setShowWorkEmailGuidance] = useState(false);
 
   const [resendCountdown, setResendCountdown] = useState(0);
 
@@ -70,6 +74,7 @@ export function LoginScreen() {
   useEffect(() => {
     void getBuildCapabilities().then((capabilities) => {
       setWorkspaceBuild(capabilities.authMode === "workspace");
+      setShowWorkEmailGuidance(shouldShowWorkEmailGuidance(capabilities));
     });
   }, []);
 
@@ -91,7 +96,7 @@ export function LoginScreen() {
   const authBusy = state.status === "authenticating";
   const showWorkEmailHint =
     mode === "sign-up" &&
-    workspaceBuild;
+    showWorkEmailGuidance;
 
   const switchToSignUp = () => {
     setMode("sign-up");

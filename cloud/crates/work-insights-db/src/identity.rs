@@ -10,7 +10,6 @@ pub struct AuthenticatedUser {
     pub user_id: String,
     pub email: String,
     pub display_name: Option<String>,
-    pub email_verified: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -109,41 +108,14 @@ pub async fn resolve_app_identity(
         return Ok(identity);
     }
 
-    if user.email_verified {
-        if let Some(domain) = user
-            .email
-            .rsplit_once('@')
-            .map(|(_, d)| d.trim().to_ascii_lowercase())
-            .filter(|d| !d.is_empty())
-        {
-            let org_matches = find_org_ids_by_domain(pool, &domain).await?;
-            if org_matches.len() == 1 {
-                set_user_org(pool, &user_id, &org_matches[0]).await?;
-                if let Some(identity) = find_user_with_org(pool, &user_id).await? {
-                    return Ok(identity);
-                }
-            }
-        }
-    }
-
-    if user.email_verified {
-        let org_id = create_personal_org(pool, user).await?;
-        set_user_org(pool, &user_id, &org_id).await?;
-        find_user_with_org(pool, &user_id)
-            .await?
-            .ok_or_else(|| DbError::Other("identity lookup failed after org creation".into()))
-    } else {
-        Ok(AppIdentity {
-            user_id,
-            email: user.email.clone(),
-            display_name: user.display_name.clone(),
-            org_id: String::new(),
-            org_name: None,
-            org_slug: None,
-            org: None,
-            onboarding_state: "email_verification_required".to_string(),
-        })
-    }
+    // Email verification is not part of individual authentication. New users
+    // receive a personal organization; never grant organization membership
+    // solely from an unverified, user-supplied email domain.
+    let org_id = create_personal_org(pool, user).await?;
+    set_user_org(pool, &user_id, &org_id).await?;
+    find_user_with_org(pool, &user_id)
+        .await?
+        .ok_or_else(|| DbError::Other("identity lookup failed after org creation".into()))
 }
 
 pub async fn bootstrap_organization(
@@ -173,7 +145,6 @@ pub async fn bootstrap_organization(
         user_id: input.owner_user_id.clone(),
         email: input.owner_email.clone(),
         display_name: input.owner_display_name.clone(),
-        email_verified: true,
     };
     let user_id = upsert_app_user(pool, &owner).await?;
     set_user_org(pool, &user_id, &org_id).await?;
@@ -573,20 +544,6 @@ async fn resolve_org_id(
     }
 
     Ok(uuid::Uuid::new_v4().to_string())
-}
-
-async fn find_org_ids_by_domain(pool: &PgPool, domain: &str) -> Result<Vec<String>, DbError> {
-    let rows = sqlx::query_scalar::<_, String>(
-        "SELECT id
-         FROM organizations
-         WHERE allowed_email_domains IS NOT NULL
-           AND $1 = ANY(allowed_email_domains)
-         ORDER BY id",
-    )
-    .bind(domain)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows)
 }
 
 fn device_from_row(row: DeviceRow) -> DeviceRecord {

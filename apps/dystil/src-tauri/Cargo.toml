@@ -2,7 +2,7 @@
 
 [package]
 name = "dystil-app"
-version = "0.0.4"
+version = "0.0.6"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -119,7 +119,12 @@ chrono = "0.4.39"
 cron = "0.15"
 tauri-plugin-opener = "2.5.3"
 uuid = { version = "1.0", features = ["v4"] }
-keyring = "3"
+keyring = { version = "3", features = [
+  "apple-native",
+  "windows-native",
+  "linux-native-sync-persistent",
+  "crypto-rust",
+] }
 zip = "2"
 urlencoding = "2"
 url = "2"
@@ -225,6 +230,9 @@ cargo-clippy = []
 # the default cloud mode; workspace auth is an explicit, additive build flavor.
 cloud-sync = ["dep:dystil-engine", "dep:dystil-sync"]
 workspace-auth = ["cloud-sync"]
+# Managed client distribution. This is a policy flavor, not just a collection
+# of optional capabilities: capture and both sync channels are compile-time on.
+enterprise-client = ["cloud-sync", "official-build"]
 
 # Keep the application cfg in sync with the dependency features. Without this
 # declaration `#[cfg(feature = "onnx-cpu")]` in capture_session.rs is compiled

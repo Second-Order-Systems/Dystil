@@ -7,6 +7,7 @@ import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "@/components/ui/use-toast";
 import { Slider } from "@/components/ui/slider";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { getBuildCapabilities } from "@/lib/build-capabilities";
 import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 import { commands, type WhenItRunsView } from "@/lib/utils/tauri";
 import { TextAction } from "./page-primitives";
@@ -351,6 +352,7 @@ export function WhenItRunsSettings() {
   const [runtime, setRuntime] = useState<WhenItRunsView | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [enterpriseManaged, setEnterpriseManaged] = useState<boolean | null>(null);
 
   const load = async () => {
     try {
@@ -365,6 +367,9 @@ export function WhenItRunsSettings() {
 
   useEffect(() => {
     void load();
+    void getBuildCapabilities().then((capabilities) => {
+      setEnterpriseManaged(capabilities.enterpriseManaged);
+    });
     let unlisten: (() => void) | undefined;
     listen("recording-status-changed", () => void load())
       .then((dispose) => { unlisten = dispose; })
@@ -408,7 +413,18 @@ export function WhenItRunsSettings() {
       {!runtime && !loadError && <SettingsLoadingRows count={2} />}
       {runtime && <>
         <CaptureToggleRow title="Start when you log in" description="Starts quietly in the system tray without opening a window." checked={runtime.autostartEnabled} busy={busy !== null} switchLabel={`${runtime.autostartEnabled ? "Stop" : "Start"} Dystil when you log in`} onChange={(enabled) => void run("autostart", "Could not update login startup", async () => { const result = await commands.setAutostart(enabled); if (result.status === "error") throw new Error(result.error); })} />
-        <CaptureToggleRow title="Capture screenshots" description="Adds visual context. Turning this off keeps accessibility and text capture running." checked={runtime.screenshotEnabled} busy={busy !== null} switchLabel={`${runtime.screenshotEnabled ? "Stop" : "Start"} capturing screenshots`} onChange={(enabled) => void setScreenshots(enabled)} />
+        <CaptureToggleRow
+          title="Capture screenshots"
+          description={enterpriseManaged
+            ? "Required and managed by your organization."
+            : "Adds visual context. Turning this off keeps accessibility and text capture running."}
+          checked={runtime.screenshotEnabled}
+          busy={busy !== null || enterpriseManaged !== false}
+          switchLabel={enterpriseManaged
+            ? "Screenshot capture is managed by your organization"
+            : `${runtime.screenshotEnabled ? "Stop" : "Start"} capturing screenshots`}
+          onChange={(enabled) => void setScreenshots(enabled)}
+        />
       </>}
       {loadError && <SettingsInlineError message="Dystil could not load its runtime settings." onRetry={() => void load()} />}
     </SettingsCard>

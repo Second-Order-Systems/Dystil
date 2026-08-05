@@ -1657,7 +1657,7 @@ sinceEpochSecs: number }
  */
 export type BrowserAutomationStatus = { name: string; status: string; running: boolean }
 export type BrowserLogEntry = { level: string; message: string }
-export type BuildCapabilities = { cloudAvailable: boolean; authMode: AuthMode; cloudBaseUrl: string | null; officialBuild: boolean }
+export type BuildCapabilities = { cloudAvailable: boolean; authMode: AuthMode; cloudBaseUrl: string | null; officialBuild: boolean; enterpriseManaged: boolean }
 export type CacheFile = { path: string; label: string; size_bytes: number }
 export type Cadence = "none" | "daily" | "weekly" | "monthly"
 export type CaptureCategoryView = { id: string; enabled: boolean }

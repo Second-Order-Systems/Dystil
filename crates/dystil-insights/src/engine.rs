@@ -239,6 +239,7 @@ async fn run_frozen_explorer_job<R: AiRuntime + ?Sized>(
         let run = match runtime
             .infer_structured(AiStructuredRequest {
                 purpose: "worth_fixing_explorer".into(),
+                cache_key: None,
                 model_tier: EXPLORER_MODEL_TIER,
                 stable_prompt: String::new(),
                 prompt: prompt.clone(),
@@ -332,6 +333,7 @@ async fn infer_once<R: AiRuntime + ?Sized>(
     runtime
         .infer_structured(AiStructuredRequest {
             purpose: purpose.into(),
+            cache_key: None,
             model_tier: STEWARD_MODEL_TIER,
             stable_prompt: String::new(),
             prompt,

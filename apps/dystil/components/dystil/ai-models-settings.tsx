@@ -141,20 +141,13 @@ export function AiModelsSettings() {
   const saveByok = (event: FormEvent) => {
     event.preventDefault();
     void run("byok", async () => {
-      const saved = resultData(await commands.aiPresetSave(
+      resultData(await commands.aiPresetSave(
         byokName.trim(),
         byokProvider,
         byokProvider === "openai_compatible" ? byokEndpoint.trim() : null,
         apiProviderCopy[byokProvider].defaultModel ?? byokModel.trim(),
         byokKey,
       ));
-      try {
-        resultData(await commands.aiPresetTest(saved.id));
-      } catch (cause) {
-        if (active) resultData(await commands.aiPresetActivate(active.id));
-        resultData(await commands.aiPresetDelete(saved.id));
-        throw cause;
-      }
       setByokKey("");
       setShowByok(false);
       toast({ title: "API preset is ready", description: `${byokName.trim()} is now Dystil’s active AI model.` });

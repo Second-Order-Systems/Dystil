@@ -413,6 +413,10 @@
           "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
         },
         {
+          "url": "https://coconut.2os.ai/**",
+          "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
+        },
+        {
           "url": "http://**/*",
           "methods": [
             "GET",

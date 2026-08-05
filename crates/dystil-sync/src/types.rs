@@ -223,6 +223,8 @@ pub(crate) struct ScreenFramePayload {
     pub(crate) content_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) simhash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) ax_capture_diagnostics: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

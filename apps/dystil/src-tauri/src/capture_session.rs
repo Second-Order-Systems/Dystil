@@ -153,12 +153,17 @@ impl CaptureSession {
                 ..TreeWalkerConfig::default()
             };
             let accessibility = Arc::new(DystilAccessibilityProvider::new(tree_config));
-            let store = Arc::new(DystilCaptureStore::new(
-                server.db.pool.clone(),
-                server.data_path.join("data"),
-                "accessibility",
-                config.async_pii_redaction,
-            ));
+            let store = Arc::new(
+                DystilCaptureStore::new(
+                    server.db.pool.clone(),
+                    server.data_path.join("data"),
+                    "accessibility",
+                    config.async_pii_redaction,
+                )
+                .with_semantic_samples_best_effort(
+                    server.data_path.join("semantic-tree-samples.sqlite"),
+                ),
+            );
             #[cfg(target_os = "macos")]
             let visual_provider: Option<Arc<dyn VisualProvider>> =
                 if capture_mode == CaptureMode::FullCapture && screen_recording_permitted {
@@ -220,7 +225,7 @@ impl CaptureSession {
                 included_windows: config.included_windows.clone(),
                 batch_size: 100,
                 batch_timeout_ms: 1000,
-                typing_pause_delay_ms: 300,
+                typing_pause_delay_ms: 1_500,
                 prioritize_input_latency: config.prioritize_input_latency,
                 extraction_thread_priority: config
                     .extraction_thread_priority

@@ -15,7 +15,7 @@
 //! # Usage
 //!
 //! ```rust,no_run
-//! use dystil_a11y::incognito::{create_detector, is_title_private};
+//! use dystil_capture::a11y::incognito::{create_detector, is_title_private};
 //!
 //! // Quick title-only check (all platforms, no I/O)
 //! assert!(is_title_private("New Tab - Google Chrome (Incognito)"));

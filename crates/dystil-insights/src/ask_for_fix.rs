@@ -236,6 +236,7 @@ struct TurnPacket {
     provenance_boundary: &'static str,
     current_understanding: AskUnderstanding,
     locked_understanding: Option<AskUnderstanding>,
+    current_presentation: Option<AskPresentation>,
     transcript: Vec<PromptMessage>,
     latest_event: Option<AskInputEvent>,
 }
@@ -335,10 +336,22 @@ fn validate_move(
             let understanding = &output.understanding;
             if understanding.synthesis.trim().is_empty()
                 || understanding.grounding.is_empty()
+                || understanding.inferences.is_empty()
                 || understanding.preserved_boundary.trim().is_empty()
                 || understanding.solution_target.trim().is_empty()
             {
-                return Err("consolidation lacks a causal synthesis or required boundary".into());
+                return Err(
+                    "consolidation lacks a causal synthesis, inference, or required boundary"
+                        .into(),
+                );
+            }
+            let normalized_synthesis = normalize_question(&understanding.synthesis);
+            if understanding
+                .grounding
+                .iter()
+                .any(|fact| normalize_question(fact) == normalized_synthesis)
+            {
+                return Err("consolidation merely repeats a grounded fact".into());
             }
         }
         AskMoveKind::Present => {
@@ -447,7 +460,7 @@ async fn turn_packet(
     latest_event: Option<AskInputEvent>,
 ) -> AskForFixResult<TurnPacket> {
     let row = sqlx::query(
-        "SELECT phase,question_count,understanding_json,locked_understanding_json
+        "SELECT phase,question_count,understanding_json,locked_understanding_json,presentation_json
          FROM ask_sessions WHERE session_id=?1",
     )
     .bind(session_id)
@@ -459,6 +472,10 @@ async fn turn_packet(
     let understanding = serde_json::from_str::<AskUnderstanding>(row.get("understanding_json"))?;
     let locked = row
         .get::<Option<String>, _>("locked_understanding_json")
+        .map(|json| serde_json::from_str(&json))
+        .transpose()?;
+    let current_presentation = row
+        .get::<Option<String>, _>("presentation_json")
         .map(|json| serde_json::from_str(&json))
         .transpose()?;
     // Retries must reconstruct the same authoritative turn packet, including
@@ -485,6 +502,8 @@ async fn turn_packet(
         phase,
         allowed_moves: if phase == AskPhase::Present {
             vec!["present"]
+        } else if row.get::<i64, _>("question_count") as u32 >= MAX_QUESTIONS {
+            vec!["consolidate"]
         } else {
             vec!["ask", "consolidate"]
         },
@@ -493,6 +512,7 @@ async fn turn_packet(
         provenance_boundary: "user_answers_only",
         current_understanding: understanding,
         locked_understanding: locked,
+        current_presentation,
         transcript: prompt_messages(pool, session_id).await?,
         latest_event,
     })
@@ -674,6 +694,7 @@ async fn infer_move<R: AiRuntime + ?Sized>(
                 } else {
                     "ask_for_fix_intake".into()
                 },
+                cache_key: Some(session_id.to_string()),
                 model_tier: MODEL_TIER,
                 stable_prompt: STABLE_PROMPT.into(),
                 prompt: volatile_prompt.clone(),
@@ -1015,14 +1036,23 @@ pub async fn stage_ask_for_fix_turn(
     session_id: &str,
     turn: AskUserTurn,
 ) -> AskForFixResult<AskSessionView> {
-    let text = turn.text.trim();
-    if text.is_empty() || text.chars().count() > 1600 {
+    let submitted_text = turn.text.trim();
+    if submitted_text.is_empty() || submitted_text.chars().count() > 1600 {
         return Err(AskForFixError::InvalidState(
             "message must contain between 1 and 1600 characters".into(),
         ));
     }
     let current = get_ask_for_fix_session(pool, session_id).await?;
-    if current.status == "working" || current.status == "answered" || current.locked {
+    let text = canonical_user_message(&current, &turn)?;
+    if text.is_empty() || text.chars().count() > 1600 {
+        return Err(AskForFixError::InvalidState(
+            "message must contain between 1 and 1600 characters".into(),
+        ));
+    }
+    let revising_answer = turn.event.kind == "revise";
+    if current.status == "working"
+        || (!revising_answer && (current.status == "answered" || current.locked))
+    {
         return Err(AskForFixError::InvalidState(
             "session is not accepting another answer".into(),
         ));
@@ -1032,7 +1062,7 @@ pub async fn stage_ask_for_fix_turn(
         &mut tx,
         session_id,
         AskMessageRole::User,
-        text,
+        &text,
         Some(&turn.event),
     )
     .await?;
@@ -1047,6 +1077,128 @@ pub async fn stage_ask_for_fix_turn(
     .map_err(InsightsError::from)?;
     tx.commit().await.map_err(InsightsError::from)?;
     get_ask_for_fix_session(pool, session_id).await
+}
+
+fn canonical_user_message(session: &AskSessionView, turn: &AskUserTurn) -> AskForFixResult<String> {
+    let event = &turn.event;
+    match event.kind.as_str() {
+        "initial_problem" => {
+            if !session.messages.is_empty()
+                || event.question_id.is_some()
+                || !event.selected_option_ids.is_empty()
+            {
+                return Err(AskForFixError::InvalidState(
+                    "initial problem event does not match this conversation".into(),
+                ));
+            }
+            Ok(turn.text.trim().to_string())
+        }
+        "free_text" => {
+            let expected = session.current_question_id.as_deref().ok_or_else(|| {
+                AskForFixError::InvalidState("there is no active question to answer".into())
+            })?;
+            if event.question_id.as_deref() != Some(expected)
+                || !event.selected_option_ids.is_empty()
+            {
+                return Err(AskForFixError::InvalidState(
+                    "free-text answer does not match the active question".into(),
+                ));
+            }
+            Ok(turn.text.trim().to_string())
+        }
+        "refine" => {
+            if session.phase != AskPhase::Consolidate
+                || session.locked
+                || event.question_id.is_some()
+                || !event.selected_option_ids.is_empty()
+            {
+                return Err(AskForFixError::InvalidState(
+                    "refinement is only available at the unlocked understanding checkpoint".into(),
+                ));
+            }
+            Ok(turn.text.trim().to_string())
+        }
+        "revise" => {
+            if session.phase != AskPhase::Present
+                || session.status != "answered"
+                || !session.locked
+                || session.presentation.is_none()
+                || event.question_id.is_some()
+                || !event.selected_option_ids.is_empty()
+            {
+                return Err(AskForFixError::InvalidState(
+                    "revision is only available after a confirmed answer".into(),
+                ));
+            }
+            Ok(turn.text.trim().to_string())
+        }
+        "single_select" | "multi_select" | "compare" => {
+            let question = session.current_question.as_ref().ok_or_else(|| {
+                AskForFixError::InvalidState("there is no active choice question".into())
+            })?;
+            let question_id = session.current_question_id.as_deref().ok_or_else(|| {
+                AskForFixError::InvalidState("the active question has no identity".into())
+            })?;
+            let expected_kind = match question.kind {
+                AskQuestionKind::SingleSelect => "single_select",
+                AskQuestionKind::MultiSelect => "multi_select",
+                AskQuestionKind::Compare => "compare",
+                AskQuestionKind::FreeText => "free_text",
+            };
+            if event.kind != expected_kind || event.question_id.as_deref() != Some(question_id) {
+                return Err(AskForFixError::InvalidState(
+                    "choice answer does not match the active question".into(),
+                ));
+            }
+            let selection_count = event.selected_option_ids.len() as u32;
+            if selection_count < question.min_selections
+                || selection_count > question.max_selections
+            {
+                return Err(AskForFixError::InvalidState(
+                    "choice answer violates the active question's selection bounds".into(),
+                ));
+            }
+            let mut selected = Vec::with_capacity(event.selected_option_ids.len());
+            for selected_id in &event.selected_option_ids {
+                if selected
+                    .iter()
+                    .any(|option: &&AskOption| option.id == selected_id.as_str())
+                {
+                    return Err(AskForFixError::InvalidState(
+                        "choice answer contains a duplicate option".into(),
+                    ));
+                }
+                let option = question
+                    .options
+                    .iter()
+                    .find(|option| option.id == selected_id.as_str())
+                    .ok_or_else(|| {
+                        AskForFixError::InvalidState(
+                            "choice answer contains an option that is not active".into(),
+                        )
+                    })?;
+                selected.push(option);
+            }
+            Ok(selected
+                .into_iter()
+                .map(|option| {
+                    if option.description.trim().is_empty() {
+                        option.label.trim().to_string()
+                    } else {
+                        format!("{} — {}", option.label.trim(), option.description.trim())
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(if question.kind == AskQuestionKind::MultiSelect {
+                    "; "
+                } else {
+                    ""
+                }))
+        }
+        other => Err(AskForFixError::InvalidState(format!(
+            "unknown Ask-for-a-fix input event {other}"
+        ))),
+    }
 }
 
 pub async fn run_staged_ask_for_fix<R: AiRuntime + ?Sized>(
@@ -1219,6 +1371,42 @@ pub async fn cancel_ask_for_fix_turn(
     get_ask_for_fix_session(pool, session_id).await
 }
 
+/// Repairs a durable `working` session left behind when the desktop process
+/// exited after staging a turn but before the provider settled. The canonical
+/// transcript remains intact so Retry can safely replay that pending turn.
+pub async fn recover_interrupted_ask_for_fix_turn(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> AskForFixResult<AskSessionView> {
+    let current = get_ask_for_fix_session(pool, session_id).await?;
+    if current.status != "working" {
+        return Ok(current);
+    }
+    let status = if current.locked { "locked" } else { "active" };
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE ask_sessions SET status=?2,last_error_code='interrupted',
+         last_error_detail='The app closed before this response finished. Your conversation is safe.',
+         updated_at=?3 WHERE session_id=?1 AND status='working'",
+    )
+    .bind(session_id)
+    .bind(status)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .map_err(InsightsError::from)?;
+    sqlx::query(
+        "UPDATE ask_jobs SET status='pending',error_code='interrupted',updated_at=?2
+         WHERE session_id=?1 AND status='running'",
+    )
+    .bind(session_id)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(InsightsError::from)?;
+    get_ask_for_fix_session(pool, session_id).await
+}
+
 pub async fn keep_ask_for_fix_artifact(
     pool: &SqlitePool,
     session_id: &str,
@@ -1329,6 +1517,11 @@ mod tests {
         descriptor: AiRuntimeDescriptor,
     }
 
+    struct FailingRuntime {
+        code: AiRuntimeErrorCode,
+        descriptor: AiRuntimeDescriptor,
+    }
+
     #[async_trait]
     impl AiRuntime for FakeRuntime {
         fn descriptor(&self) -> &AiRuntimeDescriptor {
@@ -1367,6 +1560,35 @@ mod tests {
                     ("cached_input_tokens".into(), 1024),
                 ]),
             })
+        }
+    }
+
+    #[async_trait]
+    impl AiRuntime for FailingRuntime {
+        fn descriptor(&self) -> &AiRuntimeDescriptor {
+            &self.descriptor
+        }
+
+        async fn answer(
+            &self,
+            _request: AiAnswerRequest,
+        ) -> std::result::Result<TeammateAnswerRun, AiRuntimeError> {
+            unreachable!()
+        }
+
+        async fn run_automation(
+            &self,
+            _request: AiAutomationRequest,
+            _events: mpsc::Sender<AiRuntimeEvent>,
+        ) -> std::result::Result<AiAutomationRun, AiRuntimeError> {
+            unreachable!()
+        }
+
+        async fn infer_structured(
+            &self,
+            _request: AiStructuredRequest,
+        ) -> std::result::Result<AiStructuredRun, AiRuntimeError> {
+            Err(AiRuntimeError::new(self.code, "simulated provider failure"))
         }
     }
 
@@ -1439,6 +1661,15 @@ mod tests {
         })
     }
 
+    fn revised_present_output() -> Value {
+        let mut output = present_output();
+        output["assistantMessage"] =
+            Value::String("I tightened the runbook around duplicate checks.".into());
+        output["presentation"]["headline"] =
+            Value::String("Prepare the report context and block duplicates before review".into());
+        output
+    }
+
     async fn pool() -> SqlitePool {
         let dir = tempdir().unwrap().keep();
         crate::open_insights_database(dir.join("ask.sqlite"))
@@ -1460,14 +1691,14 @@ mod tests {
             },
         };
         let session = create_ask_for_fix_session(&pool).await.unwrap();
-        submit_ask_for_fix_turn(
+        let follow_up = submit_ask_for_fix_turn(
             &pool,
             &runtime,
             &session.session_id,
             AskUserTurn {
                 text: "Every Friday I rebuild the same report.".into(),
                 event: AskInputEvent {
-                    kind: "free_text".into(),
+                    kind: "initial_problem".into(),
                     question_id: None,
                     selected_option_ids: vec![],
                 },
@@ -1483,7 +1714,7 @@ mod tests {
                 text: "The closest answer is Final judgement — prepare the groundwork but leave the decision to me.".into(),
                 event: AskInputEvent {
                     kind: "single_select".into(),
-                    question_id: None,
+                    question_id: follow_up.current_question_id.clone(),
                     selected_option_ids: vec!["final_judgement".into()],
                 },
             },
@@ -1492,10 +1723,19 @@ mod tests {
         .unwrap();
         assert_eq!(result.phase, AskPhase::Consolidate);
         assert_eq!(result.cached_input_tokens, 1024);
+        assert_eq!(
+            result.messages[result.messages.len() - 2].text,
+            "Final judgement — Prepare the groundwork but leave the decision to me."
+        );
         let captured = prompts.lock().unwrap();
         assert_eq!(captured.len(), 2);
         assert_eq!(captured[0].stable_prompt, captured[1].stable_prompt);
         assert_eq!(captured[0].stable_prompt, STABLE_PROMPT);
+        assert_eq!(
+            captured[0].cache_key.as_deref(),
+            Some(session.session_id.as_str())
+        );
+        assert_eq!(captured[0].cache_key, captured[1].cache_key);
         assert_eq!(captured[0].reasoning_effort, AiReasoningEffort::High);
         assert_eq!(captured[0].tool_policy, AiToolPolicy::None);
         assert!(captured[1]
@@ -1523,6 +1763,205 @@ mod tests {
             presentation: None,
         };
         assert!(validate_move(invalid, AskPhase::FollowUp, 2, &[]).is_err());
+
+        let repeated = AskModelMove {
+            schema_version: 1,
+            move_kind: AskMoveKind::Consolidate,
+            assistant_message: "Here is my read.".into(),
+            understanding: AskUnderstanding {
+                synthesis: "A report is rebuilt every Friday".into(),
+                grounding: vec!["A report is rebuilt every Friday.".into()],
+                inferences: vec!["Reusable context may be missing".into()],
+                preserved_boundary: "Final judgement remains with the user".into(),
+                uncertainty: vec![],
+                solution_target: "Prepare the groundwork".into(),
+            },
+            question: None,
+            presentation: None,
+        };
+        assert!(validate_move(repeated, AskPhase::FollowUp, 2, &[]).is_err());
+    }
+
+    #[tokio::test]
+    async fn choice_events_are_validated_and_canonicalized_by_the_engine() {
+        let pool = pool().await;
+        let runtime = FakeRuntime {
+            outputs: Mutex::new(vec![ask_output()]),
+            prompts: Arc::new(Mutex::new(Vec::new())),
+            descriptor: AiRuntimeDescriptor {
+                kind: AiRuntimeKind::Codex,
+                provider_label: "Codex".into(),
+                model: "gpt-5.6-sol".into(),
+            },
+        };
+        let session = create_ask_for_fix_session(&pool).await.unwrap();
+        let follow_up = submit_ask_for_fix_turn(
+            &pool,
+            &runtime,
+            &session.session_id,
+            AskUserTurn {
+                text: "Every Friday I rebuild the same report.".into(),
+                event: AskInputEvent {
+                    kind: "initial_problem".into(),
+                    question_id: None,
+                    selected_option_ids: vec![],
+                },
+            },
+        )
+        .await
+        .unwrap();
+
+        let stale = stage_ask_for_fix_turn(
+            &pool,
+            &session.session_id,
+            AskUserTurn {
+                text: "Ignore this text".into(),
+                event: AskInputEvent {
+                    kind: "single_select".into(),
+                    question_id: Some("afq_stale".into()),
+                    selected_option_ids: vec!["final_judgement".into()],
+                },
+            },
+        )
+        .await;
+        assert!(matches!(stale, Err(AskForFixError::InvalidState(_))));
+
+        let staged = stage_ask_for_fix_turn(
+            &pool,
+            &session.session_id,
+            AskUserTurn {
+                text: "Text supplied by a potentially stale renderer".into(),
+                event: AskInputEvent {
+                    kind: "single_select".into(),
+                    question_id: follow_up.current_question_id,
+                    selected_option_ids: vec!["final_judgement".into()],
+                },
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            staged.messages.last().unwrap().text,
+            "Final judgement — Prepare the groundwork but leave the decision to me."
+        );
+        assert_eq!(
+            staged.messages.last().unwrap().event.as_ref().unwrap().kind,
+            "single_select"
+        );
+    }
+
+    #[tokio::test]
+    async fn question_ceiling_removes_ask_from_the_legal_moves() {
+        let pool = pool().await;
+        let session = create_ask_for_fix_session(&pool).await.unwrap();
+        sqlx::query(
+            "UPDATE ask_sessions SET phase='follow_up',question_count=?2 WHERE session_id=?1",
+        )
+        .bind(&session.session_id)
+        .bind(MAX_QUESTIONS as i64)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let packet = turn_packet(&pool, &session.session_id, None).await.unwrap();
+        assert_eq!(packet.allowed_moves, vec!["consolidate"]);
+    }
+
+    #[tokio::test]
+    async fn provider_failures_are_durable_and_retry_replays_the_turn_once() {
+        for (code, expected) in [
+            (AiRuntimeErrorCode::NotReady, "provider_not_ready"),
+            (AiRuntimeErrorCode::Timeout, "timeout"),
+        ] {
+            let pool = pool().await;
+            let failing = FailingRuntime {
+                code,
+                descriptor: AiRuntimeDescriptor {
+                    kind: AiRuntimeKind::Codex,
+                    provider_label: "Codex".into(),
+                    model: "gpt-5.6-sol".into(),
+                },
+            };
+            let session = create_ask_for_fix_session(&pool).await.unwrap();
+            let failed = submit_ask_for_fix_turn(
+                &pool,
+                &failing,
+                &session.session_id,
+                AskUserTurn {
+                    text: "I rebuild the same report every week.".into(),
+                    event: AskInputEvent {
+                        kind: "initial_problem".into(),
+                        question_id: None,
+                        selected_option_ids: vec![],
+                    },
+                },
+            )
+            .await;
+            assert!(matches!(failed, Err(AskForFixError::Runtime(_))));
+            let durable = get_ask_for_fix_session(&pool, &session.session_id)
+                .await
+                .unwrap();
+            assert_eq!(durable.status, "active");
+            assert_eq!(durable.last_error_code.as_deref(), Some(expected));
+            assert_eq!(durable.messages.len(), 1);
+
+            let recovery = FakeRuntime {
+                outputs: Mutex::new(vec![ask_output()]),
+                prompts: Arc::new(Mutex::new(Vec::new())),
+                descriptor: AiRuntimeDescriptor {
+                    kind: AiRuntimeKind::Codex,
+                    provider_label: "Codex".into(),
+                    model: "gpt-5.6-sol".into(),
+                },
+            };
+            let retried = retry_ask_for_fix(&pool, &recovery, &session.session_id)
+                .await
+                .unwrap();
+            assert_eq!(retried.messages.len(), 2);
+            assert_eq!(retried.messages[0].role, AskMessageRole::User);
+            assert_eq!(retried.messages[1].role, AskMessageRole::Assistant);
+            assert!(retried.last_error_code.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_preserves_the_staged_turn_for_retry() {
+        let pool = pool().await;
+        let session = create_ask_for_fix_session(&pool).await.unwrap();
+        stage_ask_for_fix_turn(
+            &pool,
+            &session.session_id,
+            AskUserTurn {
+                text: "I rebuild the same report every week.".into(),
+                event: AskInputEvent {
+                    kind: "initial_problem".into(),
+                    question_id: None,
+                    selected_option_ids: vec![],
+                },
+            },
+        )
+        .await
+        .unwrap();
+        let cancelled = cancel_ask_for_fix_turn(&pool, &session.session_id)
+            .await
+            .unwrap();
+        assert_eq!(cancelled.status, "active");
+        assert_eq!(cancelled.last_error_code.as_deref(), Some("user_cancelled"));
+        assert_eq!(cancelled.messages.len(), 1);
+
+        let recovery = FakeRuntime {
+            outputs: Mutex::new(vec![ask_output()]),
+            prompts: Arc::new(Mutex::new(Vec::new())),
+            descriptor: AiRuntimeDescriptor {
+                kind: AiRuntimeKind::Codex,
+                provider_label: "Codex".into(),
+                model: "gpt-5.6-sol".into(),
+            },
+        };
+        let retried = retry_ask_for_fix(&pool, &recovery, &session.session_id)
+            .await
+            .unwrap();
+        assert_eq!(retried.messages.len(), 2);
+        assert!(retried.current_question.is_some());
     }
 
     #[tokio::test]
@@ -1558,6 +1997,7 @@ mod tests {
         let captured = prompts.lock().unwrap();
         assert_eq!(captured.len(), 2);
         assert_eq!(captured[0].stable_prompt, captured[1].stable_prompt);
+        assert_eq!(captured[0].cache_key, captured[1].cache_key);
         assert!(captured[1].prompt.contains("Your prior object was invalid"));
         let statuses =
             sqlx::query_scalar::<_, String>("SELECT status FROM ask_attempts ORDER BY attempt")
@@ -1622,6 +2062,123 @@ mod tests {
                 .await
                 .unwrap(),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn confirmed_answer_can_be_revised_with_the_locked_context_and_prior_artifact() {
+        let pool = pool().await;
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        let runtime = FakeRuntime {
+            outputs: Mutex::new(vec![
+                ask_output(),
+                consolidate_output(),
+                present_output(),
+                revised_present_output(),
+            ]),
+            prompts: prompts.clone(),
+            descriptor: AiRuntimeDescriptor {
+                kind: AiRuntimeKind::Codex,
+                provider_label: "Codex".into(),
+                model: "gpt-5.6-sol".into(),
+            },
+        };
+        let created = create_ask_for_fix_session(&pool).await.unwrap();
+        let follow_up = submit_ask_for_fix_turn(
+            &pool,
+            &runtime,
+            &created.session_id,
+            AskUserTurn {
+                text: "Every Friday I rebuild the same report.".into(),
+                event: AskInputEvent {
+                    kind: "initial_problem".into(),
+                    question_id: None,
+                    selected_option_ids: vec![],
+                },
+            },
+        )
+        .await
+        .unwrap();
+        let consolidation = submit_ask_for_fix_turn(
+            &pool,
+            &runtime,
+            &created.session_id,
+            AskUserTurn {
+                text: "Final judgement".into(),
+                event: AskInputEvent {
+                    kind: "single_select".into(),
+                    question_id: follow_up.current_question_id,
+                    selected_option_ids: vec!["final_judgement".into()],
+                },
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(consolidation.phase, AskPhase::Consolidate);
+        let answered = confirm_ask_for_fix(&pool, &runtime, &created.session_id)
+            .await
+            .unwrap();
+        assert!(answered.locked);
+
+        let revised = submit_ask_for_fix_turn(
+            &pool,
+            &runtime,
+            &created.session_id,
+            AskUserTurn {
+                text: "Add an explicit duplicate check before my review.".into(),
+                event: AskInputEvent {
+                    kind: "revise".into(),
+                    question_id: None,
+                    selected_option_ids: vec![],
+                },
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(revised.phase, AskPhase::Present);
+        assert_eq!(revised.status, "answered");
+        assert!(revised.locked);
+        assert_eq!(
+            revised.presentation.unwrap().headline,
+            "Prepare the report context and block duplicates before review"
+        );
+        let captured = prompts.lock().unwrap();
+        let revision_prompt = &captured.last().unwrap().prompt;
+        assert!(revision_prompt.contains("Add an explicit duplicate check before my review."));
+        assert!(revision_prompt.contains("Prepare the report context before judgement begins"));
+        assert!(revision_prompt.contains("locked_understanding"));
+        assert_eq!(captured[0].stable_prompt, captured[3].stable_prompt);
+        assert_eq!(captured[0].cache_key, captured[3].cache_key);
+    }
+
+    #[tokio::test]
+    async fn interrupted_working_session_recovers_without_losing_the_staged_turn() {
+        let pool = pool().await;
+        let session = create_ask_for_fix_session(&pool).await.unwrap();
+        stage_ask_for_fix_turn(
+            &pool,
+            &session.session_id,
+            AskUserTurn {
+                text: "I keep copying the same customer details between two apps.".into(),
+                event: AskInputEvent {
+                    kind: "initial_problem".into(),
+                    question_id: None,
+                    selected_option_ids: vec![],
+                },
+            },
+        )
+        .await
+        .unwrap();
+
+        let recovered = recover_interrupted_ask_for_fix_turn(&pool, &session.session_id)
+            .await
+            .unwrap();
+        assert_eq!(recovered.status, "active");
+        assert_eq!(recovered.last_error_code.as_deref(), Some("interrupted"));
+        assert_eq!(recovered.messages.len(), 1);
+        assert_eq!(
+            recovered.messages[0].text,
+            "I keep copying the same customer details between two apps."
         );
     }
 }

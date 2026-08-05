@@ -1164,7 +1164,8 @@ pub async fn set_onboarding_ai_setup(
 pub async fn get_sync_consent(app_handle: tauri::AppHandle) -> Result<SyncConsent, String> {
     Ok(SettingsStore::get(&app_handle)?
         .unwrap_or_default()
-        .sync_consent)
+        .sync_consent
+        .effective())
 }
 
 /// Persist explicit local cloud-sync consent. Screenshot uploads are never
@@ -1176,6 +1177,13 @@ pub async fn set_sync_consent(
     consent: SyncConsent,
 ) -> Result<SyncConsent, String> {
     let consent = consent.validate()?;
+    if cfg!(feature = "enterprise-client") && (!consent.segments || !consent.screenshots) {
+        return Err(
+            "Segment and screenshot sync are managed by your organization and cannot be disabled."
+                .to_string(),
+        );
+    }
+    let consent = consent.effective();
     let mut settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
     settings.sync_consent = consent;
     settings.save(&app_handle)?;
@@ -1264,6 +1272,12 @@ pub async fn set_screenshot_capture_enabled(
     state: State<'_, RecordingState>,
     enabled: bool,
 ) -> Result<(), String> {
+    if crate::capture_policy::enterprise_managed() && !enabled {
+        return Err(
+            "Screenshot capture is managed by your organization and cannot be disabled."
+                .to_string(),
+        );
+    }
     if enabled {
         let permissions = crate::permissions::do_permissions_check(false);
         if !permissions.screen_recording.permitted() {
@@ -2397,7 +2411,9 @@ pub fn get_when_it_runs_settings(
         .unwrap_or(settings.auto_start_enabled);
     Ok(WhenItRunsView {
         autostart_enabled,
-        screenshot_enabled: !settings.recording.disable_vision,
+        screenshot_enabled: crate::capture_policy::product_capture_mode(
+            settings.recording.disable_vision,
+        ) == dystil_capture::CaptureMode::FullCapture,
         capture_running: state
             .capture_active
             .load(std::sync::atomic::Ordering::SeqCst),

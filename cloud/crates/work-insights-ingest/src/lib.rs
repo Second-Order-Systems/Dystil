@@ -392,6 +392,20 @@ mod tests {
     }
 
     #[test]
+    fn accepts_accessibility_tree_and_diagnostics_in_screen_metadata() {
+        let mut request = sample_upload();
+        request.segments[0].items[0].text = "Accessibility structure captured".to_string();
+        request.segments[0].items[0].metadata = serde_json::json!({
+            "frame_id": 1,
+            "accessibility_tree": {"role": "window", "children": []},
+            "ax_capture_diagnostics": {"source": "ax", "node_count": 1}
+        });
+        request.segments[0].refresh_content_hash().unwrap();
+
+        validate_segment_upload(&mut request).unwrap();
+    }
+
+    #[test]
     fn normalizes_changed_content_hash() {
         let mut request = sample_upload();
         request.segments[0].items[0].text = "changed after hashing".to_string();

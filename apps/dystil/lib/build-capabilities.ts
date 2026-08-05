@@ -9,6 +9,7 @@ export type BuildCapabilities = {
   authMode: AuthMode;
   cloudBaseUrl: string | null;
   officialBuild: boolean;
+  enterpriseManaged: boolean;
 };
 
 const localCapabilities: BuildCapabilities = {
@@ -16,6 +17,7 @@ const localCapabilities: BuildCapabilities = {
   authMode: "individual",
   cloudBaseUrl: null,
   officialBuild: false,
+  enterpriseManaged: false,
 };
 
 let capabilitiesPromise: Promise<BuildCapabilities> | null = null;
@@ -31,4 +33,10 @@ export function getBuildCapabilities(): Promise<BuildCapabilities> {
     );
   }
   return capabilitiesPromise;
+}
+
+export function shouldShowWorkEmailGuidance(
+  capabilities: Pick<BuildCapabilities, "authMode" | "enterpriseManaged">,
+): boolean {
+  return capabilities.authMode === "workspace" || capabilities.enterpriseManaged;
 }

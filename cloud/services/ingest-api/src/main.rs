@@ -38,6 +38,7 @@ mod ai_gateway;
 mod auth;
 mod auth_proxy;
 mod memory_proxy;
+mod semantic_trees;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Config {
@@ -315,6 +316,12 @@ fn router(state: AppState) -> Router {
         .route("/v1/ingest/config", get(get_sync_config))
         .route("/v1/ingest/images/prepare", post(post_image_prepare))
         .route("/v1/ingest/images/complete", post(post_image_complete))
+        .route(
+            "/v1/semantic-tree-samples",
+            post(semantic_trees::post_semantic_tree_sample).layer(DefaultBodyLimit::max(
+                semantic_trees::MAX_MULTIPART_BODY_BYTES,
+            )),
+        )
         .route("/v1/dashboard/session", get(get_dashboard_session))
         .route("/v1/tenant/:slug", get(get_tenant_org))
         .route(

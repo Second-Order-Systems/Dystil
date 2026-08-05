@@ -1,5 +1,8 @@
 use async_trait::async_trait;
-use dystil_sync::{DystilSync, LocalSyncPermissions, SyncConfig, SyncError, SyncOutcome};
+use dystil_sync::{
+    upload_pending_semantic_samples, DystilSync, LocalSyncPermissions, SemanticSyncConfig,
+    SyncConfig, SyncError, SyncOutcome,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
@@ -11,6 +14,9 @@ pub trait EngineHost: Send + Sync {
     async fn cloud_base_url(&self) -> Result<String, String>;
     async fn capture_db_path(&self) -> Result<PathBuf, String>;
     async fn sync_state_path(&self) -> Result<PathBuf, String>;
+    async fn semantic_tree_store_path(&self) -> Result<Option<PathBuf>, String> {
+        Ok(None)
+    }
     async fn on_device_token_invalid(&self) -> Result<bool, String>;
     async fn local_sync_permissions(&self) -> Result<LocalSyncPermissions, String> {
         Ok(LocalSyncPermissions::default())
@@ -32,6 +38,7 @@ pub struct EngineConfig {
     pub request_timeout_secs: u64,
     pub idle_retry_secs: u64,
     pub error_retry_secs: u64,
+    pub snapshot_cleanup_interval_secs: u64,
 }
 
 impl Default for EngineConfig {
@@ -41,6 +48,7 @@ impl Default for EngineConfig {
             request_timeout_secs: fallback_sync_config.request_timeout_secs,
             idle_retry_secs: 10,
             error_retry_secs: 10,
+            snapshot_cleanup_interval_secs: 30 * 60,
             fallback_sync_config,
         }
     }
@@ -76,27 +84,66 @@ impl DystilEngine {
         let cloud_base_url = host.cloud_base_url().await.map_err(EngineError::Host)?;
         let db_path = host.capture_db_path().await.map_err(EngineError::Host)?;
         let state_db_path = host.sync_state_path().await.map_err(EngineError::Host)?;
+        let machine_id = host.machine_id().await.map_err(EngineError::Host)?;
+        let app_version = host.app_version().await.map_err(EngineError::Host)?;
+        let build_channel = host.build_channel().await.map_err(EngineError::Host)?;
+        let build_commit = host.build_commit().await.map_err(EngineError::Host)?;
+        let local_permissions = host
+            .local_sync_permissions()
+            .await
+            .map_err(EngineError::Host)?;
+
+        if local_permissions.segments {
+            match host.semantic_tree_store_path().await {
+                Ok(Some(store_path)) => {
+                    match upload_pending_semantic_samples(SemanticSyncConfig {
+                        store_path,
+                        cloud_base_url: cloud_base_url.clone(),
+                        device_token: device_token.clone(),
+                        request_timeout_secs: self.config.request_timeout_secs,
+                        app_version: app_version.clone(),
+                        build_channel: build_channel.clone(),
+                        build_commit: build_commit.clone(),
+                    })
+                    .await
+                    {
+                        Ok(uploaded) if uploaded > 0 => tracing::info!(
+                            uploaded_semantic_samples = uploaded,
+                            "dystil-engine: semantic sample pass completed"
+                        ),
+                        Ok(_) => {}
+                        Err(error) => tracing::warn!(
+                            %error,
+                            "dystil-engine: semantic sample pass failed; ordinary sync will continue"
+                        ),
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => tracing::warn!(
+                    %error,
+                    "dystil-engine: semantic store path unavailable; ordinary sync will continue"
+                ),
+            }
+        }
 
         let sync = DystilSync {
             db_path,
             state_db_path,
             cloud_base_url,
             device_token,
-            machine_id: host.machine_id().await.map_err(EngineError::Host)?,
+            machine_id,
             fallback_config: self.config.fallback_sync_config.clone(),
             request_timeout_secs: self.config.request_timeout_secs,
-            app_version: host.app_version().await.map_err(EngineError::Host)?,
-            build_channel: host.build_channel().await.map_err(EngineError::Host)?,
-            build_commit: host.build_commit().await.map_err(EngineError::Host)?,
+            app_version,
+            build_channel,
+            build_commit,
             sync_capabilities: vec![
                 "image-shadow-decision-v1".to_string(),
                 "remote-sync-policy-v1".to_string(),
                 "evidence-v2".to_string(),
+                "semantic-tree-samples-v1".to_string(),
             ],
-            local_permissions: host
-                .local_sync_permissions()
-                .await
-                .map_err(EngineError::Host)?,
+            local_permissions,
         };
         let outcome = match sync.sync_once().await {
             Ok(outcome) => outcome,
@@ -128,6 +175,9 @@ impl DystilEngine {
     pub async fn run_forever<H: EngineHost + 'static>(self, host: Arc<H>) {
         // Run a best-effort pass as soon as the engine starts, then every
         // configured interval thereafter.
+        let snapshot_cleanup_interval =
+            Duration::from_secs(self.config.snapshot_cleanup_interval_secs.max(1));
+        let mut last_snapshot_cleanup: Option<std::time::Instant> = None;
         loop {
             let delay = match self.run_once(host.as_ref()).await {
                 Ok(Some(outcome)) => Duration::from_secs(outcome.config.sync_interval_secs.max(1)),
@@ -138,6 +188,37 @@ impl DystilEngine {
                 }
             };
 
+            if last_snapshot_cleanup.is_none_or(|last| last.elapsed() >= snapshot_cleanup_interval)
+            {
+                match host.capture_db_path().await {
+                    Ok(db_path) => {
+                        if let Err(error) =
+                            DystilSync::cleanup_expired_snapshots_once(&db_path).await
+                        {
+                            tracing::warn!(error = %error, "dystil-engine: expired snapshot cleanup failed");
+                        }
+                        match host.sync_state_path().await {
+                            Ok(state_db_path) => {
+                                if let Err(error) = DystilSync::cleanup_synced_snapshots_once(
+                                    &db_path,
+                                    &state_db_path,
+                                )
+                                .await
+                                {
+                                    tracing::warn!(error = %error, "dystil-engine: synced snapshot cleanup failed");
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(error = %error, "dystil-engine: unable to locate sync state for snapshot cleanup")
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "dystil-engine: unable to locate capture DB for snapshot cleanup")
+                    }
+                }
+                last_snapshot_cleanup = Some(std::time::Instant::now());
+            }
             sleep(delay).await;
         }
     }

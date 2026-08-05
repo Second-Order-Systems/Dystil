@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use image::{codecs::jpeg::JpegEncoder, imageops::FilterType, DynamicImage};
 use sqlx::SqlitePool;
 
+use crate::semantic_tree::{SampleDecision, SemanticSampleCandidate, SemanticTreeStore};
 use crate::{AccessibilityNode, CaptureError, CaptureObservation, CaptureStore, StoredCapture};
 
 #[derive(serde::Serialize)]
@@ -34,6 +35,8 @@ pub struct DystilCaptureStore {
     snapshot_writer: DystilSnapshotWriter,
     default_device_name: String,
     queue_ai_redaction: bool,
+    semantic_tree_store: Option<SemanticTreeStore>,
+    semantic_sample_permit: std::sync::Arc<tokio::sync::Semaphore>,
 }
 
 impl DystilCaptureStore {
@@ -48,7 +51,25 @@ impl DystilCaptureStore {
             snapshot_writer: DystilSnapshotWriter::new(snapshots_root),
             default_device_name: default_device_name.into(),
             queue_ai_redaction,
+            semantic_tree_store: None,
+            semantic_sample_permit: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
         }
+    }
+
+    pub fn with_semantic_samples_best_effort(
+        mut self,
+        database_path: impl AsRef<std::path::Path>,
+    ) -> Self {
+        match SemanticTreeStore::open(database_path) {
+            Ok(store) => {
+                self.semantic_tree_store = Some(store);
+            }
+            Err(error) => tracing::warn!(
+                %error,
+                "semantic sample store unavailable; ordinary capture will continue"
+            ),
+        }
+        self
     }
 }
 
@@ -83,11 +104,6 @@ impl CaptureStore for DystilCaptureStore {
             .filter(|text| !text.is_empty())
             .map(sanitize_text);
         let sanitized_nodes = accessibility.map(|snapshot| sanitize_nodes(&snapshot.nodes));
-        let accessibility_tree_json = sanitized_nodes
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|error| CaptureError::Store(error.to_string()))?;
         let ax_capture_diagnostics_json = accessibility
             .map(|snapshot| AxCaptureDiagnostics {
                 node_count: snapshot.node_count,
@@ -138,15 +154,17 @@ impl CaptureStore for DystilCaptureStore {
         .bind(observation.captured_at.to_rfc3339())
         .bind(device_name)
         .bind(&snapshot_path)
-        .bind(app_name)
-        .bind(window_name)
-        .bind(browser_url)
-        .bind(document_path)
+        .bind(&app_name)
+        .bind(&window_name)
+        .bind(&browser_url)
+        .bind(&document_path)
         .bind(observation.context.focused.unwrap_or(true))
         .bind(observation.trigger.as_str())
         .bind(accessibility_text.as_deref())
         .bind(text_source)
-        .bind(accessibility_tree_json)
+        // Full trees are sampled into the separate bounded semantic store.
+        // Keeping this legacy frame column null prevents per-frame growth.
+        .bind(Option::<String>::None)
         .bind(ax_capture_diagnostics_json)
         .bind(content_hash)
         .bind(simhash)
@@ -155,6 +173,60 @@ impl CaptureStore for DystilCaptureStore {
         .map_err(|error| CaptureError::Store(error.to_string()))?;
 
         let frame_id = result.last_insert_rowid();
+
+        if let (Some(store), Some(nodes), Some(app_name)) = (
+            self.semantic_tree_store.clone(),
+            sanitized_nodes,
+            app_name.clone(),
+        ) {
+            let captured_at = observation.captured_at;
+            let window_name = window_name.clone();
+            let browser_url = browser_url.clone();
+            if let Ok(permit) = self.semantic_sample_permit.clone().try_acquire_owned() {
+                tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    let decision = store.record(SemanticSampleCandidate {
+                        source_frame_id: frame_id,
+                        captured_at,
+                        platform: std::env::consts::OS,
+                        app_name: &app_name,
+                        // This is the captured application's version, not the
+                        // Dystil client version. Capture context does not expose
+                        // it yet, so preserve the contract by leaving it null.
+                        app_version: None,
+                        window_name: window_name.as_deref(),
+                        browser_url: browser_url.as_deref(),
+                        nodes: &nodes,
+                    });
+                    match decision {
+                        Ok(SampleDecision::Stored {
+                            sample_id,
+                            compressed_bytes,
+                        }) => tracing::debug!(
+                            frame_id,
+                            sample_id,
+                            compressed_bytes,
+                            "stored semantic tree sample"
+                        ),
+                        Ok(decision) => tracing::trace!(
+                            frame_id,
+                            ?decision,
+                            "semantic tree sample not retained"
+                        ),
+                        Err(error) => tracing::warn!(
+                            frame_id,
+                            %error,
+                            "semantic tree sampling failed without affecting frame capture"
+                        ),
+                    }
+                });
+            } else {
+                tracing::trace!(
+                    frame_id,
+                    "semantic sampler busy; dropping candidate without affecting frame capture"
+                );
+            }
+        }
         // Deterministic redaction has already happened in this transaction.
         // Queue the optional model pass only while the user has opted in; an
         // opt-out must not accumulate a surprise historical backlog.
@@ -466,15 +538,12 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        for column in ["frame_text", "accessibility_tree_json", "window_name"] {
+        for column in ["frame_text", "window_name"] {
             assert!(!row.get::<String, _>(column).contains("person@example.com"));
         }
-        assert!(!row
-            .get::<String, _>("accessibility_tree_json")
-            .contains("+1-234-567-8901"));
-        assert!(!row
-            .get::<String, _>("accessibility_tree_json")
-            .contains("AKIAIOSFODNN7EXAMPLE"));
+        assert!(row
+            .get::<Option<String>, _>("accessibility_tree_json")
+            .is_none());
     }
 
     #[test]

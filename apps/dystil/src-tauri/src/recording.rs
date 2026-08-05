@@ -586,7 +586,10 @@ pub async fn spawn_capture(
     // Permissions check
     let store = SettingsStore::get(&app).ok().flatten().unwrap_or_default();
     let permissions_check = do_permissions_check(false);
-    if !store.recording.disable_vision && !permissions_check.screen_recording.permitted() {
+    if crate::capture_policy::product_capture_mode(store.recording.disable_vision)
+        == dystil_capture::CaptureMode::FullCapture
+        && !permissions_check.screen_recording.permitted()
+    {
         warn!(
             "Screen recording permission not granted: {:?}. Cannot start server.",
             permissions_check.screen_recording

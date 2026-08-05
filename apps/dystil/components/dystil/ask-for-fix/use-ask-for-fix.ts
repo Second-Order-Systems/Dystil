@@ -35,6 +35,9 @@ function readableError(error: unknown) {
   if (message.includes("user_cancelled")) {
     return "You stopped the response. Your conversation is still here.";
   }
+  if (message.includes("interrupted")) {
+    return "The app closed before this response finished. Your conversation is safe; try the turn again.";
+  }
   return message || "Dystil could not finish this turn. Your conversation is still here.";
 }
 

@@ -45,15 +45,22 @@ impl EngineHost for TauriEngineHost {
             .map_err(|err| err.to_string())
     }
 
+    async fn semantic_tree_store_path(&self) -> Result<Option<PathBuf>, String> {
+        crate::log_files::get_data_dir(&self.app)
+            .map(|dir| Some(dir.join("data").join("semantic-tree-samples.sqlite")))
+            .map_err(|err| err.to_string())
+    }
+
     async fn on_device_token_invalid(&self) -> Result<bool, String> {
         crate::auth::clear_and_re_register_device_token().await
     }
 
     async fn local_sync_permissions(&self) -> Result<LocalSyncPermissions, String> {
         let settings = crate::store::SettingsStore::get(&self.app)?.unwrap_or_default();
+        let consent = settings.sync_consent.effective();
         Ok(LocalSyncPermissions {
-            segments: settings.sync_consent.segments,
-            screenshots: settings.sync_consent.screenshots,
+            segments: consent.segments,
+            screenshots: consent.screenshots,
         })
     }
 
@@ -83,8 +90,8 @@ fn spawn(app: AppHandle) -> tauri::async_runtime::JoinHandle<()> {
 
 pub async fn reconcile(app: AppHandle) -> Result<(), String> {
     let settings = crate::store::SettingsStore::get(&app)?.unwrap_or_default();
-    let permitted =
-        settings.sync_consent.segments && crate::auth::current_device_token().await?.is_some();
+    let permitted = settings.sync_consent.effective().segments
+        && crate::auth::current_device_token().await?.is_some();
     let mut task = engine_task().lock().await;
     if permitted {
         if task

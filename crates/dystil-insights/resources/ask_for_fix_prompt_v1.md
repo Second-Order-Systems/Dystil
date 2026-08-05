@@ -33,6 +33,8 @@ Ask only when the answer could materially change the causal framing, answer rout
 
 The `assistant_message` should explain briefly why the next question matters without sounding procedural. The question itself belongs in `question.text`.
 
+If the turn packet is already in `present` and `latest_event.kind` is `revise`, update the complete answer in `current_presentation` according to the user's newest message. Preserve the locked understanding and human-control boundary, return a complete replacement `present` move, and do not reopen intake or ask another question.
+
 Choose a renderer deliberately:
 
 - `free_text`: nuance is important or the answer space cannot be enumerated honestly.

@@ -9,6 +9,7 @@ import posthog from "posthog-js";
 import { getAuthState, subscribeAuthState, type DystilAuthState } from "@/lib/auth-store";
 import { useOnboardingStatus } from "@/lib/hooks/use-onboarding-status";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { getBuildCapabilities } from "@/lib/build-capabilities";
 
 interface PermissionLostPayload {
   screen_recording: boolean;
@@ -62,6 +63,7 @@ export function usePermissionMonitor() {
   const onboardingCompletedRef = useRef(false);
   const screenshotsEnabledRef = useRef(false);
   const [authState, setAuthState] = useState<DystilAuthState>(() => getAuthState());
+  const [enterpriseManaged, setEnterpriseManaged] = useState<boolean | null>(null);
   const {
     phase: onboardingPhase,
     onboarding,
@@ -70,13 +72,20 @@ export function usePermissionMonitor() {
   const { settings, isSettingsLoaded } = useSettings();
   const pathname = usePathname();
 
-  const screenshotsEnabled = !settings.disableVision;
+  const screenshotsEnabled = enterpriseManaged === true || !settings.disableVision;
 
   const isRecoveryEligible =
     isAuthReady(authState.status) &&
     isSettingsLoaded &&
+    enterpriseManaged !== null &&
     onboardingPhase === "ready" &&
     Boolean(onboarding?.isCompleted);
+
+  useEffect(() => {
+    void getBuildCapabilities().then((capabilities) => {
+      setEnterpriseManaged(capabilities.enterpriseManaged);
+    });
+  }, []);
 
   useEffect(() => {
     authStateRef.current = authState;

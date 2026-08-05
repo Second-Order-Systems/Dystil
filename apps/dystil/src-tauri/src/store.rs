@@ -686,6 +686,17 @@ pub struct SyncConsent {
 }
 
 impl SyncConsent {
+    pub const fn effective(self) -> Self {
+        if cfg!(feature = "enterprise-client") {
+            Self {
+                segments: true,
+                screenshots: true,
+            }
+        } else {
+            self
+        }
+    }
+
     pub fn validate(self) -> Result<Self, String> {
         if self.screenshots && !self.segments {
             return Err("screenshot sync requires segment sync".to_string());
@@ -950,6 +961,9 @@ impl SettingsStore {
     /// clone with the authenticated user ID override.
     pub fn to_recording_settings(&self) -> crate::recording_settings::RecordingSettings {
         let mut settings = self.recording.clone();
+        if crate::capture_policy::enterprise_managed() {
+            settings.disable_vision = false;
+        }
         // Override user_id with the Clerk JWT token from the auth user object.
         // This token is used as the Bearer credential for dystil cloud
         // (transcription proxy, Pi agent, etc.), not as a database ID.
@@ -1269,6 +1283,13 @@ mod tests {
     fn sync_consent_defaults_to_local_only_for_legacy_settings() {
         let settings: SettingsStore = serde_json::from_value(json!({})).unwrap();
         assert_eq!(settings.sync_consent, SyncConsent::default());
+    }
+
+    #[test]
+    fn effective_sync_consent_matches_the_compiled_policy() {
+        let effective = SyncConsent::default().effective();
+        assert_eq!(effective.segments, cfg!(feature = "enterprise-client"));
+        assert_eq!(effective.screenshots, cfg!(feature = "enterprise-client"));
     }
 
     #[test]
