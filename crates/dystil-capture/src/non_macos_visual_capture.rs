@@ -6,7 +6,9 @@ use async_trait::async_trait;
 use chrono::Utc;
 use image::DynamicImage;
 use tokio::sync::Mutex;
-use tracing::{debug, info, warn};
+#[cfg(target_os = "linux")]
+use tracing::debug;
+use tracing::{info, warn};
 
 use crate::monitor_selection::select_monitors;
 use crate::{CaptureError, VisualProvider, VisualRequest, VisualSnapshot};

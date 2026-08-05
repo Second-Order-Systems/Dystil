@@ -44,6 +44,8 @@ mod ui_recorder_config;
 #[cfg(target_os = "macos")]
 #[cfg(feature = "native")]
 pub mod visual_capture;
+#[cfg(all(feature = "native", target_os = "windows"))]
+pub mod wgc_capture;
 #[cfg(feature = "native")]
 pub mod window_pattern;
 
