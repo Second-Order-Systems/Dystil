@@ -1,7 +1,5 @@
 name: Release App
 
-# This default-branch stub makes the workflow_dispatch UI available for the
-# full workflow on feature branches. It intentionally cannot build or publish.
 on:
   workflow_dispatch:
     inputs:
@@ -14,16 +12,628 @@ on:
           - validate
           - preview
           - stable
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-app-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
+env:
+  APP_DIR: apps/dystil
+  APP_SRC_TAURI_DIR: apps/dystil/src-tauri
+  GIT_LFS_SKIP_SMUDGE: 1
+  CARGO_PROFILE_RELEASE_LTO: thin
+  CARGO_PROFILE_RELEASE_OPT_LEVEL: "2"
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+  CARGO_PROFILE_RELEASE_STRIP: none
+  CARGO_PROFILE_RELEASE_PANIC: abort
+  CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
+  GGML_NATIVE: "OFF"
+  GGML_AVX512: "OFF"
+  GGML_AVX512_VBMI: "OFF"
+  GGML_AVX512_VNNI: "OFF"
+  GGML_AVX512_BF16: "OFF"
+
 jobs:
-  stub:
+  plan:
     runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.plan.outputs.should_build }}
+      mode: ${{ steps.plan.outputs.mode }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      branch_slug: ${{ steps.plan.outputs.branch_slug }}
+      short_sha: ${{ steps.plan.outputs.short_sha }}
+      source_sha: ${{ steps.plan.outputs.source_sha }}
     steps:
-      - name: Explain stub workflow
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Decide release mode and validate version
+        id: plan
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_MODE: ${{ inputs.publish_mode }}
+          REF_NAME: ${{ github.ref_name }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+
+          app_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$APP_SRC_TAURI_DIR/Cargo.toml" | head -1)
+          workspace_version=$(awk '
+            /^\[workspace\.package\]$/ { in_package=1; next }
+            in_package && /^version = "/ {
+              gsub(/^version = "|"$/, "")
+              print
+              exit
+            }
+          ' Cargo.toml)
+
+          if [[ -z "$app_version" || -z "$workspace_version" ]]; then
+            echo "Unable to read the desktop and workspace versions" >&2
+            exit 1
+          fi
+          if [[ "$app_version" != "$workspace_version" ]]; then
+            echo "Desktop version ($app_version) and workspace version ($workspace_version) must match" >&2
+            exit 1
+          fi
+          if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must be plain SemVer (X.Y.Z), got: $app_version" >&2
+            exit 1
+          fi
+
+          subject=$(git log -1 --pretty=%s)
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            mode="$REQUESTED_MODE"
+          elif [[ "$subject" =~ ^release-app:\ v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            mode=stable
+          else
+            mode=skip
+          fi
+
+          source_sha=$(git rev-parse HEAD)
+          short_sha=$(git rev-parse --short=7 HEAD)
+          branch_slug=$(printf '%s' "$REF_NAME" |
+            tr '[:upper:]' '[:lower:]' |
+            sed -E 's/[^a-z0-9._-]+/-/g; s/^-+|-+$//g')
+
+          if [[ "$mode" == "stable" ]]; then
+            if [[ "$REF" != "refs/heads/main" ]]; then
+              echo "Stable releases may only be published from main" >&2
+              exit 1
+            fi
+            if [[ ! "$subject" =~ ^release-app:\ v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              echo "Stable releases require the commit subject: release-app: v$app_version" >&2
+              exit 1
+            fi
+            commit_version="${BASH_REMATCH[1]}"
+            if [[ "$commit_version" != "$app_version" ]]; then
+              echo "Commit version ($commit_version) does not match Cargo.toml ($app_version)" >&2
+              exit 1
+            fi
+          fi
+
+          if [[ "$mode" == "skip" ]]; then
+            should_build=false
+            echo "Ordinary main commit; no desktop release requested."
+          else
+            should_build=true
+          fi
+
+          {
+            echo "should_build=$should_build"
+            echo "mode=$mode"
+            echo "version=$app_version"
+            echo "tag=v$app_version"
+            echo "branch_slug=$branch_slug"
+            echo "short_sha=$short_sha"
+            echo "source_sha=$source_sha"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Mode: $mode"
+          echo "Version: $app_version"
+          echo "Source: $source_sha"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.should_build == 'true'
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            os_type: windows
+            target: x86_64-pc-windows-msvc
+            artifact_arch: x64
+          - runner: macos-26
+            os_type: macos
+            target: aarch64-apple-darwin
+            artifact_arch: arm64
+          - runner: macos-26
+            os_type: macos
+            target: x86_64-apple-darwin
+            artifact_arch: x64
+          - runner: ubuntu-24.04
+            os_type: linux
+            target: x86_64-unknown-linux-gnu
+            artifact_arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.source_sha }}
+
+      - name: Set Cargo target directory
         shell: bash
         run: |
-          echo "This is the default-branch dispatch stub."
-          echo "Select the feature branch containing the full release workflow before running it."
+          if [[ "${{ matrix.os_type }}" == "windows" ]]; then
+            echo 'CARGO_TARGET_DIR=C:\t' >> "$GITHUB_ENV"
+          else
+            echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/.cargo-target" >> "$GITHUB_ENV"
+          fi
+
+      - name: Enable Git long paths
+        if: matrix.os_type == 'windows'
+        shell: powershell
+        run: git config --global core.longpaths true
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.93.1
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache frontend dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/dystil/node_modules
+            apps/dystil/.tauri
+          key: ${{ runner.os }}-${{ matrix.target }}-bun-${{ hashFiles('apps/dystil/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-bun-
+
+      - name: Cache Next.js build output
+        uses: actions/cache@v4
+        with:
+          path: apps/dystil/.next/cache
+          key: ${{ runner.os }}-${{ matrix.target }}-next-${{ hashFiles('apps/dystil/bun.lock') }}-${{ hashFiles('apps/dystil/app/**', 'apps/dystil/components/**', 'apps/dystil/lib/**', 'apps/dystil/config/**', 'apps/dystil/public/**', 'apps/dystil/ready-to-use/**', 'apps/dystil/next.config.mjs', 'apps/dystil/postcss.config.mjs', 'apps/dystil/tailwind.config.ts', 'apps/dystil/tsconfig.json') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-next-${{ hashFiles('apps/dystil/bun.lock') }}-
+
+      - name: Set up MSVC
+        if: matrix.os_type == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Select MSVC linker
+        if: matrix.os_type == 'windows'
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:CARGO_TARGET_DIR | Out-Null
+          $linker = Get-Command link.exe -All |
+            Where-Object { $_.Source -like "*Microsoft Visual Studio*" } |
+            Select-Object -First 1 -ExpandProperty Source
+          if (-not $linker) {
+            throw "Visual Studio link.exe was not found after MSVC setup"
+          }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install Linux dependencies
+        if: matrix.os_type == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            cmake \
+            curl \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            libclang-dev \
+            libgtk-3-dev \
+            libonig-dev \
+            libopenblas-dev \
+            libsecret-1-dev \
+            libsqlite3-dev \
+            libssl-dev \
+            libtesseract-dev \
+            libwebkit2gtk-4.1-dev \
+            libx11-dev \
+            libxdo-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libxtst-dev \
+            patchelf \
+            pkg-config \
+            tesseract-ocr \
+            xdg-desktop-portal-gtk
+          sudo mkdir -p /usr/lib/x86_64-linux-gnu/openblas/lib
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.so /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.so
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.a /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.a
+          echo "OPENBLAS_PATH=/usr/lib/x86_64-linux-gnu/openblas" >> "$GITHUB_ENV"
+
+      - name: Work around Bun ldd inspection in AppImage bundling
+        if: matrix.os_type == 'linux'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/dystil-tools"
+          printf '%s\n' \
+            '#!/bin/bash' \
+            'if [[ "$1" == *"/bun"* ]] || [[ "$1" == *"bun-"* ]]; then' \
+            '  echo "statically linked"' \
+            '  exit 0' \
+            'fi' \
+            'exec /usr/bin/ldd "$@"' \
+            > "$RUNNER_TEMP/dystil-tools/ldd"
+          chmod +x "$RUNNER_TEMP/dystil-tools/ldd"
+          echo "$RUNNER_TEMP/dystil-tools" >> "$GITHUB_PATH"
+
+      - name: Cache Rust build output
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+          cache-directories: ${{ matrix.os_type == 'windows' && 'C:\t' || format('{0}/.cargo-target', github.workspace) }}
+          key: release-${{ matrix.target }}-unified-target-v2
+
+      - name: Install frontend dependencies
+        working-directory: ${{ env.APP_DIR }}
+        shell: bash
+        run: bun install --frozen-lockfile
+
+      - name: Use production Tauri config
+        shell: bash
+        run: cp "$APP_SRC_TAURI_DIR/tauri.prod.conf.json" "$APP_SRC_TAURI_DIR/tauri.conf.json"
+
+      - name: Configure optional Apple signing
+        if: matrix.os_type == 'macos'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          DYSTIL_APPLE_ID: ${{ secrets.APPLE_ID }}
+          DYSTIL_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          DYSTIL_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$APPLE_CERTIFICATE" && -n "$DYSTIL_APPLE_ID" && -n "$DYSTIL_APPLE_PASSWORD" && -n "$DYSTIL_APPLE_TEAM_ID" ]]; then
+            {
+              echo "APPLE_ID=$DYSTIL_APPLE_ID"
+              echo "APPLE_PASSWORD=$DYSTIL_APPLE_PASSWORD"
+              echo "APPLE_TEAM_ID=$DYSTIL_APPLE_TEAM_ID"
+            } >> "$GITHUB_ENV"
+            echo "Apple notarization credentials are configured."
+          elif [[ -n "$APPLE_CERTIFICATE" && -n "$DYSTIL_APPLE_ID$DYSTIL_APPLE_PASSWORD$DYSTIL_APPLE_TEAM_ID" ]]; then
+            echo "Apple notarization credentials are incomplete; skipping notarization."
+          fi
+
+          if [[ -z "$APPLE_CERTIFICATE" ]]; then
+            echo "No Apple certificate configured; producing the normal unsigned macOS build."
+            exit 0
+          fi
+
+          if [[ -z "$APPLE_CERTIFICATE_PASSWORD" || -z "$KEYCHAIN_PASSWORD" ]]; then
+            echo "APPLE_CERTIFICATE_PASSWORD and KEYCHAIN_PASSWORD are required when APPLE_CERTIFICATE is set" >&2
+            exit 1
+          fi
+
+          certificate="$RUNNER_TEMP/dystil-signing-certificate.p12"
+          keychain="$RUNNER_TEMP/dystil-signing.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          security import "$certificate" \
+            -k "$keychain" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$keychain"
+
+          identity=$(security find-identity -v -p codesigning "$keychain" |
+            awk -F'"' '/Developer ID Application/ { print $2; exit }')
+          if [[ -z "$identity" ]]; then
+            identity=$(security find-identity -v -p codesigning "$keychain" |
+              awk -F'"' '/[0-9]+\) [A-F0-9]+ "/ { print $2; exit }')
+          fi
+          if [[ -z "$identity" ]]; then
+            echo "The imported certificate contains no valid code-signing identity" >&2
+            exit 1
+          fi
+
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "Using Apple signing identity: $identity"
+
+      # `bunx tauri build` calls `bun run build`, whose prebuild hook runs
+      # scripts/pre_build.js exactly once and builds the MCP sidecar.
+      - name: Build Windows
+        if: matrix.os_type == 'windows'
+        working-directory: ${{ env.APP_DIR }}
+        shell: powershell
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI: true
+          DYSTIL_RELEASE_TARGET: ${{ matrix.target }}
+          DYSTIL_AUTH_MODE: individual
+          DYSTIL_CLOUD_BASE_URL: https://coconut.2os.ai
+          OPENBLAS_PATH: ${{ github.workspace }}\apps\dystil\src-tauri\openblas
+          CMAKE_ARGS: -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2
+        run: bunx tauri build --verbose --target ${{ matrix.target }} --features enterprise-client
+
+      - name: Build macOS
+        if: matrix.os_type == 'macos'
+        working-directory: ${{ env.APP_DIR }}
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI: true
+          DYSTIL_RELEASE_TARGET: ${{ matrix.target }}
+          DYSTIL_AUTH_MODE: individual
+          DYSTIL_CLOUD_BASE_URL: https://coconut.2os.ai
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'aarch64-apple-darwin' && '14.0' || '10.15' }}
+          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'aarch64-apple-darwin' && '14.0' || '10.15' }}
+          CFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=14.0 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8' || '-mmacosx-version-min=10.15' }}
+          CXXFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=14.0 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8' || '-mmacosx-version-min=10.15' }}
+          CMAKE_ARGS: -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF
+          TAURI_BUNDLER_DMG_IGNORE_CI: true
+        run: bunx tauri build --verbose --target "${{ matrix.target }}" --features enterprise-client
+
+      - name: Remove temporary Apple signing keychain
+        if: always() && matrix.os_type == 'macos'
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/dystil-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/dystil-signing-certificate.p12"
+
+      - name: Build Linux
+        if: matrix.os_type == 'linux'
+        working-directory: ${{ env.APP_DIR }}
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI: true
+          DYSTIL_RELEASE_TARGET: ${{ matrix.target }}
+          DYSTIL_AUTH_MODE: individual
+          DYSTIL_CLOUD_BASE_URL: https://coconut.2os.ai
+          CMAKE_ARGS: -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF
+          NO_STRIP: true
+        run: bunx tauri build --verbose --target "${{ matrix.target }}" --features enterprise-client
+
+      - name: Remove bundled host libraries from AppImage
+        if: matrix.os_type == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage=$(find "$CARGO_TARGET_DIR/${{ matrix.target }}/release/bundle/appimage" -maxdepth 1 -name '*.AppImage' -print -quit)
+          [[ -n "$appimage" ]] || { echo "AppImage was not produced" >&2; exit 1; }
+          chmod +x "$appimage"
+          "$appimage" --appimage-extract >/dev/null
+          rm -f squashfs-root/usr/lib/libglib-2.0.so* \
+                squashfs-root/usr/lib/libgobject-2.0.so* \
+                squashfs-root/usr/lib/libgio-2.0.so* \
+                squashfs-root/usr/lib/libgmodule-2.0.so* \
+                squashfs-root/usr/lib/libmount.so* \
+                squashfs-root/usr/lib/libblkid.so* \
+                squashfs-root/usr/lib/libpcre2-8.so*
+          curl -fsSL -o "$RUNNER_TEMP/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 "$RUNNER_TEMP/appimagetool" squashfs-root "$appimage" >/dev/null
+          rm -rf squashfs-root
+
+      - name: Stage installable artifacts
+        shell: bash
+        run: |
+          bun scripts/stage-release-artifacts.mjs \
+            --bundle-dir "$CARGO_TARGET_DIR/${{ matrix.target }}/release/bundle" \
+            --output "$GITHUB_WORKSPACE/release-staging" \
+            --os "${{ matrix.os_type }}" \
+            --arch "${{ matrix.artifact_arch }}" \
+            --version "${{ needs.plan.outputs.version }}"
+        working-directory: ${{ env.APP_DIR }}
+
+      - name: Upload staged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os_type }}-${{ matrix.artifact_arch }}
+          if-no-files-found: error
+          retention-days: 7
+          path: release-staging
+
+  publish:
+    needs: [plan, build]
+    if: needs.plan.outputs.mode == 'preview' || needs.plan.outputs.mode == 'stable'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      PUBLIC_BASE_URL: https://artifacts.2os.ai
+      RELEASE_MODE: ${{ needs.plan.outputs.mode }}
+      RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+      RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+      SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
+      BRANCH_SLUG: ${{ needs.plan.outputs.branch_slug }}
+      SHORT_SHA: ${{ needs.plan.outputs.short_sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Validate downloaded artifact set
+        shell: bash
+        run: |
+          set -euo pipefail
+          find release-artifacts -type f -print | sort
+          [[ $(find release-artifacts/windows/individual -type f -name '*.exe' | wc -l) -eq 1 ]]
+          [[ $(find release-artifacts/macos/individual -type f -name '*.dmg' | wc -l) -eq 2 ]]
+          [[ $(find release-artifacts/linux/individual -type f \( -name '*.AppImage' -o -name '*.deb' \) | wc -l) -eq 2 ]]
+          [[ $(find release-artifacts -type f | wc -l) -eq 5 ]]
+
+      - name: Create draft GitHub Release
+        if: needs.plan.outputs.mode == 'stable'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            is_draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+            [[ "$is_draft" == "true" ]] || {
+              echo "Release $RELEASE_TAG already exists and is not a draft" >&2
+              exit 1
+            }
+          else
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$SOURCE_SHA" \
+              --title "Dystil $RELEASE_TAG" \
+              --draft \
+              --notes "Publishing verified desktop installers."
+          fi
+          while IFS= read -r -d '' file; do
+            gh release upload "$RELEASE_TAG" "$file" --repo "$GITHUB_REPOSITORY" --clobber
+          done < <(find release-artifacts -type f -print0)
+
+      - name: Upload immutable artifacts to R2
+        id: r2
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          if [[ "$RELEASE_MODE" == "stable" ]]; then
+            prefix="releases/v${RELEASE_VERSION}"
+          else
+            prefix="previews/${BRANCH_SLUG}/${SHORT_SHA}"
+          fi
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+
+          while IFS= read -r -d '' file; do
+            relative=${file#release-artifacts/}
+            key="$prefix/$relative"
+            digest=$(sha256sum "$file" | cut -d ' ' -f1)
+            head_error=$(mktemp)
+            if existing=$(aws s3api head-object \
+                --bucket "$R2_BUCKET" \
+                --key "$key" \
+                --endpoint-url "$endpoint" \
+                --query 'Metadata.sha256' \
+                --output text 2>"$head_error"); then
+              if [[ "$existing" == "$digest" ]]; then
+                echo "Already uploaded: $key"
+                continue
+              fi
+              echo "Refusing to overwrite existing object with different or missing checksum: $key" >&2
+              exit 1
+            elif ! grep -Eq '\(404\)|Not Found|NoSuchKey' "$head_error"; then
+              cat "$head_error" >&2
+              echo "Unable to determine whether R2 object exists: $key" >&2
+              exit 1
+            fi
+
+            case "$file" in
+              *.exe) content_type=application/vnd.microsoft.portable-executable ;;
+              *.dmg) content_type=application/x-apple-diskimage ;;
+              *.deb) content_type=application/vnd.debian.binary-package ;;
+              *.AppImage) content_type=application/octet-stream ;;
+              *) echo "Unexpected artifact: $file" >&2; exit 1 ;;
+            esac
+
+            aws s3api put-object \
+              --bucket "$R2_BUCKET" \
+              --key "$key" \
+              --body "$file" \
+              --content-type "$content_type" \
+              --cache-control 'public, max-age=31536000, immutable' \
+              --metadata "sha256=$digest" \
+              --endpoint-url "$endpoint" >/dev/null
+            echo "Uploaded: $key"
+          done < <(find release-artifacts -type f -print0)
+
+      - name: Verify public R2 downloads
+        shell: bash
+        env:
+          R2_PREFIX: ${{ steps.r2.outputs.prefix }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            relative=${file#release-artifacts/}
+            url="$PUBLIC_BASE_URL/$R2_PREFIX/$relative"
+            curl --fail --silent --show-error --location \
+              --retry 5 --retry-all-errors --retry-delay 3 \
+              --range 0-0 --output /dev/null "$url"
+            echo "Verified: $url"
+          done < <(find release-artifacts -type f -print0)
+
+      - name: Publish GitHub Release
+        if: needs.plan.outputs.mode == 'stable'
+        shell: bash
+        env:
+          R2_PREFIX: ${{ steps.r2.outputs.prefix }}
+        run: |
+          set -euo pipefail
+          notes=$(mktemp)
+          {
+            echo "Desktop installers for Dystil $RELEASE_TAG."
+            echo
+            echo "## Downloads"
+            while IFS= read -r file; do
+              name=$(basename "$file")
+              relative=${file#release-artifacts/}
+              echo "- [$name](https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/$name) ([Cloudflare mirror]($PUBLIC_BASE_URL/$R2_PREFIX/$relative))"
+            done < <(find release-artifacts -type f | sort)
+          } > "$notes"
+          gh release edit "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --notes-file "$notes" \
+            --draft=false \
+            --latest
+
+      - name: Write release summary
+        shell: bash
+        env:
+          R2_PREFIX: ${{ steps.r2.outputs.prefix }}
+        run: |
+          {
+            echo "## Dystil $RELEASE_MODE artifacts"
+            echo
+            while IFS= read -r file; do
+              relative=${file#release-artifacts/}
+              echo "- [$relative]($PUBLIC_BASE_URL/$R2_PREFIX/$relative)"
+            done < <(find release-artifacts -type f | sort)
+          } >> "$GITHUB_STEP_SUMMARY"
