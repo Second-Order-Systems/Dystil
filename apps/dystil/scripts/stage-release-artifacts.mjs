@@ -42,8 +42,13 @@ if (!/^\d+\.\d+\.\d+$/.test(args.version)) {
 }
 
 const bundleFiles = await filesBelow(path.resolve(args["bundle-dir"]));
+// The Rust target directory is intentionally cached between releases, so it
+// can contain installers produced for earlier app versions. Only stage files
+// belonging to the version requested by this workflow invocation.
+const versionedPrefix = `Dystil_${args.version}`;
 const selected = bundleFiles.filter((file) =>
-  extensions.some((extension) => file.endsWith(extension)),
+  path.basename(file).startsWith(versionedPrefix)
+  && extensions.some((extension) => file.endsWith(extension)),
 );
 
 if (selected.length !== extensions.length) {
