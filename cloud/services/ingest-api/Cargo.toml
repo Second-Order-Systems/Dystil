@@ -20,6 +20,8 @@ futures-util = { workspace = true }
 hex = { workspace = true }
 hmac = { workspace = true }
 percent-encoding = { workspace = true }
+opentelemetry-proto = { workspace = true }
+prost = { workspace = true }
 reqwest = { workspace = true }
 rand = { workspace = true }
 dystil-protocol = { path = "../../../crates/dystil-protocol" }

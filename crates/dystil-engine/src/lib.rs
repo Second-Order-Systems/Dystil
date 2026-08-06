@@ -3,6 +3,7 @@ use dystil_sync::{
     upload_pending_semantic_samples, DystilSync, LocalSyncPermissions, SemanticSyncConfig,
     SyncConfig, SyncError, SyncOutcome,
 };
+use dystil_telemetry::{ErrorKind, Outcome, StorageOperationKind};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
@@ -29,6 +30,16 @@ pub trait EngineHost: Send + Sync {
     }
     async fn build_commit(&self) -> Result<Option<String>, String> {
         Ok(None)
+    }
+    /// Receives only a bounded aggregate outcome. Implementations must never
+    /// forward raw errors, sync payloads, paths, or device identifiers.
+    async fn record_sync_iteration(&self, _outcome: Outcome, _error: Option<ErrorKind>) {}
+    async fn record_storage_operation(
+        &self,
+        _operation: StorageOperationKind,
+        _outcome: Outcome,
+        _error: Option<ErrorKind>,
+    ) {
     }
 }
 
@@ -158,6 +169,8 @@ impl DystilEngine {
                 } else {
                     tracing::warn!("dystil-engine: device token re-registration failed");
                 }
+                host.record_sync_iteration(Outcome::Failed, Some(ErrorKind::Authentication))
+                    .await;
                 return Ok(None);
             }
             Err(e) => return Err(e.into()),
@@ -180,9 +193,14 @@ impl DystilEngine {
         let mut last_snapshot_cleanup: Option<std::time::Instant> = None;
         loop {
             let delay = match self.run_once(host.as_ref()).await {
-                Ok(Some(outcome)) => Duration::from_secs(outcome.config.sync_interval_secs.max(1)),
+                Ok(Some(outcome)) => {
+                    host.record_sync_iteration(Outcome::Succeeded, None).await;
+                    Duration::from_secs(outcome.config.sync_interval_secs.max(1))
+                }
                 Ok(None) => Duration::from_secs(self.config.idle_retry_secs.max(1)),
                 Err(err) => {
+                    host.record_sync_iteration(Outcome::Failed, Some(sync_error_kind(&err)))
+                        .await;
                     tracing::warn!("dystil-engine sync iteration failed: {}", err);
                     Duration::from_secs(self.config.error_retry_secs.max(1))
                 }
@@ -195,6 +213,12 @@ impl DystilEngine {
                         if let Err(error) =
                             DystilSync::cleanup_expired_snapshots_once(&db_path).await
                         {
+                            host.record_storage_operation(
+                                StorageOperationKind::SnapshotCleanup,
+                                Outcome::Failed,
+                                Some(ErrorKind::Storage),
+                            )
+                            .await;
                             tracing::warn!(error = %error, "dystil-engine: expired snapshot cleanup failed");
                         }
                         match host.sync_state_path().await {
@@ -205,6 +229,12 @@ impl DystilEngine {
                                 )
                                 .await
                                 {
+                                    host.record_storage_operation(
+                                        StorageOperationKind::SnapshotCleanup,
+                                        Outcome::Failed,
+                                        Some(ErrorKind::Storage),
+                                    )
+                                    .await;
                                     tracing::warn!(error = %error, "dystil-engine: synced snapshot cleanup failed");
                                 }
                             }
@@ -221,6 +251,18 @@ impl DystilEngine {
             }
             sleep(delay).await;
         }
+    }
+}
+
+fn sync_error_kind(error: &EngineError) -> ErrorKind {
+    match error {
+        EngineError::Host(_) => ErrorKind::Internal,
+        EngineError::Sync(SyncError::Unauthorized) => ErrorKind::Authentication,
+        EngineError::Sync(SyncError::Io(_)) => ErrorKind::Storage,
+        EngineError::Sync(SyncError::Json(_)) => ErrorKind::InvalidOutput,
+        EngineError::Sync(SyncError::Sqlx(_)) => ErrorKind::Database,
+        EngineError::Sync(SyncError::Http(_)) => ErrorKind::Network,
+        EngineError::Sync(SyncError::Message(_)) => ErrorKind::Internal,
     }
 }
 

@@ -30,6 +30,7 @@ regex.workspace = true
 sqlx.workspace = true
 uuid.workspace = true
 dystil-redact = { path = "../dystil-redact" }
+dystil-telemetry = { path = "../dystil-telemetry" }
 
 anyhow.workspace = true
 lazy_static.workspace = true

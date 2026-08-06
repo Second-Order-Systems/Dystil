@@ -28,6 +28,7 @@ use dystil_capture::non_macos_visual_capture::DystilFullCaptureVisualProvider;
 use dystil_capture::visual_capture::DystilMacosOneShotVisualProvider;
 
 use crate::server_core::ServerCore;
+use dystil_telemetry::TraceKind;
 
 /// Load the opt-in Dystil ONNX text model.
 /// Downloads from HuggingFace on first enable (~168 MB). Returns `None` if the
@@ -58,6 +59,7 @@ async fn load_text_redactor() -> Option<std::sync::Arc<dyn dystil_redact::TextRe
 /// Always use `stop()` for clean shutdown.
 ///
 pub struct CaptureSession {
+    telemetry: Arc<dystil_telemetry::Telemetry>,
     shutdown_tx: broadcast::Sender<()>,
     ui_recorder_handle: Option<DystilUiRecorderHandle>,
     ax_capture_handle: Option<DystilAxCaptureHandle>,
@@ -181,12 +183,15 @@ impl CaptureSession {
                     Arc::new(DystilFullCaptureVisualProvider::new()) as Arc<dyn VisualProvider>
                 });
 
-            let coordinator = Arc::new(CaptureCoordinator::new(
-                CaptureConfig { capture_mode },
-                accessibility,
-                visual_provider.clone(),
-                store,
-            ));
+            let coordinator = Arc::new(
+                CaptureCoordinator::new(
+                    CaptureConfig { capture_mode },
+                    accessibility,
+                    visual_provider.clone(),
+                    store,
+                )
+                .with_telemetry(server.telemetry.clone()),
+            );
             ax_capture_handle = Some(DystilAxCaptureHandle::start(
                 capture_trigger_bus.subscribe(),
                 linker_runtime.sender(),
@@ -254,8 +259,12 @@ impl CaptureSession {
         info!("snapshot compaction disabled for Dystil image ingest");
 
         info!("Capture session started successfully");
+        server
+            .telemetry
+            .record_sampled_trace(TraceKind::CaptureSessionStart);
 
         Ok(Self {
+            telemetry: server.telemetry.clone(),
             shutdown_tx,
             ui_recorder_handle,
             ax_capture_handle,
@@ -271,6 +280,8 @@ impl CaptureSession {
     /// This is self-contained — no external references needed.
     pub async fn stop(mut self) {
         info!("Stopping capture session");
+        self.telemetry
+            .record_sampled_trace(TraceKind::CaptureSessionStop);
 
         // Signal UI recorder to stop
         if let Some(ref ui_handle) = self.ui_recorder_handle {

@@ -4,7 +4,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use dystil_engine::{DystilEngine, EngineConfig, EngineHost};
 use dystil_sync::LocalSyncPermissions;
-use tauri::AppHandle;
+use dystil_telemetry::{ErrorKind, Outcome, StorageOperationKind};
+use tauri::{AppHandle, Manager};
 use tokio::sync::Mutex;
 
 static ENGINE_TASK: std::sync::OnceLock<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>> =
@@ -77,6 +78,41 @@ impl EngineHost for TauriEngineHost {
             }
             .to_string(),
         ))
+    }
+
+    async fn record_sync_iteration(&self, outcome: Outcome, error: Option<ErrorKind>) {
+        let telemetry = {
+            self.app
+                .state::<crate::recording::RecordingState>()
+                .server
+                .lock()
+                .await
+                .as_ref()
+                .map(|server| server.telemetry.clone())
+        };
+        if let Some(telemetry) = telemetry {
+            telemetry.record_sync_iteration(outcome, error);
+        }
+    }
+
+    async fn record_storage_operation(
+        &self,
+        operation: StorageOperationKind,
+        outcome: Outcome,
+        error: Option<ErrorKind>,
+    ) {
+        let telemetry = {
+            self.app
+                .state::<crate::recording::RecordingState>()
+                .server
+                .lock()
+                .await
+                .as_ref()
+                .map(|server| server.telemetry.clone())
+        };
+        if let Some(telemetry) = telemetry {
+            telemetry.record_storage_operation(operation, outcome, error);
+        }
     }
 }
 

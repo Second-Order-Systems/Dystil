@@ -1,0 +1,51 @@
+# Local, single-node OpenObserve for Dystil operational telemetry only.
+# Start alongside the existing cloud stack with:
+# docker compose -f docker-compose.yml -f docker-compose.telemetry.yml --env-file .env.docker up
+services:
+  openobserve:
+    # Pinned release; update deliberately after validating an upgrade.
+    image: public.ecr.aws/zinclabs/openobserve:v0.90.3
+    restart: unless-stopped
+    environment:
+      ZO_DATA_DIR: /data
+      ZO_ROOT_USER_EMAIL: ${OPENOBSERVE_ROOT_EMAIL:?set OPENOBSERVE_ROOT_EMAIL}
+      ZO_ROOT_USER_PASSWORD: ${OPENOBSERVE_ROOT_PASSWORD:?set OPENOBSERVE_ROOT_PASSWORD}
+    ports:
+      # The UI/ingest port is local-only. Desktop clients must use dystil-api.
+      - "127.0.0.1:5080:5080"
+    volumes:
+      - openobserve_data:/data
+    # This image is distroless and has neither /bin/sh nor a probe utility, so
+    # a Docker CMD-SHELL healthcheck would permanently report a false failure.
+    # Verify /healthz from the host/operator path instead (documented below).
+
+  dystil-api:
+    depends_on:
+      openobserve:
+        condition: service_started
+    environment:
+      TELEMETRY_RELAY_ENABLED: ${TELEMETRY_RELAY_ENABLED:-true}
+      TELEMETRY_OPENOBSERVE_URL: http://openobserve:5080
+      TELEMETRY_OPENOBSERVE_ORG: ${TELEMETRY_OPENOBSERVE_ORG:-default}
+      TELEMETRY_OPENOBSERVE_AUTHORIZATION: ${TELEMETRY_OPENOBSERVE_AUTHORIZATION:?set TELEMETRY_OPENOBSERVE_AUTHORIZATION}
+
+  # One-shot, private dashboard-as-code provisioning. It has the same internal
+  # OpenObserve credential as dystil-api, but has no host port and is never
+  # reachable by a desktop client.
+  telemetry-dashboard:
+    build:
+      context: .
+      dockerfile: openobserve/Dockerfile.provision
+    env_file:
+      - .env.docker
+    depends_on:
+      openobserve:
+        condition: service_started
+    environment:
+      DYSTIL_OPENOBSERVE_URL: http://openobserve:5080
+      DYSTIL_OPENOBSERVE_ORG: ${TELEMETRY_OPENOBSERVE_ORG:-default}
+      DYSTIL_DASHBOARD_FILE: /app/dashboards/dystil-desktop-operational.json
+    restart: "no"
+
+volumes:
+  openobserve_data:

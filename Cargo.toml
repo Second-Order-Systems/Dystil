@@ -12,6 +12,7 @@ members = [
     "crates/dystil-work-index",
     "crates/dystil-retrieval",
     "crates/dystil-automation",
+    "crates/dystil-telemetry",
 ]
 resolver = "2"
 

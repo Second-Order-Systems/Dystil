@@ -660,6 +660,10 @@ pub async fn spawn_capture(
                     Ok(c) => c,
                     Err(e) => {
                         error!("Failed to start capture session: {}", e);
+                        server.telemetry.record_app_start(
+                            dystil_telemetry::AppStartReason::CaptureInitialization,
+                            dystil_telemetry::Outcome::Failed,
+                        );
                         // Server started but capture failed — store server anyway
                         // so pipes/search still work
                         {

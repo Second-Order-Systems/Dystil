@@ -1,0 +1,168 @@
+{
+  "version": 8,
+  "title": "Dystil Desktop — Operational",
+  "description": "Privacy-reviewed aggregate desktop telemetry. No desktop logs or captured content.",
+  "tabs": [
+    {
+      "tabId": "overview",
+      "name": "Overview",
+      "panels": [
+        {
+          "id": "capture-triggers",
+          "type": "line",
+          "title": "Capture triggers (per export interval)",
+          "description": "Aggregate capture trigger outcomes; no per-click events.",
+          "config": { "show_legends": true, "legends_position": "bottom", "show_gridlines": true, "connect_nulls": false },
+          "queryType": "promql",
+          "queries": [{
+            "query": "sum by (trigger_kind, outcome) (dystil_capture_triggers{})",
+            "vrlFunctionQuery": null,
+            "customQuery": true,
+            "fields": {
+              "stream": "dystil_capture_triggers", "stream_type": "metrics",
+              "x": [{ "label": "Time", "alias": "time", "column": "_timestamp", "color": null }],
+              "y": [{ "label": "Triggers", "alias": "value", "column": "value", "color": "#2E86AB" }],
+              "z": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] },
+              "promql_labels": [], "promql_operations": []
+            },
+            "config": { "promql_legend": "{trigger_kind} · {outcome}" }
+          }],
+          "layout": { "x": 0, "y": 0, "w": 96, "h": 18, "i": 1 }
+        },
+        {
+          "id": "capture-images",
+          "type": "line",
+          "title": "Image capture outcomes (per export interval)",
+          "description": "Aggregate image-capture outcomes; no image data leaves the desktop.",
+          "config": { "show_legends": true, "legends_position": "bottom", "show_gridlines": true, "connect_nulls": false },
+          "queryType": "promql",
+          "queries": [{
+            "query": "sum by (outcome, capture_provider) (dystil_capture_images{})",
+            "vrlFunctionQuery": null,
+            "customQuery": true,
+            "fields": {
+              "stream": "dystil_capture_images", "stream_type": "metrics",
+              "x": [{ "label": "Time", "alias": "time", "column": "_timestamp", "color": null }],
+              "y": [{ "label": "Images", "alias": "value", "column": "value", "color": "#7E57C2" }],
+              "z": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] },
+              "promql_labels": [], "promql_operations": []
+            },
+            "config": { "promql_legend": "{outcome} · {capture_provider}" }
+          }],
+          "layout": { "x": 96, "y": 0, "w": 96, "h": 18, "i": 2 }
+        },
+        {
+          "id": "process-rss",
+          "type": "line",
+          "title": "Dystil process memory (RSS)",
+          "description": "Memory used by the Dystil desktop process only, sampled every 15 minutes.",
+          "config": { "show_legends": false, "unit": "bytes", "show_gridlines": true, "connect_nulls": false },
+          "queryType": "promql",
+          "queries": [{
+            "query": "dystil_process_memory_rss{}",
+            "vrlFunctionQuery": null,
+            "customQuery": true,
+            "fields": {
+              "stream": "dystil_process_memory_rss", "stream_type": "metrics",
+              "x": [{ "label": "Time", "alias": "time", "column": "_timestamp", "color": null }],
+              "y": [{ "label": "RSS", "alias": "value", "column": "value", "color": "#00897B" }],
+              "z": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] },
+              "promql_labels": [], "promql_operations": []
+            },
+            "config": { "promql_legend": "Dystil RSS" }
+          }],
+          "layout": { "x": 0, "y": 18, "w": 64, "h": 18, "i": 3 }
+        },
+        {
+          "id": "process-cpu",
+          "type": "line",
+          "title": "Dystil process CPU",
+          "description": "CPU used by the Dystil desktop process only, sampled every 15 minutes.",
+          "config": { "show_legends": false, "unit": "%", "show_gridlines": true, "connect_nulls": false },
+          "queryType": "promql",
+          "queries": [{
+            "query": "dystil_process_cpu_utilization{} / 100",
+            "vrlFunctionQuery": null,
+            "customQuery": true,
+            "fields": {
+              "stream": "dystil_process_cpu_utilization", "stream_type": "metrics",
+              "x": [{ "label": "Time", "alias": "time", "column": "_timestamp", "color": null }],
+              "y": [{ "label": "CPU", "alias": "value", "column": "value", "color": "#EF6C00" }],
+              "z": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] },
+              "promql_labels": [], "promql_operations": []
+            },
+            "config": { "promql_legend": "Dystil CPU" }
+          }],
+          "layout": { "x": 64, "y": 18, "w": 64, "h": 18, "i": 4 }
+        },
+        {
+          "id": "storage-data",
+          "type": "line",
+          "title": "Dystil local data used",
+          "description": "Size of Dystil's own local data directory, sampled every 15 minutes.",
+          "config": { "show_legends": false, "unit": "bytes", "show_gridlines": true, "connect_nulls": false },
+          "queryType": "promql",
+          "queries": [{
+            "query": "dystil_storage_data_bytes{}",
+            "vrlFunctionQuery": null,
+            "customQuery": true,
+            "fields": {
+              "stream": "dystil_storage_data_bytes", "stream_type": "metrics",
+              "x": [{ "label": "Time", "alias": "time", "column": "_timestamp", "color": null }],
+              "y": [{ "label": "Bytes", "alias": "value", "column": "value", "color": "#5E35B1" }],
+              "z": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] },
+              "promql_labels": [], "promql_operations": []
+            },
+            "config": { "promql_legend": "Dystil data" }
+          }],
+          "layout": { "x": 128, "y": 18, "w": 64, "h": 18, "i": 5 }
+        },
+        {
+          "id": "storage-available",
+          "type": "line",
+          "title": "Available disk space for Dystil",
+          "description": "Free space on the filesystem containing Dystil's data directory, sampled every 15 minutes.",
+          "config": { "show_legends": false, "unit": "bytes", "show_gridlines": true, "connect_nulls": false },
+          "queryType": "promql",
+          "queries": [{
+            "query": "dystil_storage_available_bytes{}",
+            "vrlFunctionQuery": null,
+            "customQuery": true,
+            "fields": {
+              "stream": "dystil_storage_available_bytes", "stream_type": "metrics",
+              "x": [{ "label": "Time", "alias": "time", "column": "_timestamp", "color": null }],
+              "y": [{ "label": "Bytes", "alias": "value", "column": "value", "color": "#3949AB" }],
+              "z": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] },
+              "promql_labels": [], "promql_operations": []
+            },
+            "config": { "promql_legend": "Available space" }
+          }],
+          "layout": { "x": 0, "y": 36, "w": 96, "h": 18, "i": 6 }
+        },
+        {
+          "id": "host-context",
+          "type": "line",
+          "title": "Host headroom (context only)",
+          "description": "Optional machine-level context; Dystil RSS and CPU are the primary resource signals.",
+          "config": { "show_legends": true, "legends_position": "bottom", "show_gridlines": true, "connect_nulls": false },
+          "queryType": "promql",
+          "queries": [{
+            "query": "dystil_host_cpu_utilization{} / 100",
+            "vrlFunctionQuery": null,
+            "customQuery": true,
+            "fields": {
+              "stream": "dystil_host_cpu_utilization", "stream_type": "metrics",
+              "x": [{ "label": "Time", "alias": "time", "column": "_timestamp", "color": null }],
+              "y": [{ "label": "CPU", "alias": "value", "column": "value", "color": "#546E7A" }],
+              "z": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] },
+              "promql_labels": [], "promql_operations": []
+            },
+            "config": { "promql_legend": "Host CPU" }
+          }],
+          "layout": { "x": 96, "y": 36, "w": 96, "h": 18, "i": 7 }
+        }
+      ]
+    }
+  ],
+  "default_datetime_duration": { "type": "relative", "relative_time_period": "24h" }
+}

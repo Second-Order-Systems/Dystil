@@ -62,6 +62,8 @@ mod server_core;
 #[allow(deprecated)]
 mod space_monitor;
 mod store;
+mod telemetry_exporter;
+mod telemetry_resources;
 mod tray;
 mod updates;
 mod window;
@@ -877,6 +879,7 @@ async fn main() {
                                 app_handle_clone.clone(),
                                 server.db.pool.clone(),
                                 server.data_path.clone(),
+                                server.telemetry.clone(),
                             );
 
                             // Phase 2: Start capture unless a persisted privacy
@@ -889,6 +892,10 @@ async fn main() {
                                     Ok(c) => Some(c),
                                     Err(e) => {
                                         error!("Failed to start capture: {}", e);
+                                        server.telemetry.record_app_start(
+                                            dystil_telemetry::AppStartReason::CaptureInitialization,
+                                            dystil_telemetry::Outcome::Failed,
+                                        );
                                         crate::health::set_boot_error(&e);
                                         crate::health::set_recording_status(
                                             crate::health::RecordingStatus::Error,
