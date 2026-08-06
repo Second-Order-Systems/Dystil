@@ -263,8 +263,14 @@ async function buildDystilMcpSidecar() {
 	if (!target) throw new Error(`unsupported platform for Dystil MCP sidecar: ${platform}`);
 
 	const workspace = path.resolve(cwd, '../../..');
+	// Cargo honors CARGO_TARGET_DIR even when --manifest-path points at another
+	// workspace. Resolve the copied sidecar from that same directory so CI can
+	// share one short, persistent target directory with the Tauri build.
+	const cargoTargetDir = process.env.CARGO_TARGET_DIR
+		? path.resolve(process.env.CARGO_TARGET_DIR)
+		: path.join(workspace, 'target');
 	const extension = target.includes('windows') ? '.exe' : '';
-	const source = path.join(workspace, 'target', target, 'release', `dystil-mcp${extension}`);
+	const source = path.join(cargoTargetDir, target, 'release', `dystil-mcp${extension}`);
 	const destination = path.join(cwd, `dystil-mcp-${target}${extension}`);
 
 	console.log(`building Dystil MCP sidecar for ${target}...`);
