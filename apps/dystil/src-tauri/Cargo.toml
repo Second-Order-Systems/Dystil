@@ -2,7 +2,7 @@
 
 [package]
 name = "dystil-app"
-version = "0.0.7"
+version = "0.0.8"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
