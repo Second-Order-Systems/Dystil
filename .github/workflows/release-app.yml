@@ -447,7 +447,61 @@ jobs:
           CXXFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=14.0 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8' || '-mmacosx-version-min=10.15' }}
           CMAKE_ARGS: -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF
           TAURI_BUNDLER_DMG_IGNORE_CI: true
-        run: bunx tauri build --verbose --target "${{ matrix.target }}" --features enterprise-client
+        run: |
+          set -euo pipefail
+
+          cleanup_dystil_dmg_mounts() {
+            while IFS= read -r device; do
+              [[ -n "$device" ]] || continue
+              echo "Detaching stale Dystil DMG mount: $device"
+              hdiutil detach "$device" -force || true
+            done < <(
+              mount | awk '
+                $1 ~ /^\/dev\/disk/ && $2 == "on" &&
+                tolower($3) ~ /^\/volumes\/dystil/ { print $1 }
+              ' | sort -u
+            )
+          }
+
+          max_attempts=3
+          for ((attempt=1; attempt<=max_attempts; attempt++)); do
+            cleanup_dystil_dmg_mounts
+            attempt_log="$RUNNER_TEMP/tauri-${{ matrix.target }}-attempt-${attempt}.log"
+            echo "macOS Tauri build attempt ${attempt}/${max_attempts}"
+
+            set +e
+            bunx tauri build --verbose \
+              --target "${{ matrix.target }}" \
+              --features enterprise-client 2>&1 | tee "$attempt_log"
+            tauri_status=${PIPESTATUS[0]}
+            set -e
+
+            if [[ "$tauri_status" -eq 0 ]]; then
+              exit 0
+            fi
+
+            if ! grep -Eiq 'hdiutil: couldn.t eject "disk[0-9]+" - Resource busy' "$attempt_log"; then
+              echo "Tauri failed for a non-retryable reason." >&2
+              exit "$tauri_status"
+            fi
+
+            busy_disk=$(sed -nE \
+              's/.*hdiutil: couldn.t eject "(disk[0-9]+)" - Resource busy.*/\1/p' \
+              "$attempt_log" | tail -1)
+            if [[ -n "$busy_disk" ]]; then
+              echo "Force-detaching busy temporary DMG device: /dev/$busy_disk"
+              hdiutil detach "/dev/$busy_disk" -force || true
+            fi
+
+            if [[ "$attempt" -eq "$max_attempts" ]]; then
+              echo "DMG creation remained busy after ${max_attempts} attempts." >&2
+              exit "$tauri_status"
+            fi
+
+            retry_delay=$((attempt * 5))
+            echo "Retrying Tauri DMG creation in ${retry_delay}s."
+            sleep "$retry_delay"
+          done
 
       - name: Remove temporary Apple signing keychain
         if: always() && matrix.os_type == 'macos'
