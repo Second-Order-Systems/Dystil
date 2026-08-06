@@ -1,0 +1,29 @@
+name: Release App
+
+# This default-branch stub makes the workflow_dispatch UI available for the
+# full workflow on feature branches. It intentionally cannot build or publish.
+on:
+  workflow_dispatch:
+    inputs:
+      publish_mode:
+        description: Build only, publish a branch preview, or publish a stable main release
+        required: true
+        type: choice
+        default: validate
+        options:
+          - validate
+          - preview
+          - stable
+
+permissions:
+  contents: read
+
+jobs:
+  stub:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain stub workflow
+        shell: bash
+        run: |
+          echo "This is the default-branch dispatch stub."
+          echo "Select the feature branch containing the full release workflow before running it."
