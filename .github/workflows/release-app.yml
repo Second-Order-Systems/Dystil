@@ -156,7 +156,9 @@ jobs:
             os_type: macos
             target: aarch64-apple-darwin
             artifact_arch: arm64
-          - runner: macos-26
+          # permission-flow builds a native Swift resource bundle. Build the
+          # Intel app on Intel rather than cross-compiling it on Apple Silicon.
+          - runner: macos-15-intel
             os_type: macos
             target: x86_64-apple-darwin
             artifact_arch: x64
@@ -251,6 +253,7 @@ jobs:
             libgtk-3-dev \
             libonig-dev \
             libopenblas-dev \
+            libpipewire-0.3-dev \
             libsecret-1-dev \
             libsqlite3-dev \
             libssl-dev \
@@ -292,6 +295,37 @@ jobs:
           cache-targets: false
           cache-directories: ${{ matrix.os_type == 'windows' && 'C:\t' || format('{0}/.cargo-target', github.workspace) }}
           key: release-${{ matrix.target }}-unified-target-v2
+
+      # The Windows Tauri resource configuration packages this DLL. Keep the
+      # pinned upstream archive out of the Rust cache because it is a runtime
+      # dependency, not a Cargo build artifact.
+      - name: Cache Windows ONNX Runtime
+        if: matrix.os_type == 'windows'
+        uses: actions/cache@v4
+        with:
+          path: apps/dystil/src-tauri/onnxruntime-win-x64-1.24.2
+          key: windows-onnxruntime-1.24.2
+
+      - name: Download Windows ONNX Runtime
+        if: matrix.os_type == 'windows'
+        shell: powershell
+        working-directory: ${{ env.APP_SRC_TAURI_DIR }}
+        run: |
+          $version = '1.24.2'
+          $runtimeDir = "onnxruntime-win-x64-$version"
+          if (Test-Path "$runtimeDir/lib/onnxruntime.dll") {
+            Write-Host "ONNX Runtime $version restored from cache."
+            exit 0
+          }
+          $zipFile = "$runtimeDir.zip"
+          Invoke-WebRequest `
+            -Uri "https://github.com/microsoft/onnxruntime/releases/download/v$version/$zipFile" `
+            -OutFile $zipFile
+          7z x $zipFile -y | Out-Host
+          Remove-Item $zipFile -Force
+          if (!(Test-Path "$runtimeDir/lib/onnxruntime.dll")) {
+            throw "ONNX Runtime DLL was not extracted to $runtimeDir/lib"
+          }
 
       - name: Install frontend dependencies
         working-directory: ${{ env.APP_DIR }}
