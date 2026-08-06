@@ -16,7 +16,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.4.17"
+version = "0.0.7"
 authors = ["aryan@frnd.app"]
 description = ""
 repository = ""
