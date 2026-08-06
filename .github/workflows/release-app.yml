@@ -249,6 +249,7 @@ jobs:
             curl \
             libasound2-dev \
             libayatana-appindicator3-dev \
+            libgbm-dev \
             libclang-dev \
             libgtk-3-dev \
             libonig-dev \
