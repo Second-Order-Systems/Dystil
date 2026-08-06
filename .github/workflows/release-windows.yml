@@ -6,6 +6,11 @@ on:
       version:
         description: Version override for src-tauri/Cargo.toml (optional)
         required: false
+      validation_only:
+        description: Build and validate caches without uploading the release to R2
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [main]
 
@@ -16,6 +21,21 @@ concurrency:
 env:
   APP_DIR: apps/dystil
   APP_SRC_TAURI_DIR: apps/dystil/src-tauri
+  # Keep both Rust workspaces in one short, cacheable directory. This avoids
+  # Windows path-length failures without deleting a restored target directory.
+  CARGO_TARGET_DIR: C:\t
+  CARGO_PROFILE_RELEASE_LTO: thin
+  CARGO_PROFILE_RELEASE_OPT_LEVEL: "2"
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+  CARGO_PROFILE_RELEASE_STRIP: none
+  CARGO_PROFILE_RELEASE_PANIC: abort
+  CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
+  GGML_NATIVE: "OFF"
+  GGML_AVX512: "OFF"
+  GGML_AVX512_VBMI: "OFF"
+  GGML_AVX512_VNNI: "OFF"
+  GGML_AVX512_BF16: "OFF"
+  CMAKE_ARGS: -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2
 
 jobs:
   check_commit:
@@ -75,19 +95,11 @@ jobs:
           node-version: 20
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        # Match rust-toolchain.toml. Installing floating stable as well caused
+        # every stable update to invalidate a build that actually uses 1.93.1.
+        uses: dtolnay/rust-toolchain@1.93.1
         with:
           targets: x86_64-pc-windows-msvc
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ runner.os }}-x86_64-pc-windows-msvc-${{ hashFiles('**/Cargo.lock') }}
-          cache-directories: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            apps/dystil/src-tauri/target
 
       - name: Cache node_modules
         uses: actions/cache@v4
@@ -99,19 +111,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bun-
 
+      - name: Cache Next.js build output
+        uses: actions/cache@v4
+        with:
+          path: apps/dystil/.next/cache
+          key: ${{ runner.os }}-next-${{ hashFiles('apps/dystil/bun.lock') }}-${{ hashFiles('apps/dystil/app/**', 'apps/dystil/components/**', 'apps/dystil/lib/**', 'apps/dystil/config/**', 'apps/dystil/public/**', 'apps/dystil/ready-to-use/**', 'apps/dystil/next.config.mjs', 'apps/dystil/postcss.config.mjs', 'apps/dystil/tailwind.config.ts', 'apps/dystil/tsconfig.json') }}
+          restore-keys: |
+            ${{ runner.os }}-next-${{ hashFiles('apps/dystil/bun.lock') }}-
+
       - name: Enable Git long paths
         shell: powershell
         run: git config --global core.longpaths true
 
-      - name: Shorten target dir
+      - name: Create short Cargo target dir
         shell: powershell
         run: |
-          $targetDir = "apps\dystil\src-tauri\target"
-          $shortDir = "C:\t"
-          if (Test-Path $shortDir) { Remove-Item -Recurse -Force $shortDir }
-          New-Item -ItemType Directory -Force -Path $shortDir | Out-Null
-          if (Test-Path $targetDir) { Remove-Item -Recurse -Force $targetDir }
-          cmd /c mklink /J $targetDir $shortDir
+          New-Item -ItemType Directory -Force -Path $env:CARGO_TARGET_DIR | Out-Null
 
       - name: Install frontend dependencies
         working-directory: ${{ env.APP_DIR }}
@@ -134,6 +149,18 @@ jobs:
           "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" |
             Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          # C:\t is shared by the root MCP workspace and the nested Tauri
+          # workspace. Cache it directly instead of restoring through a
+          # junction that the old workflow immediately deleted.
+          cache-targets: false
+          cache-directories: C:\t
+          # rust-cache already hashes Cargo manifests, lockfiles, toolchains,
+          # Cargo config, and the CARGO/CMAKE environment above.
+          key: windows-unified-target-v1
+
       - name: Download ONNX Runtime
         shell: powershell
         run: |
@@ -145,13 +172,6 @@ jobs:
           if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
           7z x $zipFile -o"apps/dystil/src-tauri/" -y
           Get-ChildItem "$extractDir/lib" | ForEach-Object { Write-Host $_.Name }
-
-      - name: Run pre_build.js
-        working-directory: ${{ env.APP_DIR }}
-        shell: powershell
-        env:
-          DYSTIL_RELEASE_TARGET: x86_64-pc-windows-msvc
-        run: bun ./scripts/pre_build.js
 
       - name: Use production config for release
         shell: bash
@@ -165,20 +185,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CI: true
-          CARGO_PROFILE_RELEASE_LTO: thin
-          CARGO_PROFILE_RELEASE_OPT_LEVEL: "2"
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
-          CARGO_INCREMENTAL: "true"
-          CARGO_PROFILE_RELEASE_STRIP: none
-          CARGO_PROFILE_RELEASE_PANIC: abort
-          CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
-          GGML_NATIVE: "OFF"
-          GGML_AVX512: "OFF"
-          GGML_AVX512_VBMI: "OFF"
-          GGML_AVX512_VNNI: "OFF"
-          GGML_AVX512_BF16: "OFF"
-          CMAKE_ARGS: -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2
           OPENBLAS_PATH: ${{ github.workspace }}\apps\dystil\src-tauri\openblas
+          DYSTIL_RELEASE_TARGET: x86_64-pc-windows-msvc
           DYSTIL_AUTH_MODE: individual
           DYSTIL_CLOUD_BASE_URL: https://coconut.2os.ai
         run: bunx tauri build --verbose --target x86_64-pc-windows-msvc --features enterprise-client
@@ -188,7 +196,7 @@ jobs:
         env:
           AUTH_MODE: individual
         run: |
-          $bundleDir = "apps/dystil/src-tauri/target/x86_64-pc-windows-msvc/release/bundle"
+          $bundleDir = Join-Path $env:CARGO_TARGET_DIR "x86_64-pc-windows-msvc/release/bundle"
           $stagingDir = "release-staging/$env:AUTH_MODE"
           New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
 
@@ -200,6 +208,7 @@ jobs:
             }
 
       - name: Upload release bundle to R2
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.validation_only != true }}
         shell: powershell
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
