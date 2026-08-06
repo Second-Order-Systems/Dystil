@@ -29,6 +29,10 @@ const args = parseArgs(process.argv.slice(2));
 for (const required of ["bundle-dir", "output", "os", "arch", "version"]) {
   if (!args[required]) throw new Error(`Missing --${required}`);
 }
+const edition = args.edition ?? "individual";
+if (!["individual", "enterprise"].includes(edition)) {
+  throw new Error(`Unsupported artifact edition: ${edition}`);
+}
 
 const allowedExtensions = {
   windows: [".exe"],
@@ -65,13 +69,13 @@ for (const extension of extensions) {
 const destinationDirectory = path.resolve(
   args.output,
   args.os,
-  "individual",
+  edition,
 );
 await mkdir(destinationDirectory, { recursive: true });
 
 for (const source of selected) {
   const extension = extensions.find((candidate) => source.endsWith(candidate));
-  const filename = `Dystil_${args.version}-${args.arch}-setup-individual${extension}`;
+  const filename = `Dystil_${args.version}-${args.arch}-setup-${edition}${extension}`;
   const destination = path.join(destinationDirectory, filename);
   await copyFile(source, destination);
   console.log(`${source} -> ${destination}`);

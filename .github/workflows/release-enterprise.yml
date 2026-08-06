@@ -1,0 +1,17 @@
+name: Release Enterprise App
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    uses: ./.github/workflows/release-app.yml
+    with:
+      publish_mode: enterprise
+      cargo_features: enterprise-client
+      cloud_base_url: https://coconut.2os.ai
+      artifact_edition: enterprise
+    secrets: inherit

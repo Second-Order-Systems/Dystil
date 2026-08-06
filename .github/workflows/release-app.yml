@@ -1,6 +1,23 @@
 name: Release App
 
 on:
+  workflow_call:
+    inputs:
+      publish_mode:
+        required: true
+        type: string
+      cargo_features:
+        required: false
+        type: string
+        default: onnx-cpu
+      cloud_base_url:
+        required: false
+        type: string
+        default: ""
+      artifact_edition:
+        required: false
+        type: string
+        default: individual
   workflow_dispatch:
     inputs:
       publish_mode:
@@ -89,7 +106,7 @@ jobs:
           fi
 
           subject=$(git log -1 --pretty=%s)
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$EVENT_NAME" == "workflow_call" ]]; then
             mode="$REQUESTED_MODE"
           elif [[ "$subject" =~ ^release-app:\ v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             mode=stable
@@ -306,6 +323,15 @@ jobs:
           cache-directories: ${{ matrix.os_type == 'windows' && 'C:\t' || format('{0}/.cargo-target', github.workspace) }}
           key: release-${{ matrix.target }}-unified-target-v2
 
+      - name: Configure release flavor
+        shell: bash
+        env:
+          RELEASE_CLOUD_BASE_URL: ${{ inputs.cloud_base_url }}
+        run: |
+          if [[ -n "$RELEASE_CLOUD_BASE_URL" ]]; then
+            echo "DYSTIL_CLOUD_BASE_URL=$RELEASE_CLOUD_BASE_URL" >> "$GITHUB_ENV"
+          fi
+
       # The Windows Tauri resource configuration packages this DLL. Keep the
       # pinned upstream archive out of the Rust cache because it is a runtime
       # dependency, not a Cargo build artifact.
@@ -423,11 +449,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CI: true
           DYSTIL_RELEASE_TARGET: ${{ matrix.target }}
-          DYSTIL_AUTH_MODE: individual
-          DYSTIL_CLOUD_BASE_URL: https://coconut.2os.ai
           OPENBLAS_PATH: ${{ github.workspace }}\apps\dystil\src-tauri\openblas
           CMAKE_ARGS: -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2
-        run: bunx tauri build --verbose --target ${{ matrix.target }} --features enterprise-client
+        run: bunx tauri build --verbose --target ${{ matrix.target }} --features "${{ inputs.cargo_features || 'onnx-cpu' }}"
 
       - name: Build macOS
         if: matrix.os_type == 'macos'
@@ -439,8 +463,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CI: true
           DYSTIL_RELEASE_TARGET: ${{ matrix.target }}
-          DYSTIL_AUTH_MODE: individual
-          DYSTIL_CLOUD_BASE_URL: https://coconut.2os.ai
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'aarch64-apple-darwin' && '14.0' || '10.15' }}
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'aarch64-apple-darwin' && '14.0' || '10.15' }}
           CFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=14.0 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8' || '-mmacosx-version-min=10.15' }}
@@ -472,7 +494,7 @@ jobs:
             set +e
             bunx tauri build --verbose \
               --target "${{ matrix.target }}" \
-              --features enterprise-client 2>&1 | tee "$attempt_log"
+              --features "${{ inputs.cargo_features || 'onnx-cpu' }}" 2>&1 | tee "$attempt_log"
             tauri_status=${PIPESTATUS[0]}
             set -e
 
@@ -520,11 +542,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CI: true
           DYSTIL_RELEASE_TARGET: ${{ matrix.target }}
-          DYSTIL_AUTH_MODE: individual
-          DYSTIL_CLOUD_BASE_URL: https://coconut.2os.ai
           CMAKE_ARGS: -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF
           NO_STRIP: true
-        run: bunx tauri build --verbose --target "${{ matrix.target }}" --features enterprise-client
+        run: bunx tauri build --verbose --target "${{ matrix.target }}" --features "${{ inputs.cargo_features || 'onnx-cpu' }}"
 
       - name: Remove bundled host libraries from AppImage
         if: matrix.os_type == 'linux'
@@ -556,7 +576,8 @@ jobs:
             --output "$GITHUB_WORKSPACE/release-staging" \
             --os "${{ matrix.os_type }}" \
             --arch "${{ matrix.artifact_arch }}" \
-            --version "${{ needs.plan.outputs.version }}"
+            --version "${{ needs.plan.outputs.version }}" \
+            --edition "${{ inputs.artifact_edition || 'individual' }}"
         working-directory: ${{ env.APP_DIR }}
 
       - name: Upload staged artifacts
@@ -569,7 +590,7 @@ jobs:
 
   publish:
     needs: [plan, build]
-    if: needs.plan.outputs.mode == 'preview' || needs.plan.outputs.mode == 'stable'
+    if: needs.plan.outputs.mode == 'preview' || needs.plan.outputs.mode == 'stable' || needs.plan.outputs.mode == 'enterprise'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -599,10 +620,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          edition="${{ inputs.artifact_edition || 'individual' }}"
           find release-artifacts -type f -print | sort
-          [[ $(find release-artifacts/windows/individual -type f -name '*.exe' | wc -l) -eq 1 ]]
-          [[ $(find release-artifacts/macos/individual -type f -name '*.dmg' | wc -l) -eq 2 ]]
-          [[ $(find release-artifacts/linux/individual -type f \( -name '*.AppImage' -o -name '*.deb' \) | wc -l) -eq 2 ]]
+          [[ $(find "release-artifacts/windows/$edition" -type f -name '*.exe' | wc -l) -eq 1 ]]
+          [[ $(find "release-artifacts/macos/$edition" -type f -name '*.dmg' | wc -l) -eq 2 ]]
+          [[ $(find "release-artifacts/linux/$edition" -type f \( -name '*.AppImage' -o -name '*.deb' \) | wc -l) -eq 2 ]]
           [[ $(find release-artifacts -type f | wc -l) -eq 5 ]]
 
       - name: Create draft GitHub Release
@@ -636,6 +658,8 @@ jobs:
           endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           if [[ "$RELEASE_MODE" == "stable" ]]; then
             prefix="releases/v${RELEASE_VERSION}"
+          elif [[ "$RELEASE_MODE" == "enterprise" ]]; then
+            prefix="enterprise/v${RELEASE_VERSION}/${SHORT_SHA}"
           else
             prefix="previews/${BRANCH_SLUG}/${SHORT_SHA}"
           fi
