@@ -40,6 +40,7 @@ mod auth;
 mod auth_proxy;
 mod memory_proxy;
 mod semantic_trees;
+mod telemetry;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Config {
@@ -49,6 +50,7 @@ pub(crate) struct Config {
     ai_gateway: Option<ai_gateway::AiGatewayConfig>,
     memory: MemoryServiceConfig,
     storage: StorageConfig,
+    telemetry: telemetry::TelemetryRelayConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +87,7 @@ impl Config {
             ai_gateway: ai_gateway::AiGatewayConfig::from_env()?,
             memory: MemoryServiceConfig::from_env()?,
             storage: StorageConfig::from_env()?,
+            telemetry: telemetry::TelemetryRelayConfig::from_env()?,
         })
     }
 }
@@ -296,6 +299,15 @@ fn router(state: AppState) -> Router {
         .route("/devices/self/capture-state", put(put_device_capture_state))
         .route("/devices/:device_id/revoke", post(revoke_device))
         .route("/v1/models", get(ai_gateway::get_models))
+        .route(
+            "/v1/telemetry/v1/metrics",
+            post(telemetry::post_metrics)
+                .layer(DefaultBodyLimit::max(telemetry::MAX_REQUEST_BYTES)),
+        )
+        .route(
+            "/v1/telemetry/v1/traces",
+            post(telemetry::post_traces).layer(DefaultBodyLimit::max(telemetry::MAX_REQUEST_BYTES)),
+        )
         .route(
             "/v1/chat/completions",
             post(ai_gateway::post_chat_completions),
@@ -1082,6 +1094,7 @@ mod tests {
                 secret_access_key: "test".to_string(),
                 presign_expiry_secs: 60,
             },
+            telemetry: telemetry::TelemetryRelayConfig::disabled_for_test(),
         });
         let pool = PgPoolOptions::new()
             .max_connections(2)

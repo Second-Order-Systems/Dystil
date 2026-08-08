@@ -7,6 +7,7 @@ use specta::Type;
 use sqlx::{Row, SqlitePool};
 use tauri::{AppHandle, State};
 use tracing::{info, warn};
+use dystil_telemetry::{ErrorKind, Outcome, StorageOperationKind, Telemetry};
 
 use crate::recording::RecordingState;
 use crate::store::SettingsStore;
@@ -141,14 +142,34 @@ pub async fn set_retention_days(
         // The policy is already persisted. A transient database lock should
         // not make the UI claim the choice was rejected; housekeeping retries
         // daily and the next manual apply/refresh can run another pass.
-        if let Err(error) = cleanup_expired_raw_history(&pool, &media_dir, retention_days).await {
+        let telemetry = {
+            state
+                .server
+                .lock()
+                .await
+                .as_ref()
+                .map(|server| server.telemetry.clone())
+        };
+        if let Err(error) = cleanup_expired_raw_history(
+            &pool,
+            &media_dir,
+            retention_days,
+            telemetry.as_deref(),
+        )
+        .await
+        {
             warn!(error = %error, "retention was saved; immediate cleanup will be retried");
         }
     }
     storage_view(&app, &state, true).await
 }
 
-pub fn start_housekeeping(app: AppHandle, pool: SqlitePool, media_dir: PathBuf) {
+pub fn start_housekeeping(
+    app: AppHandle,
+    pool: SqlitePool,
+    media_dir: PathBuf,
+    telemetry: std::sync::Arc<Telemetry>,
+) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
         loop {
@@ -161,8 +182,22 @@ pub fn start_housekeeping(app: AppHandle, pool: SqlitePool, media_dir: PathBuf) 
             if days == 0 {
                 continue;
             }
-            if let Err(error) = cleanup_expired_raw_history(&pool, &media_dir, days).await {
-                warn!(error = %error, "retention cleanup failed");
+            match cleanup_expired_raw_history(&pool, &media_dir, days, Some(&telemetry)).await {
+                Ok(()) => {
+                    telemetry.record_storage_operation(
+                        StorageOperationKind::RetentionCleanup,
+                        Outcome::Succeeded,
+                        None,
+                    );
+                }
+                Err(error) => {
+                    telemetry.record_storage_operation(
+                        StorageOperationKind::RetentionCleanup,
+                        Outcome::Failed,
+                        Some(ErrorKind::Database),
+                    );
+                    warn!(error = %error, "retention cleanup failed");
+                }
             }
         }
     });
@@ -172,6 +207,7 @@ pub async fn cleanup_expired_raw_history(
     pool: &SqlitePool,
     media_dir: &Path,
     retention_days: u32,
+    telemetry: Option<&Telemetry>,
 ) -> Result<(), String> {
     validate_retention_days(retention_days)?;
     if retention_days == 0 {
@@ -287,7 +323,20 @@ pub async fn cleanup_expired_raw_history(
             .execute(pool)
             .await;
         if let Err(error) = sqlx::query("VACUUM").execute(pool).await {
+            if let Some(telemetry) = telemetry {
+                telemetry.record_storage_operation(
+                    StorageOperationKind::DatabaseCompaction,
+                    Outcome::Failed,
+                    Some(ErrorKind::Database),
+                );
+            }
             warn!(error = %error, "expired history was removed but database compaction was deferred");
+        } else if let Some(telemetry) = telemetry {
+            telemetry.record_storage_operation(
+                StorageOperationKind::DatabaseCompaction,
+                Outcome::Succeeded,
+                None,
+            );
         }
     }
     info!(
@@ -367,7 +416,7 @@ mod tests {
         .await
         .unwrap();
 
-        cleanup_expired_raw_history(&pool, &media_dir, 7)
+        cleanup_expired_raw_history(&pool, &media_dir, 7, None)
             .await
             .unwrap();
 

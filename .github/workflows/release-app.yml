@@ -14,10 +14,18 @@ on:
         required: false
         type: string
         default: ""
+      telemetry_endpoint:
+        required: false
+        type: string
+        default: ""
       artifact_edition:
         required: false
         type: string
         default: individual
+      platform:
+        required: false
+        type: string
+        default: all
   workflow_dispatch:
     inputs:
       publish_mode:
@@ -29,6 +37,16 @@ on:
           - validate
           - preview
           - stable
+      platform:
+        description: Platform to build and publish
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - windows
+          - macos
+          - linux
   push:
     branches: [main]
 
@@ -66,6 +84,8 @@ jobs:
       branch_slug: ${{ steps.plan.outputs.branch_slug }}
       short_sha: ${{ steps.plan.outputs.short_sha }}
       source_sha: ${{ steps.plan.outputs.source_sha }}
+      build_matrix: ${{ steps.plan.outputs.build_matrix }}
+      selected_platforms: ${{ steps.plan.outputs.selected_platforms }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -77,6 +97,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           REQUESTED_MODE: ${{ inputs.publish_mode }}
+          REQUESTED_PLATFORM: ${{ inputs.platform || 'all' }}
           REF_NAME: ${{ github.ref_name }}
           REF: ${{ github.ref }}
         run: |
@@ -143,6 +164,31 @@ jobs:
             should_build=true
           fi
 
+          case "$REQUESTED_PLATFORM" in
+            all)
+              build_matrix='{"include":[{"runner":"windows-2022","os_type":"windows","target":"x86_64-pc-windows-msvc","artifact_arch":"x64"},{"runner":"macos-26","os_type":"macos","target":"aarch64-apple-darwin","artifact_arch":"arm64"},{"runner":"macos-15-intel","os_type":"macos","target":"x86_64-apple-darwin","artifact_arch":"x64"},{"runner":"ubuntu-24.04","os_type":"linux","target":"x86_64-unknown-linux-gnu","artifact_arch":"x64"}]}'
+              selected_platforms='windows macos linux'
+              ;;
+            windows)
+              build_matrix='{"include":[{"runner":"windows-2022","os_type":"windows","target":"x86_64-pc-windows-msvc","artifact_arch":"x64"}]}'
+              selected_platforms=windows
+              ;;
+            macos)
+              # permission-flow builds a native Swift resource bundle, so the
+              # Intel app must be built on Intel rather than cross-compiled.
+              build_matrix='{"include":[{"runner":"macos-26","os_type":"macos","target":"aarch64-apple-darwin","artifact_arch":"arm64"},{"runner":"macos-15-intel","os_type":"macos","target":"x86_64-apple-darwin","artifact_arch":"x64"}]}'
+              selected_platforms=macos
+              ;;
+            linux)
+              build_matrix='{"include":[{"runner":"ubuntu-24.04","os_type":"linux","target":"x86_64-unknown-linux-gnu","artifact_arch":"x64"}]}'
+              selected_platforms=linux
+              ;;
+            *)
+              echo "Unsupported platform: $REQUESTED_PLATFORM" >&2
+              exit 1
+              ;;
+          esac
+
           {
             echo "should_build=$should_build"
             echo "mode=$mode"
@@ -151,6 +197,8 @@ jobs:
             echo "branch_slug=$branch_slug"
             echo "short_sha=$short_sha"
             echo "source_sha=$source_sha"
+            echo "build_matrix=$build_matrix"
+            echo "selected_platforms=$selected_platforms"
           } >> "$GITHUB_OUTPUT"
 
           echo "Mode: $mode"
@@ -163,26 +211,7 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runner: windows-2022
-            os_type: windows
-            target: x86_64-pc-windows-msvc
-            artifact_arch: x64
-          - runner: macos-26
-            os_type: macos
-            target: aarch64-apple-darwin
-            artifact_arch: arm64
-          # permission-flow builds a native Swift resource bundle. Build the
-          # Intel app on Intel rather than cross-compiling it on Apple Silicon.
-          - runner: macos-15-intel
-            os_type: macos
-            target: x86_64-apple-darwin
-            artifact_arch: x64
-          - runner: ubuntu-24.04
-            os_type: linux
-            target: x86_64-unknown-linux-gnu
-            artifact_arch: x64
+      matrix: ${{ fromJSON(needs.plan.outputs.build_matrix) }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -327,9 +356,13 @@ jobs:
         shell: bash
         env:
           RELEASE_CLOUD_BASE_URL: ${{ inputs.cloud_base_url }}
+          RELEASE_TELEMETRY_ENDPOINT: ${{ inputs.telemetry_endpoint }}
         run: |
           if [[ -n "$RELEASE_CLOUD_BASE_URL" ]]; then
             echo "DYSTIL_CLOUD_BASE_URL=$RELEASE_CLOUD_BASE_URL" >> "$GITHUB_ENV"
+          fi
+          if [[ -n "$RELEASE_TELEMETRY_ENDPOINT" ]]; then
+            echo "DYSTIL_TELEMETRY_ENDPOINT=$RELEASE_TELEMETRY_ENDPOINT" >> "$GITHUB_ENV"
           fi
 
       # The Windows Tauri resource configuration packages this DLL. Keep the
@@ -608,6 +641,7 @@ jobs:
       SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
       BRANCH_SLUG: ${{ needs.plan.outputs.branch_slug }}
       SHORT_SHA: ${{ needs.plan.outputs.short_sha }}
+      SELECTED_PLATFORMS: ${{ needs.plan.outputs.selected_platforms }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/download-artifact@v4
@@ -622,10 +656,30 @@ jobs:
           set -euo pipefail
           edition="${{ inputs.artifact_edition || 'individual' }}"
           find release-artifacts -type f -print | sort
-          [[ $(find "release-artifacts/windows/$edition" -type f -name '*.exe' | wc -l) -eq 1 ]]
-          [[ $(find "release-artifacts/macos/$edition" -type f -name '*.dmg' | wc -l) -eq 2 ]]
-          [[ $(find "release-artifacts/linux/$edition" -type f \( -name '*.AppImage' -o -name '*.deb' \) | wc -l) -eq 2 ]]
-          [[ $(find release-artifacts -type f | wc -l) -eq 5 ]]
+          expected_total=0
+          for platform in $SELECTED_PLATFORMS; do
+            artifact_dir="release-artifacts/$platform/$edition"
+            case "$platform" in
+              windows)
+                [[ $(find "$artifact_dir" -type f -name '*.exe' | wc -l) -eq 1 ]]
+                expected_total=$((expected_total + 1))
+                ;;
+              macos)
+                [[ $(find "$artifact_dir" -type f -name '*.dmg' | wc -l) -eq 2 ]]
+                expected_total=$((expected_total + 2))
+                ;;
+              linux)
+                [[ $(find "$artifact_dir" -type f -name '*.AppImage' | wc -l) -eq 1 ]]
+                [[ $(find "$artifact_dir" -type f -name '*.deb' | wc -l) -eq 1 ]]
+                expected_total=$((expected_total + 2))
+                ;;
+              *)
+                echo "Unsupported platform in build plan: $platform" >&2
+                exit 1
+                ;;
+            esac
+          done
+          [[ $(find release-artifacts -type f | wc -l) -eq "$expected_total" ]]
 
       - name: Create draft GitHub Release
         if: needs.plan.outputs.mode == 'stable'

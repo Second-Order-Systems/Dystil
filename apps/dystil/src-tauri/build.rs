@@ -32,6 +32,7 @@ fn write_generated_app_config() {
     // cargo/tauri can compile without the JS pipeline, so rebuild the same
     // generated artifact here before Rust code includes it.
     println!("cargo:rerun-if-env-changed=DYSTIL_BUILD_CHANNEL");
+    println!("cargo:rustc-env=DYSTIL_BUILD_CHANNEL={channel}");
     println!("cargo:rerun-if-changed={}", config_path.display());
 
     let raw = std::fs::read_to_string(&config_path).unwrap_or_else(|e| {
@@ -67,6 +68,7 @@ fn configure_cloud_build() {
         .filter(|value| !value.is_empty());
 
     println!("cargo:rerun-if-env-changed=DYSTIL_CLOUD_BASE_URL");
+    println!("cargo:rerun-if-env-changed=DYSTIL_TELEMETRY_ENDPOINT");
 
     match (cloud_sync, configured_url) {
         (false, None) => {}
@@ -79,12 +81,52 @@ fn configure_cloud_build() {
         }
         (true, Some(url)) => {
             let parsed = url::Url::parse(&url).unwrap_or_else(|error| {
-                panic!("DYSTIL_CLOUD_BASE_URL must be a valid HTTPS URL: {error}")
+                panic!("DYSTIL_CLOUD_BASE_URL must be a valid URL: {error}")
             });
-            if parsed.scheme() != "https" || parsed.host_str().is_none() {
-                panic!("DYSTIL_CLOUD_BASE_URL must be a valid HTTPS URL");
+            let localhost_http = parsed.scheme() == "http"
+                && matches!(
+                    parsed.host_str(),
+                    Some("localhost") | Some("127.0.0.1") | Some("::1")
+                );
+            let release = std::env::var("PROFILE").as_deref() == Ok("release");
+            if parsed.host_str().is_none()
+                || (parsed.scheme() != "https" && (release || !localhost_http))
+            {
+                panic!("DYSTIL_CLOUD_BASE_URL must be HTTPS (debug builds may use localhost HTTP)");
             }
             println!("cargo:rustc-env=DYSTIL_CLOUD_BASE_URL={url}");
+        }
+    }
+
+    let telemetry_endpoint = std::env::var("DYSTIL_TELEMETRY_ENDPOINT")
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty());
+    match (cloud_sync, telemetry_endpoint) {
+        (false, None) => {}
+        (false, Some(_)) => panic!(
+            "DYSTIL_TELEMETRY_ENDPOINT is set but the cloud-sync feature is disabled; \
+             refuse to embed a telemetry endpoint in a community build"
+        ),
+        (true, None) => {}
+        (true, Some(endpoint)) => {
+            let parsed = url::Url::parse(&endpoint).unwrap_or_else(|error| {
+                panic!("DYSTIL_TELEMETRY_ENDPOINT must be a valid URL: {error}")
+            });
+            let localhost_http = parsed.scheme() == "http"
+                && matches!(
+                    parsed.host_str(),
+                    Some("localhost") | Some("127.0.0.1") | Some("::1")
+                );
+            let release = std::env::var("PROFILE").as_deref() == Ok("release");
+            if parsed.host_str().is_none()
+                || (parsed.scheme() != "https" && (release || !localhost_http))
+            {
+                panic!(
+                    "DYSTIL_TELEMETRY_ENDPOINT must be HTTPS (debug builds may use localhost HTTP)"
+                );
+            }
+            println!("cargo:rustc-env=DYSTIL_TELEMETRY_ENDPOINT={endpoint}");
         }
     }
 }

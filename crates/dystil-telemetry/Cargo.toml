@@ -1,0 +1,10 @@
+[package]
+name = "dystil-telemetry"
+version.workspace = true
+authors.workspace = true
+description = "Privacy-safe telemetry schema and local aggregation for Dystil."
+repository.workspace = true
+license-file.workspace = true
+edition.workspace = true
+
+[dependencies]

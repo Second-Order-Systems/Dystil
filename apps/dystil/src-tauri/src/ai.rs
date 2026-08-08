@@ -6,6 +6,7 @@
 use crate::recording::RecordingState;
 use chrono::{DateTime, FixedOffset, Local, Offset};
 use dystil_ai::{AiError, CliProvider, ProviderKind};
+use dystil_telemetry::{AiErrorKind, AiOperationKind, AiProviderKind, Outcome};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -116,11 +117,22 @@ fn watch_codex_login(app_handle: AppHandle) {
                 .and_then(|value| value.authenticated)
                 .unwrap_or(false);
             if authenticated || completed {
+                let state = app_handle.state::<RecordingState>();
+                let result: Result<(), String> = if authenticated {
+                    Ok(())
+                } else {
+                    Err("Codex sign-in ended without an authenticated session".into())
+                };
+                record_ai_result(&state, &ProviderKind::Codex, AiOperationKind::SignIn, &result)
+                    .await;
                 let _ = app_handle.emit("ai-provider-login-updated", status);
                 return;
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
+        let state = app_handle.state::<RecordingState>();
+        let result: Result<(), String> = Err("Codex sign-in timed out".into());
+        record_ai_result(&state, &ProviderKind::Codex, AiOperationKind::SignIn, &result).await;
         let _ = app_handle.emit(
             "ai-provider-login-updated",
             serde_json::json!({"error": "Codex sign-in timed out. Try again."}),
@@ -171,6 +183,62 @@ fn provider_error_kind(error: &AiError) -> &'static str {
     }
 }
 
+fn telemetry_provider(provider: &ProviderKind) -> AiProviderKind {
+    match provider {
+        ProviderKind::Codex => AiProviderKind::Codex,
+        ProviderKind::Claude => AiProviderKind::Claude,
+    }
+}
+
+// Classification happens locally against Dystil-owned boundary messages; the
+// message itself is never recorded or exported.
+fn telemetry_error_kind(operation: AiOperationKind, error: &str) -> AiErrorKind {
+    let error = error.to_ascii_lowercase();
+    if error.contains("bundled bun") || error.contains("mcp sidecar") {
+        AiErrorKind::SidecarMissing
+    } else if error.contains("not installed") || error.contains("executable was not found") {
+        AiErrorKind::RuntimeMissing
+    } else if error.contains("timed out") {
+        AiErrorKind::Timeout
+    } else if error.contains("login is required") {
+        AiErrorKind::LoginRequired
+    } else if error.contains("authorization code") || error.contains("rejected") {
+        AiErrorKind::AuthenticationFailed
+    } else if error.contains("invalid output") {
+        AiErrorKind::InvalidOutput
+    } else if error.contains("database") || error.contains("directory") || error.contains("guidance") {
+        AiErrorKind::Filesystem
+    } else if matches!(operation, AiOperationKind::McpSetup | AiOperationKind::McpConnect)
+        && (error.contains("could not start") || error.contains("cli"))
+    {
+        AiErrorKind::McpClientUnavailable
+    } else if matches!(operation, AiOperationKind::McpSetup | AiOperationKind::McpConnect) {
+        AiErrorKind::McpRegistrationFailed
+    } else {
+        AiErrorKind::ProcessFailed
+    }
+}
+
+async fn record_ai_result<T>(
+    state: &RecordingState,
+    provider: &ProviderKind,
+    operation: AiOperationKind,
+    result: &Result<T, String>,
+) {
+    let telemetry = state
+        .server
+        .lock()
+        .await
+        .as_ref()
+        .map(|server| server.telemetry.clone());
+    let Some(telemetry) = telemetry else { return };
+    let (outcome, error) = match result {
+        Ok(_) => (Outcome::Succeeded, AiErrorKind::None),
+        Err(error) => (Outcome::Failed, telemetry_error_kind(operation, error)),
+    };
+    telemetry.record_ai_operation(telemetry_provider(provider), operation, outcome, error);
+}
+
 pub(crate) fn provider_kind(provider: &str) -> Result<ProviderKind, String> {
     match provider.trim().to_ascii_lowercase().as_str() {
         "codex" | "chatgpt" | "chatgpt_plus" => Ok(ProviderKind::Codex),
@@ -208,15 +276,19 @@ pub(crate) fn bundled_bun() -> Result<PathBuf, String> {
             return Ok(path);
         }
     }
-    let file = format!(
-        "bun-{}{}",
-        target_triple(),
-        if cfg!(target_os = "windows") {
-            ".exe"
-        } else {
-            ""
-        }
-    );
+    let extension = if cfg!(target_os = "windows") {
+        ".exe"
+    } else {
+        ""
+    };
+    // Tauri consumes the target-qualified source file named in `externalBin`,
+    // then installs it under the configured sidecar name (`bun`/`bun.exe`).
+    // Keep the qualified name first so development builds still use the freshly
+    // staged binary in `src-tauri`.
+    let names = [
+        format!("bun-{}{}", target_triple(), extension),
+        format!("bun{extension}"),
+    ];
     let mut roots = Vec::new();
     if let Ok(executable) = std::env::current_exe() {
         if let Some(parent) = executable.parent() {
@@ -225,11 +297,25 @@ pub(crate) fn bundled_bun() -> Result<PathBuf, String> {
     }
     #[cfg(debug_assertions)]
     roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-    roots
-        .into_iter()
-        .map(|root| root.join(&file))
-        .find(|path| path.is_file())
-        .ok_or_else(|| format!("Dystil's bundled Bun sidecar ({file}) is unavailable"))
+    find_bundled_binary(&roots, &names).ok_or_else(|| {
+        format!(
+            "Dystil's bundled Bun sidecar ({}) is unavailable",
+            names.join(" or ")
+        )
+    })
+}
+
+fn find_bundled_binary(roots: &[PathBuf], names: &[String]) -> Option<PathBuf> {
+    for root in roots {
+        for name in names {
+            for candidate in [root.join(name), root.join("binaries").join(name)] {
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn bun_install_root(provider: &ProviderKind) -> Result<PathBuf, String> {
@@ -525,6 +611,7 @@ pub async fn ai_provider_models(provider: String) -> Result<Vec<AiProviderModelV
 #[specta::specta]
 pub async fn ai_provider_install(
     app_handle: AppHandle,
+    state: State<'_, RecordingState>,
     provider: String,
 ) -> Result<AiProviderStatusView, String> {
     let provider = provider_kind(&provider)?;
@@ -538,13 +625,17 @@ pub async fn ai_provider_install(
     );
     if let Err(error) = install_with_bundled_bun(&app_handle, &provider).await {
         warn!(provider = provider.slug(), %error, "managed AI provider installation failed");
+        let result: Result<AiProviderStatusView, String> = Err(error.clone());
+        record_ai_result(&state, &provider, AiOperationKind::Install, &result).await;
         return Err(error);
     }
     let _ = app_handle.emit(
         "ai-provider-install-progress",
         serde_json::json!({"provider": provider.slug(), "phase": "verifying"}),
     );
-    ai_provider_status(provider.slug().into()).await
+    let result = ai_provider_status(provider.slug().into()).await;
+    record_ai_result(&state, &provider, AiOperationKind::Install, &result).await;
+    result
 }
 
 /// Register Dystil's read-only stdio sidecar in the user's own Codex CLI or
@@ -561,8 +652,25 @@ pub async fn external_mcp_add(
         "codex" | "claude" => client,
         _ => return Err("client must be codex or claude".into()),
     };
-    let sidecar = mcp_binary(&app_handle)?;
-    let database = capture_database_path(&state).await?;
+    let provider = if client == "codex" { AiProviderKind::Codex } else { AiProviderKind::Claude };
+    let sidecar = match mcp_binary(&app_handle) {
+        Ok(value) => value,
+        Err(error) => {
+            let result: Result<(), String> = Err(error.clone());
+            let provider_kind = if matches!(provider, AiProviderKind::Codex) { ProviderKind::Codex } else { ProviderKind::Claude };
+            record_ai_result(&state, &provider_kind, AiOperationKind::McpSetup, &result).await;
+            return Err(error);
+        }
+    };
+    let database = match capture_database_path(&state).await {
+        Ok(value) => value,
+        Err(error) => {
+            let result: Result<(), String> = Err(error.clone());
+            let provider_kind = if matches!(provider, AiProviderKind::Codex) { ProviderKind::Codex } else { ProviderKind::Claude };
+            record_ai_result(&state, &provider_kind, AiOperationKind::McpSetup, &result).await;
+            return Err(error);
+        }
+    };
     let mut command = Command::new(&client);
     if client == "codex" {
         command.args(["mcp", "add", "dystil", "--"]).arg(&sidecar);
@@ -586,14 +694,30 @@ pub async fn external_mcp_add(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = timeout(Duration::from_secs(30), command.output())
-        .await
-        .map_err(|_| format!("{client} did not finish configuring Dystil within 30 seconds"))?
-        .map_err(|error| format!("could not start the external {client} CLI: {error}"))?;
+    let output = match timeout(Duration::from_secs(30), command.output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => {
+            let error = format!("could not start the external {client} CLI: {error}");
+            let result: Result<(), String> = Err(error.clone());
+            let provider_kind = if matches!(provider, AiProviderKind::Codex) { ProviderKind::Codex } else { ProviderKind::Claude };
+            record_ai_result(&state, &provider_kind, AiOperationKind::McpSetup, &result).await;
+            return Err(error);
+        }
+        Err(_) => {
+            let error = format!("{client} did not finish configuring Dystil within 30 seconds");
+            let result: Result<(), String> = Err(error.clone());
+            let provider_kind = if matches!(provider, AiProviderKind::Codex) { ProviderKind::Codex } else { ProviderKind::Claude };
+            record_ai_result(&state, &provider_kind, AiOperationKind::McpSetup, &result).await;
+            return Err(error);
+        }
+    };
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);
         let detail = dystil_redact::sanitize_text(detail.trim());
         warn!(client, "external MCP setup failed");
+        let provider_kind = if matches!(provider, AiProviderKind::Codex) { ProviderKind::Codex } else { ProviderKind::Claude };
+        let result: Result<(), String> = Err("MCP registration failed".into());
+        record_ai_result(&state, &provider_kind, AiOperationKind::McpSetup, &result).await;
         return Err(if detail.is_empty() {
             format!("{client} could not add Dystil. Ensure its CLI is installed and try again.")
         } else {
@@ -608,6 +732,9 @@ pub async fn external_mcp_add(
         })?;
     }
     info!(client, "external MCP sidecar added");
+    let provider_kind = if matches!(provider, AiProviderKind::Codex) { ProviderKind::Codex } else { ProviderKind::Claude };
+    let result: Result<(), String> = Ok(());
+    record_ai_result(&state, &provider_kind, AiOperationKind::McpSetup, &result).await;
     Ok(ExternalMcpSetupView {
         client: client.clone(),
         detail: if client == "codex" {
@@ -694,8 +821,10 @@ pub async fn ai_provider_logout(
 #[tauri::command]
 #[specta::specta]
 pub async fn ai_provider_complete_claude_login(
+    state: State<'_, RecordingState>,
     authorization_code: String,
 ) -> Result<AiProviderStatusView, String> {
+    let result = async {
     let authorization_code = authorization_code.trim();
     if authorization_code.is_empty() || authorization_code.len() > 4096 {
         return Err("Paste the authorization code shown by Claude.".into());
@@ -738,6 +867,10 @@ pub async fn ai_provider_complete_claude_login(
         return Err(dystil_redact::sanitize_text(&message));
     }
     ai_provider_status("claude".into()).await
+    }
+    .await;
+    record_ai_result(&state, &ProviderKind::Claude, AiOperationKind::SignIn, &result).await;
+    result
 }
 
 /// Verify the official runtime and its account session without invoking a model.
@@ -747,14 +880,33 @@ pub async fn ai_provider_complete_claude_login(
 /// the first request that lets the selected runtime query activity evidence.
 #[tauri::command]
 #[specta::specta]
-pub async fn ai_provider_test(provider: String) -> Result<AiProviderStatusView, String> {
+pub async fn ai_provider_test(
+    state: State<'_, RecordingState>,
+    provider: String,
+) -> Result<AiProviderStatusView, String> {
+    ai_provider_test_with_telemetry(Some(&state), provider).await
+}
+
+async fn ai_provider_test_with_telemetry(
+    state: Option<&RecordingState>,
+    provider: String,
+) -> Result<AiProviderStatusView, String> {
     let provider = provider_kind(&provider)?;
-    let runtime = provider_runtime(provider)?;
+    let runtime = match provider_runtime(provider.clone()) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            let result: Result<AiProviderStatusView, String> = Err(error.clone());
+            if let Some(state) = state {
+                record_ai_result(state, &provider, AiOperationKind::ConnectionTest, &result).await;
+            }
+            return Err(error);
+        }
+    };
     info!(
         provider = runtime.provider.slug(),
         "starting AI provider connection test"
     );
-    match runtime.authenticated().await {
+    let result = match runtime.authenticated().await {
         Ok(true) => {
             info!(
                 provider = runtime.provider.slug(),
@@ -777,7 +929,11 @@ pub async fn ai_provider_test(provider: String) -> Result<AiProviderStatusView, 
             );
             Err(error.to_string())
         }
+    };
+    if let Some(state) = state {
+        record_ai_result(state, &provider, AiOperationKind::ConnectionTest, &result).await;
     }
+    result
 }
 
 pub(crate) fn mcp_binary(app: &AppHandle) -> Result<PathBuf, String> {
@@ -928,6 +1084,7 @@ pub async fn mcp_connect(
     app: AppHandle,
     state: State<'_, RecordingState>,
 ) -> Result<McpConnectionStatus, String> {
+    let result = async {
     let runtime = provider_runtime(ProviderKind::Claude)?;
     let binary = mcp_binary(&app)?;
     let database = capture_database_path(&state).await?;
@@ -952,6 +1109,10 @@ pub async fn mcp_connect(
         connected: true,
         detail,
     })
+    }
+    .await;
+    record_ai_result(&state, &ProviderKind::Claude, AiOperationKind::McpConnect, &result).await;
+    result
 }
 
 #[tauri::command]
@@ -972,7 +1133,7 @@ pub async fn mcp_disconnect() -> Result<McpConnectionStatus, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_dystil_codex_guidance, codex_guidance_path, find_mcp_binary,
+        append_dystil_codex_guidance, codex_guidance_path, find_bundled_binary, find_mcp_binary,
         local_date_for_timestamp, DYSTIL_CODEX_GUIDANCE_START,
     };
 
@@ -1001,6 +1162,23 @@ mod tests {
         );
 
         assert_eq!(resolved.as_deref(), Some(preferred_binary.as_path()));
+    }
+
+    #[test]
+    fn bundled_bun_resolution_accepts_tauri_installed_name() {
+        let root = tempfile::tempdir().unwrap();
+        let installed_bun = root.path().join("bun.exe");
+        std::fs::write(&installed_bun, b"bun").unwrap();
+
+        let resolved = find_bundled_binary(
+            &[root.path().to_path_buf()],
+            &[
+                "bun-x86_64-pc-windows-msvc.exe".to_string(),
+                "bun.exe".to_string(),
+            ],
+        );
+
+        assert_eq!(resolved.as_deref(), Some(installed_bun.as_path()));
     }
 
     #[test]

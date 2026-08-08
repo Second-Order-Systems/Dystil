@@ -89,6 +89,8 @@ tokio = { version = "1.36.0", features = ["full"] }
 
 # HTTP client
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "multipart", "json", "form", "rustls", "system-proxy"] }
+opentelemetry-proto = { version = "0.32.0", features = ["gen-tonic-messages", "metrics", "trace"] }
+prost = "0.14"
 
 # tracing
 tracing = "0.1.40"
@@ -151,6 +153,7 @@ dystil-protocol = { path = "../../../crates/dystil-protocol" }
 dystil-automation = { path = "../../../crates/dystil-automation" }
 
 dystil-capture = { path = "../../../crates/dystil-capture", features = ["native"] }
+dystil-telemetry = { path = "../../../crates/dystil-telemetry" }
 dystil-redact = { path = "../../../crates/dystil-redact" }
 eventkit-rs = { git = "https://github.com/divanshu-go/eventkit-rs", rev = "9dd52787c8435d734ed443e2d5641f45b0177cae", default-features = false, features = ["events"] }
 sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }

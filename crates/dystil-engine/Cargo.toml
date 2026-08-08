@@ -10,6 +10,7 @@ edition = { workspace = true }
 [dependencies]
 async-trait = { workspace = true }
 dystil-sync = { path = "../dystil-sync" }
+dystil-telemetry = { path = "../dystil-telemetry" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 tracing = { workspace = true }

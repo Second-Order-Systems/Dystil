@@ -3,6 +3,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use dystil_telemetry::{
+    CaptureProviderKind, CaptureTriggerKind, NoopRecorder, Outcome, ReasonKind, TelemetryRecorder,
+};
 use tokio::sync::{Mutex, RwLock};
 use tracing::warn;
 
@@ -11,12 +14,39 @@ use crate::{
     CaptureObservation, CaptureStore, CaptureTrigger, StoredCapture, VisualProvider, VisualRequest,
 };
 
+fn telemetry_trigger(trigger: &CaptureTrigger) -> CaptureTriggerKind {
+    match trigger {
+        CaptureTrigger::AppSwitch => CaptureTriggerKind::AppSwitch,
+        CaptureTrigger::WindowFocus => CaptureTriggerKind::WindowFocus,
+        CaptureTrigger::Click => CaptureTriggerKind::Click,
+        CaptureTrigger::TypingPause => CaptureTriggerKind::TypingPause,
+        CaptureTrigger::ScrollStop => CaptureTriggerKind::ScrollStop,
+        CaptureTrigger::KeyPress => CaptureTriggerKind::KeyPress,
+        CaptureTrigger::Clipboard => CaptureTriggerKind::Clipboard,
+        CaptureTrigger::VisualChange => CaptureTriggerKind::VisualChange,
+        CaptureTrigger::Idle => CaptureTriggerKind::Idle,
+        CaptureTrigger::Manual => CaptureTriggerKind::Manual,
+        CaptureTrigger::ActivitySettled => CaptureTriggerKind::ActivitySettled,
+    }
+}
+
+fn telemetry_reason(error: &CaptureError) -> ReasonKind {
+    match error {
+        CaptureError::VisualCaptureDisabled => ReasonKind::PolicyDisabled,
+        CaptureError::VisualProviderUnavailable => ReasonKind::ProviderUnavailable,
+        CaptureError::NoEvidence => ReasonKind::NoEvidence,
+        CaptureError::ImageStore(_) | CaptureError::Store(_) => ReasonKind::Storage,
+        CaptureError::Accessibility(_) | CaptureError::Visual(_) => ReasonKind::Internal,
+    }
+}
+
 /// Platform-neutral coordinator. It owns policy; providers own OS APIs.
 pub struct CaptureCoordinator {
     config: RwLock<CaptureConfig>,
     accessibility: Arc<dyn AccessibilityProvider>,
     visual: Option<Arc<dyn VisualProvider>>,
     store: Arc<dyn CaptureStore>,
+    telemetry: Arc<dyn TelemetryRecorder>,
     // AX implementations call synchronous platform APIs internally. Keep tree
     // walks single-flight even though the immediate AX lane and settled visual
     // scheduler are independent tasks.
@@ -46,6 +76,7 @@ impl CaptureCoordinator {
             accessibility,
             visual,
             store,
+            telemetry: Arc::new(NoopRecorder),
             accessibility_gate: Mutex::new(()),
             dedup: Mutex::new(DedupState::default()),
             visual_dedup: Mutex::new(VisualDedupState::default()),
@@ -53,6 +84,13 @@ impl CaptureCoordinator {
             commit_gate: Mutex::new(()),
             visual_gate: Mutex::new(()),
         }
+    }
+
+    /// Attach a bounded, consent-gated metrics recorder. The default recorder
+    /// is deliberately a no-op so capture can be used without telemetry.
+    pub fn with_telemetry(mut self, telemetry: Arc<dyn TelemetryRecorder>) -> Self {
+        self.telemetry = telemetry;
+        self
     }
 
     pub async fn capture_mode(&self) -> CaptureMode {
@@ -100,6 +138,22 @@ impl CaptureCoordinator {
     /// canonical target for the UI-event linker. Additional monitor frames are
     /// independently durable and syncable.
     pub async fn capture(
+        &self,
+        trigger: CaptureTrigger,
+        context: CaptureContext,
+    ) -> Result<StoredCapture, CaptureError> {
+        let trigger_kind = telemetry_trigger(&trigger);
+        let result = self.capture_inner(trigger, context).await;
+        let (outcome, reason) = match &result {
+            Ok(_) => (Outcome::Succeeded, ReasonKind::None),
+            Err(error) => (Outcome::Failed, telemetry_reason(error)),
+        };
+        self.telemetry
+            .record_capture_trigger(trigger_kind, outcome, reason);
+        result
+    }
+
+    async fn capture_inner(
         &self,
         trigger: CaptureTrigger,
         context: CaptureContext,
@@ -222,6 +276,25 @@ impl CaptureCoordinator {
         trigger: CaptureTrigger,
         context: CaptureContext,
     ) -> Result<Option<StoredCapture>, CaptureError> {
+        let trigger_kind = telemetry_trigger(&trigger);
+        let result = self
+            .capture_accessibility_if_changed_inner(trigger, context)
+            .await;
+        let (outcome, reason) = match &result {
+            Ok(Some(_)) => (Outcome::Succeeded, ReasonKind::None),
+            Ok(None) => (Outcome::Skipped, ReasonKind::Unchanged),
+            Err(error) => (Outcome::Failed, telemetry_reason(error)),
+        };
+        self.telemetry
+            .record_capture_trigger(trigger_kind, outcome, reason);
+        result
+    }
+
+    async fn capture_accessibility_if_changed_inner(
+        &self,
+        trigger: CaptureTrigger,
+        context: CaptureContext,
+    ) -> Result<Option<StoredCapture>, CaptureError> {
         let accessibility = self.capture_accessibility(&trigger).await?;
         let Some(accessibility) = accessibility else {
             return Err(CaptureError::NoEvidence);
@@ -250,16 +323,58 @@ impl CaptureCoordinator {
         &self,
         request: VisualRequest,
     ) -> Result<Vec<crate::VisualSnapshot>, CaptureError> {
+        let trigger = telemetry_trigger(&request.trigger);
         let _guard = self.visual_gate.lock().await;
         if !self.config.read().await.capture_mode.captures_for_trigger() {
+            self.telemetry.record_image_capture(
+                trigger,
+                CaptureProviderKind::None,
+                Outcome::Skipped,
+                ReasonKind::PolicyDisabled,
+            );
             return Ok(Vec::new());
         }
 
-        let provider = self
-            .visual
-            .as_ref()
-            .ok_or(CaptureError::VisualProviderUnavailable)?;
-        provider.capture_all(&request).await
+        let Some(provider) = self.visual.as_ref() else {
+            self.telemetry.record_image_capture(
+                trigger,
+                CaptureProviderKind::Unknown,
+                Outcome::Failed,
+                ReasonKind::ProviderUnavailable,
+            );
+            return Err(CaptureError::VisualProviderUnavailable);
+        };
+        match provider.capture_all(&request).await {
+            Ok(visuals) if visuals.is_empty() => {
+                self.telemetry.record_image_capture(
+                    trigger,
+                    CaptureProviderKind::Unknown,
+                    Outcome::Skipped,
+                    ReasonKind::NoEvidence,
+                );
+                Ok(visuals)
+            }
+            Ok(visuals) => {
+                for _ in &visuals {
+                    self.telemetry.record_image_capture(
+                        trigger,
+                        CaptureProviderKind::Unknown,
+                        Outcome::Succeeded,
+                        ReasonKind::None,
+                    );
+                }
+                Ok(visuals)
+            }
+            Err(error) => {
+                self.telemetry.record_image_capture(
+                    trigger,
+                    CaptureProviderKind::Unknown,
+                    Outcome::Failed,
+                    telemetry_reason(&error),
+                );
+                Err(error)
+            }
+        }
     }
 
     async fn capture_accessibility(
@@ -1097,6 +1212,7 @@ mod full_capture_tests {
 
     use async_trait::async_trait;
     use chrono::Utc;
+    use dystil_telemetry::{ConsentDecision, SignalKind, Telemetry, TELEMETRY_CONSENT_VERSION};
 
     use super::*;
     use crate::{AccessibilitySnapshot, AccessibilityTruncationReason, VisualSnapshot};
@@ -1154,6 +1270,44 @@ mod full_capture_tests {
                 snapshot_path: observation.visual.map(|_| "frame.jpg".into()),
             })
         }
+    }
+
+    #[tokio::test]
+    async fn telemetry_records_bounded_capture_and_image_outcomes() {
+        let telemetry = Arc::new(Telemetry::new());
+        telemetry.set_consent(ConsentDecision::Granted {
+            policy_version: TELEMETRY_CONSENT_VERSION,
+        });
+        let coordinator = CaptureCoordinator::new(
+            CaptureConfig {
+                capture_mode: CaptureMode::FullCapture,
+            },
+            Arc::new(Ax),
+            Some(Arc::new(Visual(AtomicUsize::new(0)))),
+            Arc::new(Store),
+        )
+        .with_telemetry(telemetry.clone());
+
+        coordinator
+            .capture(CaptureTrigger::Click, CaptureContext::default())
+            .await
+            .unwrap();
+
+        let points = telemetry.drain_interval().unwrap().points;
+        assert!(points.iter().any(|point| {
+            point.signal == SignalKind::CaptureTrigger
+                && point.trigger == CaptureTriggerKind::Click
+                && point.outcome == Outcome::Succeeded
+                && point.reason == ReasonKind::None
+                && point.value == 1
+        }));
+        assert!(points.iter().any(|point| {
+            point.signal == SignalKind::ImageCapture
+                && point.trigger == CaptureTriggerKind::Click
+                && point.outcome == Outcome::Succeeded
+                && point.reason == ReasonKind::None
+                && point.value == 1
+        }));
     }
 
     #[derive(Default)]

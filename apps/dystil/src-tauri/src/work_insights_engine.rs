@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use dystil_engine::{DystilEngine, EngineConfig, EngineHost};
-use dystil_sync::LocalSyncPermissions;
-use tauri::AppHandle;
+use dystil_sync::{LocalSyncPermissions, SyncDiagnostics};
+use dystil_telemetry::{ErrorKind, Outcome, StorageOperationKind};
+use tauri::{AppHandle, Manager};
 use tokio::sync::Mutex;
 
 static ENGINE_TASK: std::sync::OnceLock<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>> =
@@ -77,6 +78,79 @@ impl EngineHost for TauriEngineHost {
             }
             .to_string(),
         ))
+    }
+
+    async fn record_sync_iteration(&self, outcome: Outcome, error: Option<ErrorKind>) {
+        let telemetry = {
+            self.app
+                .state::<crate::recording::RecordingState>()
+                .server
+                .lock()
+                .await
+                .as_ref()
+                .map(|server| server.telemetry.clone())
+        };
+        if let Some(telemetry) = telemetry {
+            telemetry.record_sync_iteration(outcome, error);
+        }
+    }
+
+    async fn record_sync_diagnostics(&self, diagnostics: SyncDiagnostics) {
+        let telemetry = {
+            self.app
+                .state::<crate::recording::RecordingState>()
+                .server
+                .lock()
+                .await
+                .as_ref()
+                .map(|server| server.telemetry.clone())
+        };
+        if let Some(telemetry) = telemetry {
+            telemetry.record_sync_diagnostics(dystil_telemetry::SyncDiagnostics {
+                iteration_duration_ms: diagnostics.iteration_duration_ms,
+                segment_duration_ms: diagnostics.segment_duration_ms,
+                image_duration_ms: diagnostics.image_duration_ms,
+                image_candidates_scanned: diagnostics.image_candidates_scanned as u64,
+                image_candidates_selected: diagnostics.image_candidates_selected as u64,
+                images_prepared: diagnostics.images_prepared as u64,
+                image_bytes_prepared: diagnostics.image_bytes_prepared,
+            });
+        }
+    }
+
+    async fn set_sync_active(&self, active: bool) {
+        let telemetry = {
+            self.app
+                .state::<crate::recording::RecordingState>()
+                .server
+                .lock()
+                .await
+                .as_ref()
+                .map(|server| server.telemetry.clone())
+        };
+        if let Some(telemetry) = telemetry {
+            telemetry.set_sync_active(active);
+        }
+    }
+
+    async fn record_storage_operation(
+        &self,
+        operation: StorageOperationKind,
+        outcome: Outcome,
+        error: Option<ErrorKind>,
+    ) {
+        let telemetry = {
+            self.app
+                .state::<crate::recording::RecordingState>()
+                .server
+                .lock()
+                .await
+                .as_ref()
+                .map(|server| server.telemetry.clone())
+        };
+        if let Some(telemetry) = telemetry {
+            telemetry.record_storage_operation(operation, outcome, error);
+        }
     }
 }
 
