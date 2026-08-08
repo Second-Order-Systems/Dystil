@@ -101,6 +101,33 @@ random install id, and the schema version.
 
 Both editions report to the same endpoint and are separated by `dystil.edition`.
 
+### Spans carry no attributes
+
+Traces are the part of an OpenTelemetry payload that would normally be able to
+leak free text — attributes commonly hold error strings, file paths, or URLs.
+Here they cannot, and this is deliberate:
+
+```rust
+pub struct TracePoint { kind: TraceKind }
+pub enum TraceKind { CaptureSessionStart, CaptureSessionStop }
+```
+
+`aggregate.rs :: TracePoint` has a single field, and `aggregate.rs :: TraceKind`
+has two variants mapping to the fixed strings `capture.session.start` and
+`capture.session.stop`. When encoded in
+`telemetry_exporter.rs :: encode_traces`, each span sets `attributes: Vec::new()`
+and `events: Vec::new()`, with `trace_id` and `span_id` generated as random
+UUIDs rather than derived from anything local.
+
+A span therefore conveys "a capture session started or stopped, at this time",
+and nothing else.
+
+**Keep it that way.** Adding a span attribute is the single easiest route to
+exporting user content from this codebase. If one is ever needed, it must be a
+bounded enum — never a message, path, name, or identifier taken from captured
+work. The buffer is capped at `aggregate.rs :: MAX_PENDING_TRACES` (50) per
+interval.
+
 ## User-facing controls
 
 The privacy surface is `components/dystil/pages/privacy.tsx`. It offers deletion by
