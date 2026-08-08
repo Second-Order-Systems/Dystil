@@ -1,3 +1,14 @@
+---
+status: narrative
+---
+
+> **Narrative, not specification.** Original founder-written draft, kept as raw
+> material for marketing copy. Predates the agent_docs split and has not been
+> line-checked; the semantic-search worker it describes is future direction, not
+> shipped. For what exists, see `agent_docs/`.
+
+# Original product draft
+
 Dystil is a local app that captures the work user does continiously via AXTrees and UIAutomations and then cleans it and stores it locally. Nothing ever leaves the device.
 
 The stored data is then exposed via MCP for external AI agents so that user can plug it into their claude code or codex and ask it questions.

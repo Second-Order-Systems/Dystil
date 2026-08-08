@@ -1,3 +1,11 @@
+---
+status: narrative
+verified_against: e84d34c
+verified_on: 2026-08-08
+---
+
+> **Narrative, not specification.** Positioning and direction. Some capabilities described here are aspirational. Do not implement from this file — see `agent_docs/`.
+
 # Product
 
 <!-- impeccable:product-schema 1 -->

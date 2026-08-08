@@ -1,6 +1,10 @@
 ---
+status: verified
+authority: ground-truth
+verified_against: e84d34c
+verified_on: 2026-08-08
 name: Dystil
-description: A private working index for recovering context from captured work.
+description: A private desktop app that finds the work you repeat and makes it reusable.
 colors:
   ink: "#151616"
   ink-raised: "#1D1F1E"
