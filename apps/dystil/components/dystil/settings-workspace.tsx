@@ -9,7 +9,7 @@ import { Slider } from "@/components/ui/slider";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { getBuildCapabilities } from "@/lib/build-capabilities";
 import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
-import { commands, type WhenItRunsView } from "@/lib/utils/tauri";
+import { commands, type TelemetrySettings, type WhenItRunsView } from "@/lib/utils/tauri";
 import { TextAction } from "./page-primitives";
 import { CAPTURE_CATEGORY_COPY } from "./capture-categories";
 import { AiModelsSettings } from "./ai-models-settings";
@@ -76,6 +76,32 @@ export function AboutSettings({ userName, userEmail, onLogout, loggingOut, versi
   const [updateError, setUpdateError] = useState("");
   const [savingAutoUpdate, setSavingAutoUpdate] = useState(false);
   const [installingUpdate, setInstallingUpdate] = useState(false);
+  const [telemetry, setTelemetry] = useState<TelemetrySettings | null>(null);
+  const [savingTelemetry, setSavingTelemetry] = useState(false);
+  const [telemetryError, setTelemetryError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<TelemetrySettings>("get_telemetry_settings")
+      .then((result) => { if (!cancelled) setTelemetry(result); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const changeTelemetry = async (enabled: boolean) => {
+    setSavingTelemetry(true);
+    setTelemetryError("");
+    try {
+      const effective = await invoke<boolean>("set_telemetry_enabled", { enabled });
+      setTelemetry((current) => (current ? { ...current, effective } : current));
+    } catch (cause) {
+      // Enterprise builds reject disabling; surface the reason rather than
+      // silently snapping the switch back.
+      setTelemetryError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSavingTelemetry(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -134,6 +160,8 @@ export function AboutSettings({ userName, userEmail, onLogout, loggingOut, versi
       {updateSettings?.updaterAvailable && <div className="flex min-h-[72px] items-center justify-between gap-5 border-b border-[#efefe9] px-[19px] py-[13px]"><div><p className="text-[17px]">Update automatically</p><p className="mt-1 text-[14px] text-[#74777e]">{updateSettings.autoUpdate ? "Installs new versions automatically and restarts Dystil to finish." : "Dystil will tell you when an update is ready."}</p></div><ToggleSwitch label="Update Dystil automatically" checked={updateSettings.autoUpdate} disabled={savingAutoUpdate} onChange={(enabled) => void setAutoUpdate(enabled)} /></div>}
       {updateSettings && !updateSettings.updaterAvailable && <div className="border-b border-[#efefe9] px-[19px] py-[13px]"><p className="text-[17px]">Updates</p><p className="mt-1 text-[14px] text-[#74777e]">Managed outside Dystil in this build.</p></div>}
       {updateError && <p role="alert" className="border-b border-[#efefe9] bg-[#fff5f2] px-[19px] py-[10px] text-[13px] text-[#8b3f32]">{updateError}</p>}
+      {telemetry && !telemetry.managedByOrganization && <div className="flex min-h-[72px] items-center justify-between gap-5 border-b border-[#efefe9] px-[19px] py-[13px]"><div><p className="text-[17px]">Send anonymous usage counts</p><p className="mt-1 max-w-[560px] text-[14px] text-[#74777e]">{telemetry.disabledByEnv ? "Turned off by DYSTIL_TELEMETRY on this machine." : "Counts and timings only — how often capture ran, whether it worked, how long it took. Never what Dystil read, and never window titles, app names, URLs, or file paths."}</p></div><ToggleSwitch label="Send anonymous usage counts" checked={telemetry.effective} disabled={savingTelemetry || !telemetry.userCanChange} onChange={(enabled) => void changeTelemetry(enabled)} /></div>}
+      {telemetryError && <p role="alert" className="border-b border-[#efefe9] bg-[#fff5f2] px-[19px] py-[10px] text-[13px] text-[#8b3f32]">{telemetryError}</p>}
       <div className="flex min-h-[62px] items-center justify-between gap-5 px-[19px] py-[13px]"><span className="text-[17px]">Read the source code</span><button type="button" onClick={() => void openSource()} className="text-[15px] text-[#0f6e56] outline-none hover:text-[#094b3b] focus-visible:ring-2 focus-visible:ring-[#0f6e56] focus-visible:ring-offset-2">Open</button></div>
     </SettingsCard>
     <SettingsCard padded><div className="flex justify-between gap-5"><span className="min-w-0 truncate text-[16px]" title={userEmail || userName}>{userEmail || userName}</span><button type="button" onClick={onLogout} disabled={loggingOut} className="shrink-0 text-[15px] text-[#60636b] outline-none hover:text-[#1a1c20] focus-visible:ring-2 focus-visible:ring-[#0f6e56] focus-visible:ring-offset-2 disabled:opacity-50">{loggingOut ? "Signing out…" : "Sign out"}</button></div></SettingsCard>
