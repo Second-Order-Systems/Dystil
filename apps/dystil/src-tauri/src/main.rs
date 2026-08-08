@@ -62,6 +62,7 @@ mod server_core;
 #[allow(deprecated)]
 mod space_monitor;
 mod store;
+mod telemetry_consent;
 mod telemetry_exporter;
 mod telemetry_resources;
 mod tray;
@@ -871,6 +872,16 @@ async fn main() {
                                     return;
                                 }
                             };
+
+                            // Telemetry starts in Unknown and records nothing.
+                            // Resolve it now from the user setting, the build
+                            // edition, DYSTIL_TELEMETRY, and onboarding state.
+                            // Re-applied whenever the setting or onboarding
+                            // changes.
+                            telemetry_consent::apply(
+                                &app_handle_clone,
+                                &server.telemetry,
+                            );
 
                             // Retention is owned by the local app, independently of
                             // cloud sync. The first pass runs immediately, followed

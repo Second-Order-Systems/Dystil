@@ -28,6 +28,9 @@ pub mod resource_attribute {
     pub const SERVICE_VERSION: &str = "service.version";
     pub const DEPLOYMENT_ENVIRONMENT: &str = "deployment.environment.name";
     pub const BUILD_CHANNEL: &str = "dystil.build_channel";
+    /// `community` or `enterprise`. Lets both populations share one ingest
+    /// endpoint while remaining separable in dashboards and retention rules.
+    pub const EDITION: &str = "dystil.edition";
     pub const OS_TYPE: &str = "os.type";
     pub const HOST_ARCH: &str = "host.arch";
     pub const SERVICE_INSTANCE_ID: &str = "service.instance.id";
@@ -39,6 +42,7 @@ pub const RESOURCE_ATTRIBUTES: &[&str] = &[
     resource_attribute::SERVICE_VERSION,
     resource_attribute::DEPLOYMENT_ENVIRONMENT,
     resource_attribute::BUILD_CHANNEL,
+    resource_attribute::EDITION,
     resource_attribute::OS_TYPE,
     resource_attribute::HOST_ARCH,
     resource_attribute::SERVICE_INSTANCE_ID,
