@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::schema::{
@@ -189,6 +189,29 @@ pub struct SyncIterationPoint {
     pub value: u64,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SyncDiagnostics {
+    pub iteration_duration_ms: u64,
+    pub segment_duration_ms: u64,
+    pub image_duration_ms: u64,
+    pub image_candidates_scanned: u64,
+    pub image_candidates_selected: u64,
+    pub images_prepared: u64,
+    pub image_bytes_prepared: u64,
+}
+
+impl SyncDiagnostics {
+    fn add(&mut self, value: Self) {
+        self.iteration_duration_ms = self.iteration_duration_ms.saturating_add(value.iteration_duration_ms);
+        self.segment_duration_ms = self.segment_duration_ms.saturating_add(value.segment_duration_ms);
+        self.image_duration_ms = self.image_duration_ms.saturating_add(value.image_duration_ms);
+        self.image_candidates_scanned = self.image_candidates_scanned.saturating_add(value.image_candidates_scanned);
+        self.image_candidates_selected = self.image_candidates_selected.saturating_add(value.image_candidates_selected);
+        self.images_prepared = self.images_prepared.saturating_add(value.images_prepared);
+        self.image_bytes_prepared = self.image_bytes_prepared.saturating_add(value.image_bytes_prepared);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CounterPoint {
     pub signal: SignalKind,
@@ -208,9 +231,11 @@ pub struct IntervalSnapshot {
     pub app_starts: Vec<StartupPoint>,
     pub storage_operations: Vec<StorageOperationPoint>,
     pub sync_iterations: Vec<SyncIterationPoint>,
+    pub sync_diagnostics: Option<SyncDiagnostics>,
     /// Latest slow-cadence process, host, and storage measurements. These are
     /// gauges, so only the most recent value is retained for an interval.
     pub resources: Option<ResourceSnapshot>,
+    pub resource_activity: Option<ResourceActivitySummary>,
     /// A bounded 5% deterministic sample of safe, fixed-name lifecycle spans.
     pub traces: Vec<TracePoint>,
     consent_generation: u64,
@@ -246,6 +271,85 @@ pub struct ResourceSnapshot {
     pub host_memory_available_bytes: Option<u64>,
     pub storage_data_bytes: Option<u64>,
     pub storage_available_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceActivitySummary {
+    pub process_cpu_sync_average_x100: Option<u32>,
+    pub process_cpu_sync_max_x100: Option<u32>,
+    pub process_memory_sync_max_bytes: Option<u64>,
+    pub host_cpu_sync_average_x100: Option<u32>,
+    pub host_cpu_sync_max_x100: Option<u32>,
+    pub process_cpu_background_average_x100: Option<u32>,
+    pub process_cpu_background_max_x100: Option<u32>,
+    pub process_memory_background_max_bytes: Option<u64>,
+    pub host_cpu_background_average_x100: Option<u32>,
+    pub host_cpu_background_max_x100: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct ResourceActivityBucket {
+    process_cpu_sum_x100: u64,
+    process_cpu_samples: u64,
+    process_cpu_max_x100: Option<u32>,
+    process_memory_max_bytes: Option<u64>,
+    host_cpu_sum_x100: u64,
+    host_cpu_samples: u64,
+    host_cpu_max_x100: Option<u32>,
+}
+
+impl ResourceActivityBucket {
+    fn record(&mut self, snapshot: ResourceSnapshot) {
+        if let Some(value) = snapshot.process_cpu_percent_x100 {
+            self.process_cpu_sum_x100 = self.process_cpu_sum_x100.saturating_add(value as u64);
+            self.process_cpu_samples = self.process_cpu_samples.saturating_add(1);
+            self.process_cpu_max_x100 =
+                Some(self.process_cpu_max_x100.map_or(value, |old| old.max(value)));
+        }
+        if let Some(value) = snapshot.process_memory_rss_bytes {
+            self.process_memory_max_bytes =
+                Some(self.process_memory_max_bytes.map_or(value, |old| old.max(value)));
+        }
+        if let Some(value) = snapshot.host_cpu_percent_x100 {
+            self.host_cpu_sum_x100 = self.host_cpu_sum_x100.saturating_add(value as u64);
+            self.host_cpu_samples = self.host_cpu_samples.saturating_add(1);
+            self.host_cpu_max_x100 =
+                Some(self.host_cpu_max_x100.map_or(value, |old| old.max(value)));
+        }
+    }
+
+    fn process_average(&self) -> Option<u32> {
+        (self.process_cpu_samples > 0)
+            .then(|| (self.process_cpu_sum_x100 / self.process_cpu_samples) as u32)
+    }
+
+    fn host_average(&self) -> Option<u32> {
+        (self.host_cpu_samples > 0)
+            .then(|| (self.host_cpu_sum_x100 / self.host_cpu_samples) as u32)
+    }
+}
+
+#[derive(Debug, Default)]
+struct ResourceActivityAccumulator {
+    sync: ResourceActivityBucket,
+    background: ResourceActivityBucket,
+}
+
+impl ResourceActivityAccumulator {
+    fn finish(self) -> ResourceActivitySummary {
+        ResourceActivitySummary {
+            process_cpu_sync_average_x100: self.sync.process_average(),
+            process_cpu_sync_max_x100: self.sync.process_cpu_max_x100,
+            process_memory_sync_max_bytes: self.sync.process_memory_max_bytes,
+            host_cpu_sync_average_x100: self.sync.host_average(),
+            host_cpu_sync_max_x100: self.sync.host_cpu_max_x100,
+            process_cpu_background_average_x100: self.background.process_average(),
+            process_cpu_background_max_x100: self.background.process_cpu_max_x100,
+            process_memory_background_max_bytes: self.background.process_memory_max_bytes,
+            host_cpu_background_average_x100: self.background.host_average(),
+            host_cpu_background_max_x100: self.background.host_cpu_max_x100,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -434,7 +538,10 @@ pub struct Telemetry {
     app_starts: Mutex<HashMap<(AppStartReason, Outcome), u64>>,
     storage_operations: Mutex<HashMap<(StorageOperationKind, Outcome, Option<ErrorKind>), u64>>,
     sync_iterations: Mutex<HashMap<(Outcome, Option<ErrorKind>), u64>>,
+    sync_diagnostics: Mutex<Option<SyncDiagnostics>>,
     resources: Mutex<Option<ResourceSnapshot>>,
+    resource_activity: Mutex<ResourceActivityAccumulator>,
+    sync_active: AtomicBool,
     traces: Mutex<Vec<TracePoint>>,
     trace_sample_counter: AtomicU64,
 }
@@ -464,7 +571,10 @@ impl Telemetry {
             app_starts: Mutex::new(HashMap::new()),
             storage_operations: Mutex::new(HashMap::new()),
             sync_iterations: Mutex::new(HashMap::new()),
+            sync_diagnostics: Mutex::new(None),
             resources: Mutex::new(None),
+            resource_activity: Mutex::new(ResourceActivityAccumulator::default()),
+            sync_active: AtomicBool::new(false),
             traces: Mutex::new(Vec::new()),
             trace_sample_counter: AtomicU64::new(0),
         }
@@ -548,11 +658,25 @@ impl Telemetry {
             value,
         })
         .collect();
+        let sync_diagnostics = self
+            .sync_diagnostics
+            .lock()
+            .expect("telemetry mutex poisoned")
+            .take();
         let resources = self
             .resources
             .lock()
             .expect("telemetry mutex poisoned")
             .take();
+        let resource_activity = Some(
+            std::mem::take(
+                &mut *self
+                    .resource_activity
+                    .lock()
+                    .expect("telemetry mutex poisoned"),
+            )
+            .finish(),
+        );
         let traces = std::mem::take(&mut *self.traces.lock().expect("telemetry mutex poisoned"));
 
         if !self.is_enabled() || generation != self.consent_generation.load(Ordering::Acquire) {
@@ -567,7 +691,9 @@ impl Telemetry {
             app_starts,
             storage_operations,
             sync_iterations,
+            sync_diagnostics,
             resources,
+            resource_activity,
             traces,
             consent_generation: generation,
         })
@@ -613,7 +739,17 @@ impl Telemetry {
             return RecordStatus::Disabled;
         }
         *self.resources.lock().expect("telemetry mutex poisoned") = Some(resources);
+        let mut activity = self.resource_activity.lock().expect("telemetry mutex poisoned");
+        if self.sync_active.load(Ordering::Acquire) {
+            activity.sync.record(resources);
+        } else {
+            activity.background.record(resources);
+        }
         RecordStatus::Recorded
+    }
+
+    pub fn set_sync_active(&self, active: bool) {
+        self.sync_active.store(active, Ordering::Release);
     }
 
     pub fn record_ai_operation(
@@ -671,6 +807,15 @@ impl Telemetry {
         error: Option<ErrorKind>,
     ) -> RecordStatus {
         self.record_operational(&self.sync_iterations, (outcome, error), outcome, error)
+    }
+
+    pub fn record_sync_diagnostics(&self, diagnostics: SyncDiagnostics) -> RecordStatus {
+        if !self.is_enabled() {
+            return RecordStatus::Disabled;
+        }
+        let mut current = self.sync_diagnostics.lock().expect("telemetry mutex poisoned");
+        current.get_or_insert_with(SyncDiagnostics::default).add(diagnostics);
+        RecordStatus::Recorded
     }
 
     fn record_operational<K: std::cmp::Eq + std::hash::Hash>(

@@ -385,6 +385,13 @@ fn metric_attributes(name: &str) -> Result<&'static [&'static str], AppError> {
         "dystil.app.starts" => Ok(&["start.reason", "outcome"]),
         "dystil.storage.operations" => Ok(&["operation", "outcome", "error.kind"]),
         "dystil.sync.iterations" => Ok(&["outcome", "policy.source", "error.kind"]),
+        "dystil.sync.iteration.duration"
+        | "dystil.sync.segment.duration"
+        | "dystil.sync.image.duration"
+        | "dystil.sync.image.candidates.scanned"
+        | "dystil.sync.image.candidates.selected"
+        | "dystil.sync.images.prepared"
+        | "dystil.sync.image.bytes.prepared" => Ok(&[]),
         name if is_gauge(name) => Ok(&[]),
         _ => Err(AppError::BadRequest(
             "telemetry metric is not allowlisted".into(),
@@ -399,7 +406,22 @@ fn metric_unit(name: &str) -> Result<&'static str, AppError> {
         "dystil.app.starts" => Ok("{start}"),
         "dystil.storage.operations" => Ok("{operation}"),
         "dystil.sync.iterations" => Ok("{iteration}"),
+        "dystil.sync.iteration.duration"
+        | "dystil.sync.segment.duration"
+        | "dystil.sync.image.duration" => Ok("ms"),
+        "dystil.sync.image.candidates.scanned"
+        | "dystil.sync.image.candidates.selected" => Ok("{candidate}"),
+        "dystil.sync.images.prepared" => Ok("{image}"),
+        "dystil.sync.image.bytes.prepared" => Ok("By"),
         "dystil.process.cpu.utilization" | "dystil.host.cpu.utilization" => Ok("1"),
+        "dystil.process.cpu.sync.average"
+        | "dystil.process.cpu.sync.max"
+        | "dystil.host.cpu.sync.average"
+        | "dystil.host.cpu.sync.max"
+        | "dystil.process.cpu.background.average"
+        | "dystil.process.cpu.background.max"
+        | "dystil.host.cpu.background.average"
+        | "dystil.host.cpu.background.max" => Ok("1"),
         name if is_gauge(name) => Ok("By"),
         _ => Err(AppError::BadRequest(
             "telemetry metric is not allowlisted".into(),
@@ -415,6 +437,16 @@ fn is_gauge(name: &str) -> bool {
             | "dystil.host.memory.available"
             | "dystil.storage.data.bytes"
             | "dystil.storage.available.bytes"
+            | "dystil.process.cpu.sync.average"
+            | "dystil.process.cpu.sync.max"
+            | "dystil.process.memory.sync.max"
+            | "dystil.host.cpu.sync.average"
+            | "dystil.host.cpu.sync.max"
+            | "dystil.process.cpu.background.average"
+            | "dystil.process.cpu.background.max"
+            | "dystil.process.memory.background.max"
+            | "dystil.host.cpu.background.average"
+            | "dystil.host.cpu.background.max"
     )
 }
 fn valid_resource_value(key: &str, value: &str) -> bool {

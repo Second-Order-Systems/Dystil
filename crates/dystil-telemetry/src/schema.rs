@@ -100,6 +100,16 @@ pub mod metric {
     pub const HOST_MEMORY_AVAILABLE: &str = "dystil.host.memory.available";
     pub const STORAGE_DATA_BYTES: &str = "dystil.storage.data.bytes";
     pub const STORAGE_AVAILABLE_BYTES: &str = "dystil.storage.available.bytes";
+    pub const PROCESS_CPU_SYNC_AVERAGE: &str = "dystil.process.cpu.sync.average";
+    pub const PROCESS_CPU_SYNC_MAX: &str = "dystil.process.cpu.sync.max";
+    pub const PROCESS_MEMORY_SYNC_MAX: &str = "dystil.process.memory.sync.max";
+    pub const HOST_CPU_SYNC_AVERAGE: &str = "dystil.host.cpu.sync.average";
+    pub const HOST_CPU_SYNC_MAX: &str = "dystil.host.cpu.sync.max";
+    pub const PROCESS_CPU_BACKGROUND_AVERAGE: &str = "dystil.process.cpu.background.average";
+    pub const PROCESS_CPU_BACKGROUND_MAX: &str = "dystil.process.cpu.background.max";
+    pub const PROCESS_MEMORY_BACKGROUND_MAX: &str = "dystil.process.memory.background.max";
+    pub const HOST_CPU_BACKGROUND_AVERAGE: &str = "dystil.host.cpu.background.average";
+    pub const HOST_CPU_BACKGROUND_MAX: &str = "dystil.host.cpu.background.max";
     pub const MODEL_RUNTIME_EVENTS: &str = "dystil.model.runtime.events";
     pub const MODEL_REQUESTS: &str = "dystil.model.requests";
     pub const MODEL_REQUEST_DURATION: &str = "dystil.model.request.duration";
@@ -109,6 +119,12 @@ pub mod metric {
     pub const INSIGHTS_BATCH_DURATION: &str = "dystil.insights.batch.duration";
     pub const SYNC_ITERATIONS: &str = "dystil.sync.iterations";
     pub const SYNC_ITERATION_DURATION: &str = "dystil.sync.iteration.duration";
+    pub const SYNC_SEGMENT_DURATION: &str = "dystil.sync.segment.duration";
+    pub const SYNC_IMAGE_DURATION: &str = "dystil.sync.image.duration";
+    pub const SYNC_IMAGE_CANDIDATES_SCANNED: &str = "dystil.sync.image.candidates.scanned";
+    pub const SYNC_IMAGE_CANDIDATES_SELECTED: &str = "dystil.sync.image.candidates.selected";
+    pub const SYNC_IMAGES_PREPARED: &str = "dystil.sync.images.prepared";
+    pub const SYNC_IMAGE_BYTES_PREPARED: &str = "dystil.sync.image.bytes.prepared";
     pub const SYNC_SEMANTIC_SAMPLE_RUNS: &str = "dystil.sync.semantic_sample.runs";
     pub const HTTP_SERVER_REQUEST_DURATION: &str = "http.server.request.duration";
     pub const HTTP_SERVER_REQUESTS: &str = "http.server.requests";
@@ -285,6 +301,16 @@ pub const METRICS: &[MetricSpec] = &[
         unit: "By",
         attributes: NO_ATTRIBUTES,
     },
+    MetricSpec { name: metric::PROCESS_CPU_SYNC_AVERAGE, kind: InstrumentKind::Gauge, unit: "1", attributes: NO_ATTRIBUTES },
+    MetricSpec { name: metric::PROCESS_CPU_SYNC_MAX, kind: InstrumentKind::Gauge, unit: "1", attributes: NO_ATTRIBUTES },
+    MetricSpec { name: metric::PROCESS_MEMORY_SYNC_MAX, kind: InstrumentKind::Gauge, unit: "By", attributes: NO_ATTRIBUTES },
+    MetricSpec { name: metric::HOST_CPU_SYNC_AVERAGE, kind: InstrumentKind::Gauge, unit: "1", attributes: NO_ATTRIBUTES },
+    MetricSpec { name: metric::HOST_CPU_SYNC_MAX, kind: InstrumentKind::Gauge, unit: "1", attributes: NO_ATTRIBUTES },
+    MetricSpec { name: metric::PROCESS_CPU_BACKGROUND_AVERAGE, kind: InstrumentKind::Gauge, unit: "1", attributes: NO_ATTRIBUTES },
+    MetricSpec { name: metric::PROCESS_CPU_BACKGROUND_MAX, kind: InstrumentKind::Gauge, unit: "1", attributes: NO_ATTRIBUTES },
+    MetricSpec { name: metric::PROCESS_MEMORY_BACKGROUND_MAX, kind: InstrumentKind::Gauge, unit: "By", attributes: NO_ATTRIBUTES },
+    MetricSpec { name: metric::HOST_CPU_BACKGROUND_AVERAGE, kind: InstrumentKind::Gauge, unit: "1", attributes: NO_ATTRIBUTES },
+    MetricSpec { name: metric::HOST_CPU_BACKGROUND_MAX, kind: InstrumentKind::Gauge, unit: "1", attributes: NO_ATTRIBUTES },
     MetricSpec {
         name: metric::MODEL_RUNTIME_EVENTS,
         kind: InstrumentKind::Counter,
@@ -357,9 +383,15 @@ pub const METRICS: &[MetricSpec] = &[
     MetricSpec {
         name: metric::SYNC_ITERATION_DURATION,
         kind: InstrumentKind::Histogram,
-        unit: "s",
+        unit: "ms",
         attributes: &[attribute::OUTCOME, attribute::POLICY_SOURCE],
     },
+    MetricSpec { name: metric::SYNC_SEGMENT_DURATION, kind: InstrumentKind::Counter, unit: "ms", attributes: NO_ATTRIBUTES },
+    MetricSpec { name: metric::SYNC_IMAGE_DURATION, kind: InstrumentKind::Counter, unit: "ms", attributes: NO_ATTRIBUTES },
+    MetricSpec { name: metric::SYNC_IMAGE_CANDIDATES_SCANNED, kind: InstrumentKind::Counter, unit: "{candidate}", attributes: NO_ATTRIBUTES },
+    MetricSpec { name: metric::SYNC_IMAGE_CANDIDATES_SELECTED, kind: InstrumentKind::Counter, unit: "{candidate}", attributes: NO_ATTRIBUTES },
+    MetricSpec { name: metric::SYNC_IMAGES_PREPARED, kind: InstrumentKind::Counter, unit: "{image}", attributes: NO_ATTRIBUTES },
+    MetricSpec { name: metric::SYNC_IMAGE_BYTES_PREPARED, kind: InstrumentKind::Counter, unit: "By", attributes: NO_ATTRIBUTES },
     MetricSpec {
         name: metric::SYNC_SEMANTIC_SAMPLE_RUNS,
         kind: InstrumentKind::Counter,

@@ -12,4 +12,6 @@ mod types;
 mod utils;
 
 pub use semantic_sync::{upload_pending_semantic_samples, SemanticSyncConfig};
-pub use types::{DystilSync, LocalSyncPermissions, SyncConfig, SyncError, SyncOutcome};
+pub use types::{
+    DystilSync, LocalSyncPermissions, SyncConfig, SyncDiagnostics, SyncError, SyncOutcome,
+};

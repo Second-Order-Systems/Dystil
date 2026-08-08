@@ -68,6 +68,23 @@ ENV_FILE=/opt/dystil/app.env \
 docker compose -f cloud/docker-compose.prod.yml up -d
 ```
 
+To add the private OpenObserve telemetry backend, use the telemetry overlay
+with the same VM environment file:
+
+```bash
+CONTAINER_REGISTRY=your-registry.example.com \
+ENV_FILE=/opt/dystil/app.env \
+docker compose \
+  -f cloud/docker-compose.prod.yml \
+  -f cloud/docker-compose.telemetry.yml \
+  up -d
+```
+
+The overlay keeps OpenObserve loopback-only and places it on the same private
+Docker network as `dystil-api`. Fill the telemetry variables in
+`.env.vm.example` in `/opt/dystil/app.env`; the relay ingest credential and
+one-shot dashboard-provisioning credential are deliberately separate.
+
 Production env rules:
 
 1. `BETTER_AUTH_URL` must be the public HTTPS URL.
@@ -193,6 +210,7 @@ One deployable service that bundles the API and auth sidecar:
 | `docker-compose.memory.yml` | Optional overlay: memory-api, memory-worker, memory-migrate |
 | `docker-compose.local.yml` | Optional overlay: low-resource overrides |
 | `docker-compose.prod.yml` | Production: prebuilt image, resource limits, watchtower |
+| `docker-compose.telemetry.yml` | OpenObserve operational telemetry overlay; works with local and production stacks |
 
 ## Synchronous Ingest Flow
 

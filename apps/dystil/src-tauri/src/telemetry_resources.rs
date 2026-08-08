@@ -13,29 +13,46 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tracing::warn;
 
-const SAMPLE_INTERVAL: Duration = Duration::from_secs(15 * 60);
+const SAMPLE_INTERVAL: Duration = Duration::from_secs(10);
+const STORAGE_SAMPLE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 pub fn start(telemetry: Arc<Telemetry>, data_dir: PathBuf) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(SAMPLE_INTERVAL);
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut system = System::new();
+        let mut last_storage_sample = None;
+        let mut last_storage_values = (None, None);
 
         loop {
             interval.tick().await;
+            let include_storage = last_storage_sample
+                .is_none_or(|last: std::time::Instant| last.elapsed() >= STORAGE_SAMPLE_INTERVAL);
+            if include_storage {
+                last_storage_sample = Some(std::time::Instant::now());
+            }
             let sample_dir = data_dir.clone();
             // `System` holds the previous CPU sample. Move it into the blocking
             // task and always replace the local slot first, so a task failure
             // cannot leave this loop with a moved value.
             let mut sample_system = std::mem::replace(&mut system, System::new());
             match tokio::task::spawn_blocking(move || {
-                let snapshot = collect(&mut sample_system, &sample_dir);
+                let snapshot = collect(&mut sample_system, &sample_dir, include_storage);
                 (sample_system, snapshot)
             })
             .await
             {
-                Ok((next_system, snapshot)) => {
+                Ok((next_system, mut snapshot)) => {
                     system = next_system;
+                    if include_storage {
+                        last_storage_values = (
+                            snapshot.storage_data_bytes,
+                            snapshot.storage_available_bytes,
+                        );
+                    } else {
+                        snapshot.storage_data_bytes = last_storage_values.0;
+                        snapshot.storage_available_bytes = last_storage_values.1;
+                    }
                     telemetry.record_resource_snapshot(snapshot);
                 }
                 Err(error) => warn!(%error, "resource telemetry sampler stopped"),
@@ -44,12 +61,14 @@ pub fn start(telemetry: Arc<Telemetry>, data_dir: PathBuf) -> JoinHandle<()> {
     })
 }
 
-fn collect(system: &mut System, data_dir: &Path) -> ResourceSnapshot {
+fn collect(system: &mut System, data_dir: &Path, include_storage: bool) -> ResourceSnapshot {
     system.refresh_cpu();
     system.refresh_memory();
     system.refresh_process(Pid::from_u32(std::process::id()));
-    system.refresh_disks_list();
-    system.refresh_disks();
+    if include_storage {
+        system.refresh_disks_list();
+        system.refresh_disks();
+    }
 
     let process = system.process(Pid::from_u32(std::process::id()));
     ResourceSnapshot {
@@ -57,8 +76,12 @@ fn collect(system: &mut System, data_dir: &Path) -> ResourceSnapshot {
         process_memory_rss_bytes: process.map(ProcessExt::memory),
         host_cpu_percent_x100: percent_x100(system.global_cpu_info().cpu_usage()),
         host_memory_available_bytes: Some(system.available_memory()),
-        storage_data_bytes: crate::disk_usage::directory_size(data_dir).ok().flatten(),
-        storage_available_bytes: available_space_for(system, data_dir),
+        storage_data_bytes: include_storage
+            .then(|| crate::disk_usage::directory_size(data_dir).ok().flatten())
+            .flatten(),
+        storage_available_bytes: include_storage
+            .then(|| available_space_for(system, data_dir))
+            .flatten(),
     }
 }
 

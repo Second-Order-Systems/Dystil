@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dystil_telemetry::{
-    schema, AiOperationPoint, CounterPoint, IntervalSnapshot, ResourceSnapshot, SignalKind,
+    schema, AiOperationPoint, CounterPoint, IntervalSnapshot, ResourceActivitySummary,
+    ResourceSnapshot, SignalKind, SyncDiagnostics,
     StartupPoint, StorageOperationPoint, SyncIterationPoint, Telemetry, TelemetryRecorder,
 };
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
@@ -28,11 +29,10 @@ const EXPORT_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const INSTRUMENTATION_SCOPE: &str = "dystil.telemetry";
 
-pub fn start(telemetry: Arc<Telemetry>) -> Option<JoinHandle<()>> {
+pub fn start(telemetry: Arc<Telemetry>, instance_id: String) -> Option<JoinHandle<()>> {
     let endpoint = crate::app_config::telemetry_endpoint()?
         .trim_end_matches('/')
         .to_owned();
-    let instance_id = uuid::Uuid::new_v4().to_string();
     Some(tokio::spawn(async move {
         let Ok(client) = reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build() else {
             return;
@@ -55,6 +55,12 @@ pub fn start(telemetry: Arc<Telemetry>) -> Option<JoinHandle<()>> {
                 + snapshot.app_starts.len()
                 + snapshot.storage_operations.len()
                 + snapshot.sync_iterations.len()
+                + snapshot.sync_diagnostics.as_ref().map(|_| 7).unwrap_or_default()
+                + snapshot
+                    .resource_activity
+                    .as_ref()
+                    .map(resource_activity_metric_count)
+                    .unwrap_or_default()
                 + snapshot
                     .resources
                     .as_ref()
@@ -114,6 +120,24 @@ fn resource_metric_count(resources: &ResourceSnapshot) -> usize {
     ]
     .into_iter()
     .filter(|present| *present)
+    .count()
+}
+
+fn resource_activity_metric_count(activity: &ResourceActivitySummary) -> usize {
+    [
+        activity.process_cpu_sync_average_x100.is_some(),
+        activity.process_cpu_sync_max_x100.is_some(),
+        activity.process_memory_sync_max_bytes.is_some(),
+        activity.host_cpu_sync_average_x100.is_some(),
+        activity.host_cpu_sync_max_x100.is_some(),
+        activity.process_cpu_background_average_x100.is_some(),
+        activity.process_cpu_background_max_x100.is_some(),
+        activity.process_memory_background_max_bytes.is_some(),
+        activity.host_cpu_background_average_x100.is_some(),
+        activity.host_cpu_background_max_x100.is_some(),
+    ]
+    .into_iter()
+    .filter(|value| *value)
     .count()
 }
 
@@ -186,6 +210,9 @@ fn encode_metrics(snapshot: IntervalSnapshot, instance_id: &str) -> Vec<u8> {
             .into_iter()
             .map(|point| ai_operation_metric(point, now)),
     );
+    if let Some(diagnostics) = snapshot.sync_diagnostics {
+        metrics.extend(sync_diagnostic_metrics(diagnostics, now));
+    }
     metrics.extend(snapshot.app_starts.into_iter().map(|point| app_start_metric(point, now)));
     metrics.extend(
         snapshot
@@ -201,6 +228,9 @@ fn encode_metrics(snapshot: IntervalSnapshot, instance_id: &str) -> Vec<u8> {
     );
     if let Some(resources) = snapshot.resources {
         metrics.extend(resource_metrics(resources, now));
+    }
+    if let Some(activity) = snapshot.resource_activity {
+        metrics.extend(resource_activity_metrics(activity, now));
     }
     ExportMetricsServiceRequest {
         resource_metrics: vec![ResourceMetrics {
@@ -270,6 +300,21 @@ fn sync_iteration_metric(point: SyncIterationPoint, now: u64) -> Metric {
         point.value,
         now,
     )
+}
+
+fn sync_diagnostic_metrics(point: SyncDiagnostics, now: u64) -> Vec<Metric> {
+    [
+        (schema::metric::SYNC_ITERATION_DURATION, "ms", point.iteration_duration_ms),
+        (schema::metric::SYNC_SEGMENT_DURATION, "ms", point.segment_duration_ms),
+        (schema::metric::SYNC_IMAGE_DURATION, "ms", point.image_duration_ms),
+        (schema::metric::SYNC_IMAGE_CANDIDATES_SCANNED, "{candidate}", point.image_candidates_scanned),
+        (schema::metric::SYNC_IMAGE_CANDIDATES_SELECTED, "{candidate}", point.image_candidates_selected),
+        (schema::metric::SYNC_IMAGES_PREPARED, "{image}", point.images_prepared),
+        (schema::metric::SYNC_IMAGE_BYTES_PREPARED, "By", point.image_bytes_prepared),
+    ]
+    .into_iter()
+    .map(|(name, unit, value)| sum_metric(name, unit, Vec::new(), value, now))
+    .collect()
 }
 
 fn sum_metric(name: &str, unit: &str, attributes: Vec<KeyValue>, value: u64, now: u64) -> Metric {
@@ -379,6 +424,24 @@ fn resource_metrics(resources: ResourceSnapshot, now: u64) -> Vec<Metric> {
             "By",
             resources.storage_available_bytes,
         ),
+    ]
+    .into_iter()
+    .filter_map(|(name, unit, value)| value.map(|value| gauge_metric(name, unit, value, now)))
+    .collect()
+}
+
+fn resource_activity_metrics(activity: ResourceActivitySummary, now: u64) -> Vec<Metric> {
+    [
+        (schema::metric::PROCESS_CPU_SYNC_AVERAGE, "1", activity.process_cpu_sync_average_x100.map(u64::from)),
+        (schema::metric::PROCESS_CPU_SYNC_MAX, "1", activity.process_cpu_sync_max_x100.map(u64::from)),
+        (schema::metric::PROCESS_MEMORY_SYNC_MAX, "By", activity.process_memory_sync_max_bytes),
+        (schema::metric::HOST_CPU_SYNC_AVERAGE, "1", activity.host_cpu_sync_average_x100.map(u64::from)),
+        (schema::metric::HOST_CPU_SYNC_MAX, "1", activity.host_cpu_sync_max_x100.map(u64::from)),
+        (schema::metric::PROCESS_CPU_BACKGROUND_AVERAGE, "1", activity.process_cpu_background_average_x100.map(u64::from)),
+        (schema::metric::PROCESS_CPU_BACKGROUND_MAX, "1", activity.process_cpu_background_max_x100.map(u64::from)),
+        (schema::metric::PROCESS_MEMORY_BACKGROUND_MAX, "By", activity.process_memory_background_max_bytes),
+        (schema::metric::HOST_CPU_BACKGROUND_AVERAGE, "1", activity.host_cpu_background_average_x100.map(u64::from)),
+        (schema::metric::HOST_CPU_BACKGROUND_MAX, "1", activity.host_cpu_background_max_x100.map(u64::from)),
     ]
     .into_iter()
     .filter_map(|(name, unit, value)| value.map(|value| gauge_metric(name, unit, value, now)))

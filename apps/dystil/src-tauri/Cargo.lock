@@ -2563,7 +2563,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-telemetry"
-version = "0.0.7"
+version = "0.0.8"
 
 [[package]]
 name = "either"

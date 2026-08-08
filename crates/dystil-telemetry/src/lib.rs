@@ -9,8 +9,10 @@ pub mod schema;
 
 pub use aggregate::{
     AiErrorKind, AiOperationKind, AiOperationPoint, AiProviderKind, AppStartReason,
-    ConsentDecision, CounterPoint, IntervalSnapshot, NoopRecorder, RecordStatus, ResourceSnapshot,
-    SignalKind, StartupPoint, StorageOperationKind, StorageOperationPoint, SyncIterationPoint,
+    ConsentDecision, CounterPoint, IntervalSnapshot, NoopRecorder, RecordStatus,
+    ResourceActivitySummary, ResourceSnapshot,
+    SignalKind, StartupPoint, StorageOperationKind, StorageOperationPoint, SyncDiagnostics,
+    SyncIterationPoint,
     Telemetry, TelemetryRecorder, TraceKind, TracePoint, TELEMETRY_CONSENT_VERSION,
 };
 pub use schema::{

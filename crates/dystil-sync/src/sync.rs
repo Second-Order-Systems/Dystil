@@ -15,7 +15,7 @@ use crate::db::clear_frame_structural_json;
 use crate::evidence::{filter_events, EvidenceFilterConfig};
 use crate::segmenter::{build_segments, SegmentConfig};
 use crate::state::{PendingSegment, SegmentStore};
-use crate::types::{DystilSync, SyncError, SyncOutcome};
+use crate::types::{DystilSync, ImageSyncStats, SyncDiagnostics, SyncError, SyncOutcome};
 use crate::utils::sha256_hex;
 
 const MAX_SEGMENTS_PER_UPLOAD: usize = 32;
@@ -51,6 +51,7 @@ impl DystilSync {
         }
     }
     pub async fn sync_once(&self) -> Result<SyncOutcome, SyncError> {
+        let iteration_started = std::time::Instant::now();
         tracing::info!(
             local_segment_consent = self.local_permissions.segments,
             local_screenshot_consent = self.local_permissions.screenshots,
@@ -63,6 +64,10 @@ impl DystilSync {
                 processed_events: 0,
                 uploaded_images: 0,
                 config: self.fallback_config.clone(),
+                diagnostics: SyncDiagnostics {
+                    iteration_duration_ms: iteration_started.elapsed().as_millis() as u64,
+                    ..SyncDiagnostics::default()
+                },
             });
         }
         tracing::info!(
@@ -124,6 +129,7 @@ impl DystilSync {
             }
         }
 
+        let segment_started = std::time::Instant::now();
         let effective_cursor = resolved_cursor(state.cursor.clone(), &effective_config, Utc::now());
         let events = self
             .read_events(&effective_cursor, &effective_config)
@@ -217,12 +223,16 @@ impl DystilSync {
             store.acknowledge(&response.accepted).await?;
             next_segment += batch_len;
         }
-        let uploaded_images = if self.local_permissions.screenshots {
+        let segment_duration_ms = segment_started.elapsed().as_millis() as u64;
+        let image_started = std::time::Instant::now();
+        let image_stats = if self.local_permissions.screenshots {
             self.sync_images(&client, &effective_config.policy).await?
         } else {
             tracing::info!("dystil-sync: local screenshot consent disabled; skipping image sync");
-            0
+            ImageSyncStats::default()
         };
+        let image_duration_ms = image_started.elapsed().as_millis() as u64;
+        let uploaded_images = image_stats.completed_count;
         tracing::info!(
             processed_events,
             uploaded_segments,
@@ -235,6 +245,15 @@ impl DystilSync {
             processed_events,
             uploaded_images,
             config: effective_config,
+            diagnostics: SyncDiagnostics {
+                iteration_duration_ms: iteration_started.elapsed().as_millis() as u64,
+                segment_duration_ms,
+                image_duration_ms,
+                image_candidates_scanned: image_stats.candidates_scanned,
+                image_candidates_selected: image_stats.candidates_selected,
+                images_prepared: image_stats.images_prepared,
+                image_bytes_prepared: image_stats.bytes_prepared,
+            },
         })
     }
 

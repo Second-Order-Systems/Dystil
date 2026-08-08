@@ -52,7 +52,10 @@ impl ServerCore {
         let telemetry = Arc::new(Telemetry::new());
         let resource_sampler =
             crate::telemetry_resources::start(telemetry.clone(), data_dir.clone());
-        let telemetry_exporter = crate::telemetry_exporter::start(telemetry.clone());
+        let telemetry_instance_id = dystil_storage::get_or_create_machine_id(data_dir.clone())
+            .map_err(|error| format!("failed to load telemetry installation id: {error}"))?;
+        let telemetry_exporter =
+            crate::telemetry_exporter::start(telemetry.clone(), telemetry_instance_id);
         telemetry.record_app_start(AppStartReason::Launch, Outcome::Succeeded);
         if previous_runtime_unclean {
             telemetry.record_app_start(AppStartReason::PreviousUncleanShutdown, Outcome::Succeeded);
