@@ -15,7 +15,7 @@ on:
           - linux
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   release:
