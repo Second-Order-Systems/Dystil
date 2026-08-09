@@ -15,6 +15,8 @@ services:
       - "127.0.0.1:5080:5080"
     volumes:
       - openobserve_data:/data
+    networks:
+      - app
     # This image is distroless and has neither /bin/sh nor a probe utility, so
     # a Docker CMD-SHELL healthcheck would permanently report a false failure.
     # Verify /healthz from the host/operator path instead (documented below).
@@ -28,24 +30,35 @@ services:
       TELEMETRY_OPENOBSERVE_URL: http://openobserve:5080
       TELEMETRY_OPENOBSERVE_ORG: ${TELEMETRY_OPENOBSERVE_ORG:-default}
       TELEMETRY_OPENOBSERVE_AUTHORIZATION: ${TELEMETRY_OPENOBSERVE_AUTHORIZATION:?set TELEMETRY_OPENOBSERVE_AUTHORIZATION}
+    # Keep the local stack's Postgres connectivity on `default`, while sharing
+    # the production `app` network with OpenObserve.
+    networks:
+      - default
+      - app
 
-  # One-shot, private dashboard-as-code provisioning. It has the same internal
-  # OpenObserve credential as dystil-api, but has no host port and is never
-  # reachable by a desktop client.
+  # One-shot, private dashboard-as-code provisioning. It uses a separate
+  # dashboard-write credential, has no host port, and is never reachable by a
+  # desktop client.
   telemetry-dashboard:
     build:
       context: .
       dockerfile: openobserve/Dockerfile.provision
-    env_file:
-      - .env.docker
     depends_on:
       openobserve:
         condition: service_started
     environment:
       DYSTIL_OPENOBSERVE_URL: http://openobserve:5080
       DYSTIL_OPENOBSERVE_ORG: ${TELEMETRY_OPENOBSERVE_ORG:-default}
+      # Dashboard provisioning requires dashboard-write access. Keep this
+      # separate from the relay's ingest-only credential.
+      DYSTIL_OPENOBSERVE_AUTHORIZATION: ${DYSTIL_OPENOBSERVE_DASHBOARD_AUTHORIZATION:?set DYSTIL_OPENOBSERVE_DASHBOARD_AUTHORIZATION}
       DYSTIL_DASHBOARD_FILE: /app/dashboards/dystil-desktop-operational.json
     restart: "no"
+    networks:
+      - app
 
 volumes:
   openobserve_data:
+
+networks:
+  app:

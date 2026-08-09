@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use dystil_sync::{
     upload_pending_semantic_samples, DystilSync, LocalSyncPermissions, SemanticSyncConfig,
-    SyncConfig, SyncError, SyncOutcome,
+    SyncConfig, SyncDiagnostics, SyncError, SyncOutcome,
 };
 use dystil_telemetry::{ErrorKind, Outcome, StorageOperationKind};
 use std::path::PathBuf;
@@ -34,6 +34,8 @@ pub trait EngineHost: Send + Sync {
     /// Receives only a bounded aggregate outcome. Implementations must never
     /// forward raw errors, sync payloads, paths, or device identifiers.
     async fn record_sync_iteration(&self, _outcome: Outcome, _error: Option<ErrorKind>) {}
+    async fn record_sync_diagnostics(&self, _diagnostics: SyncDiagnostics) {}
+    async fn set_sync_active(&self, _active: bool) {}
     async fn record_storage_operation(
         &self,
         _operation: StorageOperationKind,
@@ -192,9 +194,13 @@ impl DystilEngine {
             Duration::from_secs(self.config.snapshot_cleanup_interval_secs.max(1));
         let mut last_snapshot_cleanup: Option<std::time::Instant> = None;
         loop {
-            let delay = match self.run_once(host.as_ref()).await {
+            host.set_sync_active(true).await;
+            let iteration = self.run_once(host.as_ref()).await;
+            host.set_sync_active(false).await;
+            let delay = match iteration {
                 Ok(Some(outcome)) => {
                     host.record_sync_iteration(Outcome::Succeeded, None).await;
+                    host.record_sync_diagnostics(outcome.diagnostics).await;
                     Duration::from_secs(outcome.config.sync_interval_secs.max(1))
                 }
                 Ok(None) => Duration::from_secs(self.config.idle_retry_secs.max(1)),

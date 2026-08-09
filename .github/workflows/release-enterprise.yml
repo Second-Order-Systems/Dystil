@@ -2,9 +2,20 @@ name: Release Enterprise App
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to build and publish
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - windows
+          - macos
+          - linux
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   release:
@@ -13,5 +24,7 @@ jobs:
       publish_mode: enterprise
       cargo_features: enterprise-client
       cloud_base_url: https://coconut.2os.ai
+      telemetry_endpoint: https://coconut.2os.ai/v1/telemetry
       artifact_edition: enterprise
+      platform: ${{ inputs.platform }}
     secrets: inherit

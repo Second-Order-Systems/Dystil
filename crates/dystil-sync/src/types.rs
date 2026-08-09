@@ -85,6 +85,27 @@ pub struct SyncOutcome {
     pub processed_events: usize,
     pub uploaded_images: usize,
     pub config: SyncConfig,
+    pub diagnostics: SyncDiagnostics,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SyncDiagnostics {
+    pub iteration_duration_ms: u64,
+    pub segment_duration_ms: u64,
+    pub image_duration_ms: u64,
+    pub image_candidates_scanned: usize,
+    pub image_candidates_selected: usize,
+    pub images_prepared: usize,
+    pub image_bytes_prepared: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ImageSyncStats {
+    pub(crate) completed_count: usize,
+    pub(crate) candidates_scanned: usize,
+    pub(crate) candidates_selected: usize,
+    pub(crate) images_prepared: usize,
+    pub(crate) bytes_prepared: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]

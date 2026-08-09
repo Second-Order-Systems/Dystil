@@ -14,8 +14,8 @@ use sha2::Digest;
 use sqlx::{Row, SqlitePool};
 
 use crate::types::{
-    DystilSync, ImageCandidate, ImageSyncCache, MonitorSelectionState, PendingCompleteImage,
-    PendingUploadRetry, PreparedImage, SyncError,
+    DystilSync, ImageCandidate, ImageSyncCache, ImageSyncStats, MonitorSelectionState,
+    PendingCompleteImage, PendingUploadRetry, PreparedImage, SyncError,
 };
 use crate::utils::sha256_hex;
 
@@ -64,7 +64,7 @@ impl DystilSync {
         &self,
         client: &reqwest::Client,
         policy: &SyncPolicy,
-    ) -> Result<usize, SyncError> {
+    ) -> Result<ImageSyncStats, SyncError> {
         let mut cache = self.read_image_cache()?;
         let mut completed_count = 0usize;
         completed_count += self
@@ -76,7 +76,13 @@ impl DystilSync {
 
         let db_url = format!("sqlite:{}?mode=ro", self.db_path.display());
         let pool = SqlitePool::connect(&db_url).await?;
-        let (candidates, next_monitor_state, monitor_state_checkpoints, max_eligible_frame_id) =
+        let (
+            candidates,
+            next_monitor_state,
+            monitor_state_checkpoints,
+            max_eligible_frame_id,
+            candidates_scanned,
+        ) =
             self.read_image_candidates(
                 &pool,
                 cache.last_scanned_frame_id,
@@ -96,7 +102,11 @@ impl DystilSync {
                 last_scanned_frame_id = cache.last_scanned_frame_id,
                 "dystil-sync: image sync found no new candidates"
             );
-            return Ok(completed_count);
+            return Ok(ImageSyncStats {
+                completed_count,
+                candidates_scanned,
+                ..ImageSyncStats::default()
+            });
         }
         tracing::info!(
             candidate_count = candidates.len(),
@@ -186,7 +196,12 @@ impl DystilSync {
                 last_scanned_frame_id = cache.last_scanned_frame_id,
                 "dystil-sync: image sync had no uploadable candidates after local snapshot preparation"
             );
-            return Ok(completed_count);
+            return Ok(ImageSyncStats {
+                completed_count,
+                candidates_scanned,
+                candidates_selected: selected_candidate_count,
+                ..ImageSyncStats::default()
+            });
         }
         tracing::info!(
             prepared_count = prepared.len(),
@@ -292,7 +307,13 @@ impl DystilSync {
             );
         }
         self.write_image_cache(&cache)?;
-        Ok(completed_count)
+        Ok(ImageSyncStats {
+            completed_count,
+            candidates_scanned,
+            candidates_selected: selected_candidate_count,
+            images_prepared: attempted_count.saturating_sub(skipped_prepare_count),
+            bytes_prepared: prepared_bytes,
+        })
     }
 
     fn image_cache_path(&self) -> std::path::PathBuf {
@@ -500,6 +521,7 @@ impl DystilSync {
             BTreeMap<String, MonitorSelectionState>,
             BTreeMap<i64, BTreeMap<String, MonitorSelectionState>>,
             Option<i64>,
+            usize,
         ),
         SyncError,
     > {
@@ -683,6 +705,7 @@ impl DystilSync {
             next_monitor_state,
             monitor_state_checkpoints,
             max_eligible_frame_id,
+            eligible_count,
         ))
     }
 
