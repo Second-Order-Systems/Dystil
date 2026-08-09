@@ -868,6 +868,14 @@ async getSyncConsent() : Promise<Result<SyncConsent, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async getTelemetrySettings() : Promise<Result<TelemetrySettings, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_telemetry_settings") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async getWhenItRunsSettings() : Promise<Result<WhenItRunsView, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_when_it_runs_settings") };
@@ -1411,6 +1419,21 @@ async setScreenshotCaptureEnabled(enabled: boolean) : Promise<Result<null, strin
 async setSyncConsent(consent: SyncConsent) : Promise<Result<SyncConsent, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_sync_consent", { consent }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Enable or disable anonymous operational telemetry.
+ *
+ * Community builds only. Under `enterprise-client` telemetry is organization-
+ * managed, so this rejects rather than silently ignoring the request — the same
+ * shape as [`set_sync_consent`].
+ */
+async setTelemetryEnabled(enabled: boolean) : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_telemetry_enabled", { enabled }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1975,6 +1998,18 @@ retentionDays?: number; platform: string; user: User;
  */
 syncConsent?: SyncConsent;
 /**
+ * Anonymous operational telemetry (counts and durations only — never
+ * captured content, window titles, URLs, prompts, or file paths).
+ *
+ * On by default in community builds and user-disableable here or via
+ * `DYSTIL_TELEMETRY=0`. Under `enterprise-client` this is organization-
+ * managed and forced on — see [`SettingsStore::telemetry_effective`].
+ *
+ * Nothing is exported until onboarding completes, so a user always sees
+ * the disclosure before the first payload leaves the machine.
+ */
+telemetryEnabled?: boolean;
+/**
  * Unique device ID for AI usage tracking (generated on first launch)
  */
 deviceId?: string;
@@ -2025,6 +2060,29 @@ uiTheme?: string;
 minimizeToTrayOnClose?: boolean }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "PermissionRecovery"
 export type SyncConsent = { segments: boolean; screenshots: boolean }
+/**
+ * Current effective telemetry state, and whether the user may change it.
+ *
+ * `effective` already accounts for `DYSTIL_TELEMETRY` and the build edition,
+ * so the UI can render the real state rather than the stored preference.
+ */
+export type TelemetrySettings = {
+/**
+ * Whether telemetry is actually on right now.
+ */
+effective: boolean;
+/**
+ * False when organization-managed or forced off by the environment.
+ */
+userCanChange: boolean;
+/**
+ * True when `DYSTIL_TELEMETRY` is what is holding it off.
+ */
+disabledByEnv: boolean;
+/**
+ * True under `enterprise-client`.
+ */
+managedByOrganization: boolean }
 export type User = { id: string | null; name: string | null; email: string | null; image: string | null; token: string | null; api_key: string | null; credits: Credits | null; bio: string | null; website: string | null; contact: string | null; credits_balance: number | null }
 export type WhenItRunsView = { autostartEnabled: boolean; screenshotEnabled: boolean; captureRunning: boolean; capturePaused: boolean; pauseUntil: string | null }
 export type WorthFixingCard = { findingId: string; label: string; claim: string; whyWorthFixing: string; handoffType: HandoffType; handoffTitle: string; handoffPreview: string; occurrenceCount: number; cadence: Cadence; evidenceAvailable: boolean }

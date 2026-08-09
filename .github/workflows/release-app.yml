@@ -355,14 +355,23 @@ jobs:
       - name: Configure release flavor
         shell: bash
         env:
+          # Cloud stays caller-supplied only: community builds must have no
+          # cloud endpoint compiled in.
           RELEASE_CLOUD_BASE_URL: ${{ inputs.cloud_base_url }}
-          RELEASE_TELEMETRY_ENDPOINT: ${{ inputs.telemetry_endpoint }}
+          # Telemetry falls back to the repository variable so community
+          # releases also report. Anonymous counts only, opt-out in Settings or
+          # via DYSTIL_TELEMETRY=0 — see agent_docs/PRIVACY_AND_TELEMETRY.md.
+          # Unset the variable to ship community builds with no endpoint at all.
+          RELEASE_TELEMETRY_ENDPOINT: ${{ inputs.telemetry_endpoint || vars.DYSTIL_TELEMETRY_ENDPOINT }}
         run: |
           if [[ -n "$RELEASE_CLOUD_BASE_URL" ]]; then
             echo "DYSTIL_CLOUD_BASE_URL=$RELEASE_CLOUD_BASE_URL" >> "$GITHUB_ENV"
           fi
           if [[ -n "$RELEASE_TELEMETRY_ENDPOINT" ]]; then
             echo "DYSTIL_TELEMETRY_ENDPOINT=$RELEASE_TELEMETRY_ENDPOINT" >> "$GITHUB_ENV"
+            echo "Telemetry endpoint configured for this build."
+          else
+            echo "No telemetry endpoint; this build cannot report."
           fi
 
       # The Windows Tauri resource configuration packages this DLL. Keep the

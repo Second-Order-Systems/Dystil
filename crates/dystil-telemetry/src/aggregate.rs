@@ -555,15 +555,16 @@ impl Default for Telemetry {
 impl Telemetry {
     pub fn new() -> Self {
         Self {
-            // Desktop operational telemetry is currently product-default on.
-            // The retained gate is reserved for an emergency local disable or
-            // a future policy change; it is not backed by a user setting.
-            consent: AtomicU32::new(
-                ConsentDecision::Granted {
-                    policy_version: TELEMETRY_CONSENT_VERSION,
-                }
-                .encoded(),
-            ),
+            // Starts Unknown so nothing can be exported before the application
+            // has resolved consent from the user setting, the DYSTIL_TELEMETRY
+            // environment variable, the build edition, and onboarding state.
+            //
+            // Fail-closed on purpose: if that resolution never runs, nothing is
+            // recorded and nothing is sent, rather than shipping by default from
+            // a code path nobody wired up. Note `is_enabled` gates the record_*
+            // hot paths as well as `drain_interval`, so Unknown means no data is
+            // gathered at all — not merely withheld.
+            consent: AtomicU32::new(ConsentDecision::Unknown.encoded()),
             consent_generation: AtomicU64::new(0),
             capture: CounterBank::new(),
             image: ImageCounterBank::new(),
@@ -916,9 +917,29 @@ mod tests {
         });
     }
 
+    /// A fresh `Telemetry` must record nothing until the application resolves
+    /// consent. This is the fail-closed guarantee: if the resolution path is
+    /// removed or never runs, no data is gathered — rather than defaulting to
+    /// collection from a code path nobody wired up.
     #[test]
-    fn collection_is_on_by_default() {
+    fn collection_is_off_until_consent_is_resolved() {
         let telemetry = Telemetry::new();
+        assert!(!telemetry.is_enabled());
+        assert_eq!(
+            telemetry.record_capture_trigger(
+                CaptureTriggerKind::Click,
+                Outcome::Succeeded,
+                ReasonKind::None,
+            ),
+            RecordStatus::Disabled
+        );
+        assert!(telemetry.drain_interval().is_none());
+    }
+
+    #[test]
+    fn collection_is_on_once_consent_is_granted() {
+        let telemetry = Telemetry::new();
+        grant(&telemetry);
         assert_eq!(
             telemetry.record_capture_trigger(
                 CaptureTriggerKind::Click,
@@ -981,6 +1002,7 @@ mod tests {
     #[test]
     fn latest_resource_snapshot_is_drained_once() {
         let telemetry = Telemetry::new();
+        grant(&telemetry);
         let resources = ResourceSnapshot {
             process_cpu_percent_x100: Some(123),
             process_memory_rss_bytes: Some(456),

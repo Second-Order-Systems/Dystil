@@ -1,3 +1,11 @@
+---
+status: unreviewed
+verified_against: e84d34c
+verified_on: 2026-08-08
+---
+
+> **Migrated, not yet audited.** This document predates the agent_docs split and has not been checked claim-by-claim against the code. Treat its specifics as unverified until someone confirms them and changes this header to `verified`.
+
 # Accessibility capture follow-ups
 
 ## Completed

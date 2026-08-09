@@ -1168,6 +1168,76 @@ pub async fn get_sync_consent(app_handle: tauri::AppHandle) -> Result<SyncConsen
         .effective())
 }
 
+/// Current effective telemetry state, and whether the user may change it.
+///
+/// `effective` already accounts for `DYSTIL_TELEMETRY` and the build edition,
+/// so the UI can render the real state rather than the stored preference.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TelemetrySettings {
+    /// Whether telemetry is actually on right now.
+    pub effective: bool,
+    /// False when organization-managed or forced off by the environment.
+    pub user_can_change: bool,
+    /// True when `DYSTIL_TELEMETRY` is what is holding it off.
+    pub disabled_by_env: bool,
+    /// True under `enterprise-client`.
+    pub managed_by_organization: bool,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_telemetry_settings(
+    app_handle: tauri::AppHandle,
+) -> Result<TelemetrySettings, String> {
+    let settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
+    let disabled_by_env = crate::store::telemetry_disabled_by_env();
+    let managed_by_organization = cfg!(feature = "enterprise-client");
+    Ok(TelemetrySettings {
+        effective: settings.telemetry_effective(),
+        user_can_change: !disabled_by_env && !managed_by_organization,
+        disabled_by_env,
+        managed_by_organization,
+    })
+}
+
+/// Enable or disable anonymous operational telemetry.
+///
+/// Community builds only. Under `enterprise-client` telemetry is organization-
+/// managed, so this rejects rather than silently ignoring the request — the same
+/// shape as [`set_sync_consent`].
+#[tauri::command]
+#[specta::specta]
+pub async fn set_telemetry_enabled(
+    app_handle: tauri::AppHandle,
+    state: State<'_, RecordingState>,
+    enabled: bool,
+) -> Result<bool, String> {
+    if cfg!(feature = "enterprise-client") && !enabled {
+        return Err(
+            "Operational telemetry is managed by your organization and cannot be disabled."
+                .to_string(),
+        );
+    }
+    if !enabled && crate::store::telemetry_disabled_by_env() {
+        // Already off via the environment; persist the setting anyway so the UI
+        // and the file agree, but say so rather than implying this call did it.
+        tracing::debug!("telemetry already disabled by DYSTIL_TELEMETRY");
+    }
+
+    let mut settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
+    settings.telemetry_enabled = enabled;
+    settings.save(&app_handle)?;
+
+    // Re-resolve immediately. Revoking clears everything already accumulated,
+    // so a user who turns this off does not leave a buffered payload behind.
+    if let Some(server) = state.server.lock().await.as_ref() {
+        crate::telemetry_consent::apply(&app_handle, &server.telemetry);
+    }
+
+    Ok(settings.telemetry_effective())
+}
+
 /// Persist explicit local cloud-sync consent. Screenshot uploads are never
 /// allowed independently of segment uploads.
 #[tauri::command]
@@ -1198,6 +1268,7 @@ pub async fn set_sync_consent(
 #[specta::specta]
 pub async fn complete_onboarding(
     app_handle: tauri::AppHandle,
+    state: State<'_, RecordingState>,
     onboarding_data: serde_json::Value,
 ) -> Result<(), String> {
     if let Err(error) = crate::auth::enqueue_onboarding_data_sync(onboarding_data).await {
@@ -1223,6 +1294,13 @@ pub async fn complete_onboarding(
         updated_store.complete();
         // Replace the managed state with the updated version
         app_handle.manage(updated_store);
+    }
+
+    // Telemetry is withheld until onboarding completes, so the user sees the
+    // disclosure before any payload leaves the machine. Re-resolve now rather
+    // than waiting for the next launch.
+    if let Some(server) = state.server.lock().await.as_ref() {
+        crate::telemetry_consent::apply(&app_handle, &server.telemetry);
     }
 
     let _ = app_handle.emit("onboarding-completed", ());

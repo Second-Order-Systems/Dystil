@@ -1,6 +1,22 @@
+---
+status: narrative
+verified_against: e84d34c
+verified_on: 2026-08-08
+---
+
+> **Narrative, not specification.** Positioning and direction. Some capabilities described here are aspirational. Do not implement from this file — see `agent_docs/`.
+
 # Dystil Marketing Narrative
 
-> Status: base marketing material for the product vision. Dystil's current repository provides the observation, memory, retrieval, and agent foundations described here. Proactive automation discovery and execution are the intended product direction and must be presented as the vision until shipped.
+> Base marketing material. **Superseded on positioning by
+> [`POSITIONING.md`](POSITIONING.md)** — read that first; where the two disagree,
+> `POSITIONING.md` wins.
+>
+> An earlier version of this note said proactive automation discovery "must be
+> presented as the vision until shipped." That is now out of date: **Worth fixing**
+> (discovery, with evidence) and **Ready to use** (kept, reusable artifacts) are
+> shipping surfaces. Broader automation *execution* is still being wired up — see
+> the Status section of the README for the current line between the two.
 
 ## The strategic idea
 

@@ -26,3 +26,10 @@ pre-commit:
         for c in $crates; do
           cargo clippy -p "dystil-$c" --all-targets -- -W clippy::all
         done
+
+    doc-citations:
+      # agent_docs/ claims cite `path :: symbol`. Renaming code silently makes
+      # those docs wrong, which is how the README ended up describing a system
+      # that did not exist. Runs on code and doc changes alike; ~1s.
+      glob: "*.{rs,ts,tsx,toml,md}"
+      run: python3 scripts/check_doc_citations.py

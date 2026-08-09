@@ -70,6 +70,9 @@ app.py
 *.pyz
 *.py3
 *.py3w
+
+# Repository tooling is tracked despite the blanket *.py rule above.
+!scripts/*.py
 *.py3z
 __pycache__/
 .pytest_cache/

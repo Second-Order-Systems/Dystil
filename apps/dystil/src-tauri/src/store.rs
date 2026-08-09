@@ -626,6 +626,17 @@ pub struct SettingsStore {
     /// inferred from login/device state or remote policy.
     #[serde(rename = "syncConsent", default)]
     pub sync_consent: SyncConsent,
+    /// Anonymous operational telemetry (counts and durations only — never
+    /// captured content, window titles, URLs, prompts, or file paths).
+    ///
+    /// On by default in community builds and user-disableable here or via
+    /// `DYSTIL_TELEMETRY=0`. Under `enterprise-client` this is organization-
+    /// managed and forced on — see [`SettingsStore::telemetry_effective`].
+    ///
+    /// Nothing is exported until onboarding completes, so a user always sees
+    /// the disclosure before the first payload leaves the machine.
+    #[serde(rename = "telemetryEnabled", default = "default_true")]
+    pub telemetry_enabled: bool,
     /// Unique device ID for AI usage tracking (generated on first launch)
     #[serde(rename = "deviceId", default = "generate_device_id")]
     pub device_id: String,
@@ -683,6 +694,42 @@ pub struct SettingsStore {
 pub struct SyncConsent {
     pub segments: bool,
     pub screenshots: bool,
+}
+
+/// Whether the `DYSTIL_TELEMETRY` environment variable explicitly disables
+/// telemetry. Accepts `0`, `false`, `off`, and `no`, case-insensitively.
+///
+/// Read at runtime rather than compile time so an operator can disable
+/// telemetry on a machine they did not build.
+pub fn telemetry_disabled_by_env() -> bool {
+    std::env::var("DYSTIL_TELEMETRY")
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            matches!(value.as_str(), "0" | "false" | "off" | "no")
+        })
+        .unwrap_or(false)
+}
+
+impl SettingsStore {
+    /// Resolve whether telemetry may be collected and exported.
+    ///
+    /// Precedence, highest first:
+    ///
+    /// 1. `DYSTIL_TELEMETRY=0` always wins, including for enterprise builds —
+    ///    an operator must be able to stop egress on a machine they control.
+    /// 2. `enterprise-client` forces it on. Consent is organizational, agreed
+    ///    by an administrator, so there is no per-user prompt or toggle. This
+    ///    mirrors [`SyncConsent::effective`].
+    /// 3. Otherwise the user's setting, which defaults to on.
+    pub fn telemetry_effective(&self) -> bool {
+        if telemetry_disabled_by_env() {
+            return false;
+        }
+        if cfg!(feature = "enterprise-client") {
+            return true;
+        }
+        self.telemetry_enabled
+    }
 }
 
 impl SyncConsent {
@@ -857,6 +904,7 @@ impl Default for SettingsStore {
             platform: "unknown".to_string(),
             user: User::default(),
             sync_consent: SyncConsent::default(),
+            telemetry_enabled: true,
             device_id: uuid::Uuid::new_v4().to_string(),
             auto_update: true,
             auto_update_pipes: true,

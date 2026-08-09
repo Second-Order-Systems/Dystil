@@ -494,6 +494,14 @@ fn resource_attributes(schema_version: u16, instance_id: &str) -> Vec<KeyValue> 
             schema::resource_attribute::BUILD_CHANNEL,
             option_env!("DYSTIL_BUILD_CHANNEL").unwrap_or("local"),
         ),
+        string_attribute(
+            schema::resource_attribute::EDITION,
+            if cfg!(feature = "enterprise-client") {
+                "enterprise"
+            } else {
+                "community"
+            },
+        ),
         string_attribute(schema::resource_attribute::OS_TYPE, std::env::consts::OS),
         string_attribute(
             schema::resource_attribute::HOST_ARCH,
