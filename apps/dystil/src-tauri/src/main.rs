@@ -31,9 +31,9 @@ mod ai;
 mod ai_presets;
 mod ai_runtime;
 mod app_config;
+mod ask_for_fix_commands;
 mod auth;
 mod automation_commands;
-mod ask_for_fix_commands;
 mod build_capabilities;
 mod capture_config;
 mod capture_policy;
@@ -69,6 +69,8 @@ mod tray;
 mod updates;
 mod window;
 mod windows_ca_bundle;
+#[cfg(all(target_os = "windows", feature = "windows-store"))]
+mod windows_lifecycle;
 #[cfg(target_os = "windows")]
 mod windows_overlay;
 #[cfg(target_os = "windows")]
@@ -81,9 +83,9 @@ mod worth_fixing_engine;
 pub use agent_commands::*;
 pub use ai::*;
 pub use ai_presets::*;
+pub use ask_for_fix_commands::*;
 pub use auth::*;
 pub use automation_commands::*;
-pub use ask_for_fix_commands::*;
 pub use build_capabilities::*;
 pub use deletion::*;
 pub use server::*;
@@ -520,6 +522,12 @@ async fn main() {
         .plugin(tauri_plugin_http::init())
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
+                // A Store installation has already quiesced the runtime and
+                // set this flag. Do not turn that servicing close back into a
+                // tray hide/minimize operation.
+                if tray::QUIT_REQUESTED.load(Ordering::SeqCst) {
+                    return;
+                }
                 let _ = window.set_always_on_top(false);
                 let _ = window.set_visible_on_all_workspaces(false);
 
@@ -618,7 +626,10 @@ async fn main() {
             }
         });
     }));
-    #[cfg(feature = "official-build")]
+    #[cfg(all(
+        feature = "official-build",
+        not(all(target_os = "windows", feature = "windows-store"))
+    ))]
     let app = app.plugin(tauri_plugin_updater::Builder::new().build());
 
     #[cfg(target_os = "macos")]
@@ -703,6 +714,12 @@ async fn main() {
             let registry = registry.with(OsLogger::new("dystil", "app"));
 
             registry.init();
+
+            // Tauri invokes setup before this rolling subscriber exists. Keep
+            // lifecycle registration after logging initialization so servicing
+            // diagnostics are captured in the Dystil log.
+            #[cfg(all(target_os = "windows", feature = "windows-store"))]
+            crate::windows_lifecycle::register_store_update_restart();
 
             #[cfg(target_os = "windows")]
             windows_webview_env::log_diagnostics();
@@ -953,8 +970,12 @@ async fn main() {
                     .expect("Failed to spawn server thread");
             }
 
-            // Community/source builds never poll an update endpoint.
-            #[cfg(feature = "official-build")]
+            // Direct-distribution builds poll the Tauri updater; Store/MSIX
+            // builds poll Windows.Services.Store instead.
+            #[cfg(any(
+                all(feature = "official-build", not(all(target_os = "windows", feature = "windows-store"))),
+                all(target_os = "windows", feature = "windows-store")
+            ))]
             updates::start_update_check(&app_handle, 5);
 
             // Setup tray
@@ -1026,7 +1047,22 @@ async fn main() {
         // or in any code this synchronously calls (e.g. ShowRewindWindow::show/close).
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             match event {
-                tauri::RunEvent::Ready { .. } => debug!("Ready event"),
+                tauri::RunEvent::Ready { .. } => {
+                    debug!("Ready event");
+                    #[cfg(all(target_os = "windows", feature = "windows-store"))]
+                    {
+                        let app = app_handle.app_handle();
+                        if let Some(home) = app.get_webview_window("home") {
+                            if let Err(error) =
+                                crate::windows_lifecycle::install_store_servicing_hook(&home)
+                            {
+                                warn!(%error, "failed to install Windows package-servicing hook");
+                            }
+                        } else {
+                            warn!("Home window unavailable at Ready; Windows package-servicing hook not installed");
+                        }
+                    }
+                }
                 tauri::RunEvent::ExitRequested { api, .. } => {
                     // When the user clicks "quit dystil" in the tray menu,
                     // QUIT_REQUESTED is set to true — let the exit proceed.

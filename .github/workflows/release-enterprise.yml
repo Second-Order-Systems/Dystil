@@ -22,7 +22,7 @@ jobs:
     uses: ./.github/workflows/release-app.yml
     with:
       publish_mode: enterprise
-      cargo_features: enterprise-client
+      cargo_features: enterprise-client,windows-store
       cloud_base_url: https://coconut.2os.ai
       telemetry_endpoint: https://coconut.2os.ai/v1/telemetry
       artifact_edition: enterprise

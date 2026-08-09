@@ -104,21 +104,11 @@ jobs:
           set -euo pipefail
 
           app_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$APP_SRC_TAURI_DIR/Cargo.toml" | head -1)
-          workspace_version=$(awk '
-            /^\[workspace\.package\]$/ { in_package=1; next }
-            in_package && /^version = "/ {
-              gsub(/^version = "|"$/, "")
-              print
-              exit
-            }
-          ' Cargo.toml)
-
-          if [[ -z "$app_version" || -z "$workspace_version" ]]; then
-            echo "Unable to read the desktop and workspace versions" >&2
-            exit 1
-          fi
-          if [[ "$app_version" != "$workspace_version" ]]; then
-            echo "Desktop version ($app_version) and workspace version ($workspace_version) must match" >&2
+          # apps/dystil is its own Cargo workspace. Its package version is the
+          # single release-version source; the repository-root workspace version
+          # belongs to shared crates and is intentionally independent.
+          if [[ -z "$app_version" ]]; then
+            echo "Unable to read the desktop version" >&2
             exit 1
           fi
           if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -495,6 +485,16 @@ jobs:
           CMAKE_ARGS: -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2
         run: bunx tauri build --verbose --target ${{ matrix.target }} --features "${{ inputs.cargo_features || 'onnx-cpu' }}"
 
+      - name: Package unsigned enterprise MSIX
+        if: matrix.os_type == 'windows' && inputs.artifact_edition == 'enterprise'
+        working-directory: ${{ env.APP_DIR }}
+        shell: powershell
+        run: >
+          .\scripts\package-msix.ps1
+          -Version "${{ needs.plan.outputs.version }}"
+          -TargetTriple "${{ matrix.target }}"
+          -SkipSign
+
       - name: Build macOS
         if: matrix.os_type == 'macos'
         working-directory: ${{ env.APP_DIR }}
@@ -622,6 +622,24 @@ jobs:
             --edition "${{ inputs.artifact_edition || 'individual' }}"
         working-directory: ${{ env.APP_DIR }}
 
+      - name: Stage unsigned enterprise MSIX
+        if: matrix.os_type == 'windows' && inputs.artifact_edition == 'enterprise'
+        shell: powershell
+        env:
+          RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+          ARTIFACT_ARCH: ${{ matrix.artifact_arch }}
+        run: |
+          $msixDirectory = Join-Path $env:APP_SRC_TAURI_DIR 'target\msix'
+          $packages = @(Get-ChildItem -LiteralPath $msixDirectory -Filter 'SecondOrderSystems.Dystil_*.msix' -File)
+          if ($packages.Count -ne 1) {
+            throw "Expected exactly one unsigned enterprise MSIX in $msixDirectory; found $($packages.Count)."
+          }
+          $source = $packages[0].FullName
+          $destinationDirectory = Join-Path $env:GITHUB_WORKSPACE 'release-staging\windows\enterprise'
+          New-Item -ItemType Directory -Force -Path $destinationDirectory | Out-Null
+          $destination = Join-Path $destinationDirectory "Dystil_$($env:RELEASE_VERSION)-$($env:ARTIFACT_ARCH)-store-enterprise.msix"
+          Copy-Item -LiteralPath $source -Destination $destination -Force
+
       - name: Upload staged artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -672,6 +690,10 @@ jobs:
               windows)
                 [[ $(find "$artifact_dir" -type f -name '*.exe' | wc -l) -eq 1 ]]
                 expected_total=$((expected_total + 1))
+                if [[ "$edition" == "enterprise" ]]; then
+                  [[ $(find "$artifact_dir" -type f -name '*.msix' | wc -l) -eq 1 ]]
+                  expected_total=$((expected_total + 1))
+                fi
                 ;;
               macos)
                 [[ $(find "$artifact_dir" -type f -name '*.dmg' | wc -l) -eq 2 ]]
@@ -753,6 +775,7 @@ jobs:
 
             case "$file" in
               *.exe) content_type=application/vnd.microsoft.portable-executable ;;
+              *.msix) content_type=application/msix ;;
               *.dmg) content_type=application/x-apple-diskimage ;;
               *.deb) content_type=application/vnd.debian.binary-package ;;
               *.AppImage) content_type=application/octet-stream ;;
