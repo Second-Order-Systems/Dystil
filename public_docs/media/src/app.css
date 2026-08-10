@@ -1,0 +1,139 @@
+/* Dystil README media — built from the real components.
+   Colours/copy taken from components/dystil/sidebar.tsx, pages/worth-fixing.tsx,
+   worth-fixing/finding-card.tsx, pages/ask-for-fix.tsx, pages/ready-to-use.tsx
+   and agent_docs/DESIGN_SYSTEM.md. */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 1600px; height: 1000px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", ui-sans-serif, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background: #F5F3EE;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+
+/* ---------- app window chrome ---------- */
+
+.window {
+  background: #fff;
+  border-radius: 14px;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: 40px minmax(0, 1fr);
+  box-shadow: 0 32px 70px rgba(24,38,31,.16), 0 4px 14px rgba(24,38,31,.07);
+  border: 1px solid #E2E0DA;
+}
+
+.titlebar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 15px;
+  background: #FBFAF7;
+  border-bottom: 1px solid #E9E7E1;
+}
+.dot { width: 11px; height: 11px; border-radius: 50%; }
+.dot.close { background: #E95E54; }
+.dot.min { background: #E8B452; }
+.dot.zoom { background: #57C46F; }
+
+.titlebar .watching {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 7px;
+  font-size: 12px; color: #6C736F;
+}
+.pulse { width: 8px; height: 8px; border-radius: 50%; background: #12A77A; }
+
+.body { display: grid; grid-template-columns: 246px minmax(0,1fr); min-height: 0; }
+
+/* ---------- sidebar (sidebar.tsx) ---------- */
+
+.sidebar {
+  display: flex; flex-direction: column;
+  border-right: 1px solid #DFDED9;
+  background: #fff;
+  padding: 25px 0;
+}
+.wordmark {
+  padding: 0 24px; margin-bottom: 26px;
+  font-size: 17px; font-weight: 600; letter-spacing: .28em; color: #07110E;
+}
+.wordmark span { color: #087D63; }
+
+.navitem {
+  display: block; position: relative;
+  height: 46px; line-height: 46px;
+  padding: 0 26px;
+  font-size: 18px; color: #42464A;
+}
+.navitem.active { background: #DEF3ED; color: #006A51; }
+.navitem.active::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0;
+  width: 2px; background: #0AA275;
+}
+
+.rail-foot { margin: auto 24px 0; border-top: 1px solid #E7E5DF; padding-top: 19px; }
+.rail-foot .state {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 16px; color: #42464A;
+}
+.rail-foot .note {
+  margin-top: 6px; max-width: 186px;
+  font-size: 14px; line-height: 1.45; color: #9398A0;
+}
+.rail-foot nav { margin-top: 24px; display: grid; gap: 10px; }
+.rail-foot nav a { font-size: 15px; line-height: 1.25; color: #42464A; text-decoration: none; }
+
+/* ---------- main pane ---------- */
+
+.main { padding: 34px 44px; min-width: 0; overflow: hidden; background: #fff; }
+
+h1.page {
+  font-size: 30px; font-weight: 500; letter-spacing: -.03em;
+  line-height: 1.2; color: #171D19;
+}
+p.page-desc {
+  margin-top: 9px; max-width: 74ch;
+  font-size: 15px; line-height: 1.6; color: #69716B;
+}
+
+/* ---------- finding card (finding-card.tsx) ---------- */
+
+.finding { border-bottom: 1px solid #DEDDD8; padding: 24px 0; }
+.finding:first-of-type { border-top: 1px solid #DEDDD8; }
+.finding .label { font-size: 13px; font-weight: 500; color: #0F6E56; }
+.finding .claim {
+  margin-top: 7px; max-width: 72ch;
+  font-size: 22px; font-weight: 500; line-height: 1.35;
+  letter-spacing: -.02em; color: #151716;
+}
+.finding .why {
+  margin-top: 10px; max-width: 74ch;
+  font-size: 15px; line-height: 1.65; color: #58605C;
+}
+.handoff { margin-top: 14px; border-radius: 12px; background: #F4F8F6; padding: 12px 16px; }
+.handoff .t { font-size: 13px; font-weight: 500; color: #26312D; }
+.handoff .p { margin-top: 3px; font-size: 13px; line-height: 1.55; color: #5B635F; }
+
+.actions { margin-top: 17px; display: flex; align-items: center; gap: 20px; }
+
+.btn-primary {
+  border-radius: 10px; background: #087B5F; color: #fff;
+  padding: 9px 18px; font-size: 14px; font-weight: 500;
+}
+.btn-link { font-size: 13px; font-weight: 500; color: #0F6E56; }
+.btn-quiet { font-size: 13px; color: #5F6662; }
+
+/* ---------- evidence (finding-evidence.tsx) ---------- */
+
+.evidence { margin-top: 18px; border-top: 1px solid #E1DFD9; padding-top: 15px; display: grid; gap: 11px; }
+.evidence .line { font-size: 14px; line-height: 1.5; color: #555D59; }
+.evidence .meta { margin-top: 2px; font-size: 12px; color: #7A817D; }
+
+/* ---------- misc ---------- */
+
+.notice { margin-top: 16px; font-size: 13px; color: #446158; }

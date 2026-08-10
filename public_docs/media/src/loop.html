@@ -1,0 +1,71 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="app.css">
+<style>
+html, body { height: 560px; }
+body { background: #FBFAF8; display: block; position: relative; }
+
+.wrap { position: absolute; inset: 0; padding: 66px 84px; }
+
+.eyebrow { font-size: 13px; font-weight: 650; letter-spacing: .12em;
+  text-transform: uppercase; color: #12805F; }
+h1.t { margin-top: 14px; font-size: 40px; font-weight: 600;
+  letter-spacing: -.03em; color: #10130F; }
+p.s { margin-top: 12px; max-width: 74ch; font-size: 17px; line-height: 1.55; color: #5A615C; }
+
+.steps { margin-top: 52px; display: grid; grid-template-columns: 1fr 62px 1fr 62px 1fr; align-items: stretch; }
+
+.step { border-top: 2px solid #10130F; padding-top: 22px; }
+.step .n { font-size: 12px; font-weight: 650; letter-spacing: .1em; color: #8FA49B; }
+.step h2 { margin-top: 13px; font-size: 27px; font-weight: 600; letter-spacing: -.025em; color: #10130F; }
+.step p { margin-top: 12px; font-size: 16px; line-height: 1.6; color: #5C635E; }
+.step .tag { margin-top: 18px; display: inline-block; border-radius: 99px;
+  background: #EAF4EF; color: #116849; padding: 6px 13px; font-size: 13px; font-weight: 500; }
+
+.arrow { display: grid; place-items: center; color: #C3C8C4; font-size: 26px; padding-top: 46px; }
+
+.rule { position: absolute; left: 84px; right: 84px; bottom: 52px;
+  border-top: 1px solid #E6E4DE; padding-top: 20px;
+  display: flex; justify-content: space-between; font-size: 14px; color: #7C837E; }
+.rule b { font-weight: 500; color: #10130F; }
+</style>
+</head><body>
+
+<div class="wrap">
+  <div class="eyebrow">How Dystil works</div>
+  <h1 class="t">It finds the work. Then it builds what does it.</h1>
+  <p class="s">You never file anything, and you never have to remember to open it. The finding comes to you.</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="n">01</div>
+      <h2>Worth fixing</h2>
+      <p>Dystil surfaces work that repeats, and shows the evidence that led it there.</p>
+      <span class="tag">You did not ask it to look</span>
+    </div>
+
+    <div class="arrow">→</div>
+
+    <div class="step">
+      <div class="n">02</div>
+      <h2>Ask for a fix</h2>
+      <p>You clarify. It asks what it misunderstood and which reading is closer.</p>
+      <span class="tag">Your judgement, not its guess</span>
+    </div>
+
+    <div class="arrow">→</div>
+
+    <div class="step">
+      <div class="n">03</div>
+      <h2>Ready to use</h2>
+      <p>Dystil builds the thing that does the work, and it runs in the tools you already pay for.</p>
+      <span class="tag">Nothing kept without your say-so</span>
+    </div>
+  </div>
+
+  <div class="rule">
+    <span><b>Your machine, your models, your data.</b> Capture, redaction, storage and search never leave this computer.</span>
+    <span>github.com/Second-Order-Systems/Dystil</span>
+  </div>
+</div>
+
+</body></html>

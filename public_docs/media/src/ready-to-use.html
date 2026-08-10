@@ -1,0 +1,97 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="app.css">
+<style>
+.window { width: 1500px; height: 900px; }
+.art { border-bottom: 1px solid #DEDDD8; padding: 22px 0; display: grid;
+  grid-template-columns: minmax(0,1fr) auto; gap: 24px; align-items: start; }
+.art:first-of-type { border-top: 1px solid #DEDDD8; }
+.art .kind { font-size: 13px; font-weight: 500; color: #0F6E56; }
+.art h2 { margin-top: 7px; font-size: 20px; font-weight: 500; line-height: 1.35;
+  letter-spacing: -.02em; color: #151716; }
+.art p.desc { margin-top: 7px; max-width: 68ch; font-size: 15px; line-height: 1.6; color: #59615D; }
+.art p.used { margin-top: 7px; font-size: 12px; color: #7A817D; }
+.art .btns { display: flex; gap: 11px; }
+.b1 { border-radius: 9px; background: #087B5F; color: #fff; padding: 8px 15px; font-size: 14px; font-weight: 500; }
+.b2 { border-radius: 9px; border: 1px solid #CFCEC8; background: #fff; color: #4C534F;
+  padding: 8px 15px; font-size: 14px; font-weight: 500; }
+.tail { margin-top: 24px; font-size: 15px; font-weight: 500; color: #087B5F; }
+</style>
+</head><body>
+
+<div class="window">
+  <div class="titlebar">
+    <span class="dot close"></span><span class="dot min"></span><span class="dot zoom"></span>
+    <span class="watching"><span class="pulse"></span>Watching</span>
+  </div>
+
+  <div class="body">
+    <aside class="sidebar">
+      <div class="wordmark">D<span>Y</span>STIL</div>
+      <nav>
+        <span class="navitem">Worth fixing</span>
+        <span class="navitem active">Ready to use</span>
+        <span class="navitem">Ask for a fix</span>
+      </nav>
+      <div class="rail-foot">
+        <div class="state"><span class="pulse"></span>Watching</div>
+        <div class="note">Nothing has left this computer. It cannot.</div>
+        <nav>
+          <a>What stays on this<br>computer</a>
+          <a>Invite your team</a>
+          <a>Settings</a>
+        </nav>
+      </div>
+    </aside>
+
+    <main class="main">
+      <h1 class="page">4 things, ready when you are.</h1>
+      <p class="page-desc">Everything you kept. Each one works from here, so nothing needs setting up again.</p>
+
+      <div style="margin-top:26px">
+
+        <article class="art">
+          <div>
+            <p class="kind">Prompt</p>
+            <h2>Assemble the Friday client report</h2>
+            <p class="desc">Gathers the five standing sources in order, fills the sections that never change, and stops before the commentary.</p>
+            <p class="used">Last used Friday 15 August, 09:06</p>
+          </div>
+          <div class="btns"><span class="b1">Copy it</span><span class="b2">Show me how</span></div>
+        </article>
+
+        <article class="art">
+          <div>
+            <p class="kind">Runbook</p>
+            <h2>Move a customer record between the two apps</h2>
+            <p class="desc">The six fields, in the order you actually do them, with the two that are easy to miss called out.</p>
+            <p class="used">Last used Wednesday 13 August, 15:41</p>
+          </div>
+          <div class="btns"><span class="b1">Open it</span><span class="b2">Show me how</span></div>
+        </article>
+
+        <article class="art">
+          <div>
+            <p class="kind">Prompt</p>
+            <h2>Pre-send check for the final review</h2>
+            <p class="desc">Looks for the three corrections that came up nearly every time, before the work leaves your hands.</p>
+            <p class="used">Not used yet</p>
+          </div>
+          <div class="btns"><span class="b1">Copy it</span><span class="b2">Show me how</span></div>
+        </article>
+
+        <article class="art">
+          <div>
+            <p class="kind">Tool you already have</p>
+            <h2>Your spreadsheet can do the reconciliation step</h2>
+            <p class="desc">A capability you are already paying for, with the exact path to it — no new tool required.</p>
+            <p class="used">Not used yet</p>
+          </div>
+          <div class="btns"><span class="b1">Show me how</span><span class="b2">Send to someone</span></div>
+        </article>
+
+      </div>
+    </main>
+  </div>
+</div>
+
+</body></html>

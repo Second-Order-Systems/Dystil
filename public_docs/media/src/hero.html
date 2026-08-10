@@ -1,0 +1,146 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="app.css">
+<style>
+body { background: #FBFAF8; display: block; position: relative; }
+.sheet { position: absolute; inset: 0; overflow: hidden; }
+
+.left { position: absolute; left: 84px; top: 100px; width: 566px; }
+.mark { display: flex; align-items: center; gap: 14px; margin-bottom: 52px; }
+.mark .glyph { width: 52px; height: 52px; border-radius: 15px; background: #F0F2EF;
+  display: grid; place-items: center; font-size: 23px; font-weight: 600; color: #087D63; }
+.mark .name { font-size: 27px; font-weight: 600; letter-spacing: .26em; color: #07110E; }
+.mark .name i { font-style: normal; color: #087D63; }
+
+h1.hero { font-size: 50px; font-weight: 700; line-height: 1.08; letter-spacing: -.035em; color: #10130F; }
+h1.hero em { font-style: normal; color: #12805F; }
+p.sub { margin-top: 22px; max-width: 34ch; font-size: 18px; line-height: 1.55; color: #5A615C; }
+
+.points { margin-top: 34px; display: grid; gap: 11px; max-width: 566px; }
+.point { border-radius: 14px; background: #fff; border: 1px solid #E8E6E0; padding: 14px 19px; }
+.point b { display: block; font-size: 16px; font-weight: 600; color: #171A17; }
+.point span { display: block; margin-top: 3px; font-size: 14px; color: #7C837E; }
+
+.point.lead { border-color: #CDE3D8; background: #FCFEFD; }
+.chips { margin-top: 11px; display: flex; flex-wrap: wrap; gap: 7px; }
+.chip { border-radius: 99px; padding: 5px 12px; font-size: 13px; font-weight: 500; }
+.chip.now { background: #E4F2EB; color: #0F6144; }
+.chip.next { border: 1px dashed #BAC3BD; color: #7B837D; }
+.key { margin-top: 10px; font-size: 12px; color: #9AA19C; }
+
+.foot { position: absolute; left: 84px; bottom: 60px; }
+.foot .own { display: flex; align-items: center; gap: 11px;
+  font-size: 16px; font-weight: 600; color: #17301F; }
+.foot .own i { font-style: normal; color: #BCC4BE; font-weight: 400; }
+.foot .url { margin-top: 11px; font-size: 15px; color: #7C837E; }
+.foot .url b { font-weight: 500; color: #12805F; }
+
+/* app window, scaled down and bled off the right edge */
+.stage { position: absolute; left: 700px; top: 140px; transform: scale(.78); transform-origin: top left; }
+.window { width: 1120px; height: 900px; }
+.main { padding: 28px 34px; }
+h1.page { font-size: 27px; }
+</style>
+</head><body>
+
+<div class="sheet">
+
+  <div class="left">
+    <div class="mark">
+      <div class="glyph">D</div>
+      <div class="name">D<i>Y</i>STIL</div>
+    </div>
+
+    <h1 class="hero">Make your workday<br>genuinely <em>AI-native</em>.</h1>
+    <p class="sub">Dystil watches how you actually work, then builds the thing that does that work — for the AI you already use.</p>
+
+    <div class="points">
+      <div class="point"><b>Finds the work unprompted</b><span>You never have to remember to use it</span></div>
+      <div class="point"><b>Distils what is worth taking off your plate</b><span>Not everything that repeats is worth automating</span></div>
+
+      <div class="point lead">
+        <b>Builds the thing that does it</b>
+        <div class="chips">
+          <span class="chip now">Automations</span>
+          <span class="chip now">Prompts</span>
+          <span class="chip now">Runbooks</span>
+          <span class="chip now">Tools you own</span>
+          <span class="chip next">Agents</span>
+          <span class="chip next">Claude &amp; ChatGPT skills</span>
+          <span class="chip next">n8n</span>
+          <span class="chip next">Browser extension</span>
+        </div>
+        <div class="key">Solid = shipping today · outlined = in the pipeline</div>
+      </div>
+
+      <div class="point"><b>Yours end to end</b><span>Your machine, your models, your data — what it reads never leaves</span></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="own">Open source <i>·</i> Runs on your machine <i>·</i> Your models <i>·</i> No account</div>
+    <div class="url">github.com/<b>Second-Order-Systems</b>/Dystil</div>
+  </div>
+
+  <div class="stage">
+    <div class="window">
+      <div class="titlebar">
+        <span class="dot close"></span><span class="dot min"></span><span class="dot zoom"></span>
+        <span class="watching"><span class="pulse"></span>Watching</span>
+      </div>
+      <div class="body">
+        <aside class="sidebar">
+          <div class="wordmark">D<span>Y</span>STIL</div>
+          <nav>
+            <span class="navitem active">Worth fixing</span>
+            <span class="navitem">Ready to use</span>
+            <span class="navitem">Ask for a fix</span>
+          </nav>
+          <div class="rail-foot">
+            <div class="state"><span class="pulse"></span>Watching</div>
+            <div class="note">Nothing has left this computer. It cannot.</div>
+          </div>
+        </aside>
+        <main class="main">
+          <h1 class="page">These are worth fixing.</h1>
+          <p class="page-desc">A short list of work where a prepared prompt, runbook, or existing tool could help.</p>
+          <div style="margin-top:20px">
+            <article class="finding">
+              <p class="label">Work that arrives on a schedule</p>
+              <h2 class="claim">Every Friday you rebuild the same client report from five separate places.</h2>
+              <p class="why">Seen on four consecutive Fridays: the same five sources opened in the same order, then figures retyped into the same deck.</p>
+              <div class="handoff">
+                <p class="t">A prompt that assembles the draft</p>
+                <p class="p">Gathers the five sources in order and leaves the commentary to you.</p>
+              </div>
+              <div class="actions">
+                <span class="btn-primary">Keep this</span>
+                <span class="btn-link">Show me what you saw</span>
+                <span class="btn-quiet">This is close, but…</span>
+              </div>
+            </article>
+            <article class="finding">
+              <p class="label">The same work, over and over</p>
+              <h2 class="claim">You copy the same customer fields between two apps, about a dozen times a week.</h2>
+              <p class="why">The same six fields, in the same order, moved by hand.</p>
+              <div class="handoff">
+                <p class="t">A runbook for the handoff</p>
+                <p class="p">The sequence written down once, so it stops living in your head.</p>
+              </div>
+              <div class="actions">
+                <span class="btn-primary">Keep this</span>
+                <span class="btn-link">Show me what you saw</span>
+                <span class="btn-quiet">This is close, but…</span>
+              </div>
+            </article>
+            <article class="finding">
+              <p class="label">The same avoidable mistake</p>
+              <h2 class="claim">Your final review catches the same three errors nearly every time.</h2>
+            </article>
+          </div>
+        </main>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body></html>

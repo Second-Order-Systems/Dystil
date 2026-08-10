@@ -1,0 +1,131 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="app.css">
+<style>
+.window { width: 1500px; height: 900px; }
+.ask { max-width: 880px; margin: 0 auto; }
+.ask-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 40px; border-bottom: 1px solid #DDE1DD; padding-bottom: 18px; }
+.ask-head h1 { font-size: 28px; font-weight: 500; letter-spacing: -.03em; color: #171D19; }
+.ask-head p { margin-top: 7px; max-width: 60ch; font-size: 14px; line-height: 1.6; color: #69716B; }
+.rail { display: flex; gap: 8px; align-items: center; }
+.rail i { display: block; height: 5px; width: 30px; border-radius: 99px; background: #D9DED9; }
+.rail i.on { background: #16805C; }
+
+.avatar { width: 34px; height: 34px; border-radius: 11px; background: #1D2420; color: #fff;
+  display: grid; place-items: center; font-size: 13px; font-weight: 600; }
+.msg-a { display: grid; grid-template-columns: 34px minmax(0,1fr); gap: 13px; }
+.msg-a .who { font-size: 12px; font-weight: 500; color: #78817B; margin-bottom: 5px; }
+.msg-a .txt { max-width: 70ch; font-size: 15px; line-height: 1.65; color: #252B27; }
+.msg-u { display: flex; justify-content: flex-end; margin: 22px 0; }
+.msg-u div { max-width: 620px; border-radius: 16px 16px 4px 16px; background: #252B27;
+  color: #F5F7F5; padding: 11px 16px; font-size: 15px; line-height: 1.5; }
+
+.qcard { margin: 20px 0 0 48px; border-radius: 15px; background: #FBFCFA;
+  box-shadow: 0 15px 38px rgba(28,42,33,.09); border: 1px solid #CFD6D1; overflow: hidden; }
+.qcard .top { display: flex; justify-content: space-between; border-bottom: 1px solid #E4E8E4;
+  padding: 11px 16px; font-size: 12px; }
+.qcard .top b { color: #116849; font-weight: 600; }
+.qcard .top span { color: #7C847E; }
+.qcard .helper { padding: 15px 16px 0; font-size: 13px; line-height: 1.5; color: #69716B; }
+.readings { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 16px; }
+.reading { border: 1px solid #D8DDD9; background: #fff; border-radius: 12px; padding: 18px; min-height: 150px; }
+.reading.on { border-color: #79AA93; background: #EDF6F1; }
+.reading .k { font-size: 11px; font-weight: 600; color: #16805C; }
+.reading .l { margin-top: 16px; font-size: 16px; font-weight: 600; line-height: 1.3; color: #222824; }
+.reading .d { margin-top: 7px; font-size: 13px; line-height: 1.5; color: #667069; }
+.qcard .foot { display: flex; align-items: center; border-top: 1px solid #E4E8E4; padding: 11px 16px; }
+.qcard .foot .own { font-size: 13px; font-weight: 500; color: #56605A; }
+.qcard .foot .use { margin-left: auto; border-radius: 9px; background: #176F51; color: #fff;
+  padding: 9px 16px; font-size: 13px; font-weight: 600; }
+
+.composer { margin-top: 26px; display: flex; align-items: flex-end; gap: 10px;
+  border-radius: 30px; background: #fff; border: 1px solid #C9D1CB; padding: 12px 12px 10px;
+  box-shadow: 0 10px 30px rgba(27,39,31,.10); }
+.composer .field { flex: 1; padding: 0 10px; }
+.composer .ph { font-size: 15px; color: #747D76; }
+.composer .hint { margin-top: 6px; display: flex; gap: 12px; font-size: 11px; color: #737C76; }
+.composer .send { width: 38px; height: 38px; border-radius: 50%; background: #176F51; color: #fff;
+  display: grid; place-items: center; font-size: 17px; }
+</style>
+</head><body>
+
+<div class="window">
+  <div class="titlebar">
+    <span class="dot close"></span><span class="dot min"></span><span class="dot zoom"></span>
+    <span class="watching"><span class="pulse"></span>Watching</span>
+  </div>
+
+  <div class="body">
+    <aside class="sidebar">
+      <div class="wordmark">D<span>Y</span>STIL</div>
+      <nav>
+        <span class="navitem">Worth fixing</span>
+        <span class="navitem">Ready to use</span>
+        <span class="navitem active">Ask for a fix</span>
+      </nav>
+      <div class="rail-foot">
+        <div class="state"><span class="pulse"></span>Watching</div>
+        <div class="note">Nothing has left this computer. It cannot.</div>
+        <nav>
+          <a>What stays on this<br>computer</a>
+          <a>Invite your team</a>
+          <a>Settings</a>
+        </nav>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="ask">
+        <div class="ask-head">
+          <div>
+            <h1>Ask for a fix</h1>
+            <p>Bring any problem that annoys you. Dystil will understand it before proposing an answer.</p>
+          </div>
+          <div class="rail"><i class="on"></i><i class="on"></i><i></i><i></i></div>
+        </div>
+
+        <div style="padding-top:24px">
+          <div class="msg-u"><div>Every Friday I rebuild the same client report from scattered files.</div></div>
+
+          <div class="msg-a">
+            <div class="avatar">D</div>
+            <div>
+              <p class="who">Dystil</p>
+              <p class="txt">I have seen that sequence four Fridays running. Before I propose anything, I want to be sure which part is actually costing you.</p>
+            </div>
+          </div>
+
+          <section class="qcard">
+            <div class="top"><b>Which reading is closer?</b><span>Question 2 of up to 5</span></div>
+            <p class="helper">Both fit what I observed. Your answer decides what gets built.</p>
+            <div class="readings">
+              <div class="reading on">
+                <div class="k">Reading A</div>
+                <div class="l">The gathering is the work</div>
+                <div class="d">Finding and opening the five sources is most of the time. Once everything is in front of you, writing it is quick.</div>
+              </div>
+              <div class="reading">
+                <div class="k">Reading B</div>
+                <div class="l">The writing is the work</div>
+                <div class="d">Collecting the files is quick. What takes the time is deciding what to say about the numbers each week.</div>
+              </div>
+            </div>
+            <div class="foot">
+              <span class="own">Answer in my own words</span>
+              <span class="use">Use this answer</span>
+            </div>
+          </section>
+
+          <div class="composer">
+            <div class="field">
+              <div class="ph">Answer in your own words…</div>
+              <div class="hint"><span>Stays on this computer · 0/1600</span><span>⌘ Enter to send</span></div>
+            </div>
+            <div class="send">↑</div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+</body></html>
