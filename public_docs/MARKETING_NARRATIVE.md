@@ -20,9 +20,10 @@ verified_on: 2026-08-08
 
 ## The strategic idea
 
-**Dystil watches how work actually gets done, finds opportunities to make it easier, and helps automate them.**
+**Dystil watches how work actually gets done, distils what is worth taking off your plate, and builds the thing that does it.**
 
-Memory is the foundation, not the final product.
+Memory is plumbing, not the product. Never lead with it — "an AI that remembers your
+work" is the reminder-app framing this positioning exists to replace.
 
 Dystil first needs to understand a person's real workflow across applications: what they are trying to accomplish, which steps repeat, where they lose time, what breaks, and which decisions recur. That working memory gives Dystil the context to move beyond answering questions about the past. It can identify useful interventions in the present and, with the user's approval, take work off their plate.
 
@@ -32,21 +33,25 @@ The long-term promise is not “software that takes notes for you.” It is:
 
 ## The shortest version
 
-**Dystil understands how you work, spots what can be improved or automated, and helps do it for you.**
+**Make your workday genuinely AI-native.**
 
 ## One-line options
 
-Primary:
+Primary — the canonical claim, owned by [`POSITIONING.md`](POSITIONING.md):
 
-> Dystil watches your work—and finds ways to make it easier.
+> It watches how you work, then builds the agent, automation, or skill that does
+> that work — for the AI you already use.
 
 Alternatives:
 
-- The AI that improves how you work.
-- Your work has patterns. Dystil turns them into leverage.
-- Dystil learns your workflows, finds the friction, and helps remove it.
-- An AI that notices what keeps slowing you down—and does something about it.
-- From repeated work to approved automation.
+- Everyone has a solution. Nobody's looked at your work.
+- Your work has patterns. Dystil turns them into something that runs.
+- From repeated work to an automation you approved.
+- Not another tool to remember. One that takes work off your plate.
+
+**Do not use** any line whose strongest verb is *remembers*, *finds*, *surfaces*, or
+*makes easier*. Those describe half the product and read as a reminder app. The verb
+is **builds**.
 
 Supporting privacy line:
 

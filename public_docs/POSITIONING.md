@@ -18,7 +18,19 @@ fix this file.
 
 ## The one-liner
 
-**Dystil finds the work you keep redoing, and makes it something you can reuse.**
+**Make your workday genuinely AI-native.**
+
+Supporting line: *Dystil watches how you actually work, then builds the agents,
+automations, and skills that do that work — for the AI you already use.*
+
+The bold claim, and the one to lead with everywhere:
+
+> **It watches how you work, then builds the agent, automation, or skill that does
+> that work — for the AI you already use.**
+
+Do not lead with "finds work you repeat." Repetition is the easiest signal to spot
+and the least interesting half of the product. The lead is that Dystil **builds the
+thing**, and that the thing runs in the tools the reader already pays for.
 
 ## What Dystil is
 
@@ -26,6 +38,28 @@ A private desktop app that watches how you work, notices what you do over and ov
 and turns it into instructions that can do that work again.
 
 It runs on your machine. Nothing has to leave it.
+
+## The frame that matters
+
+Lead with **AI-native**, not with repetition. "Finds the work you keep redoing" is
+true and it is a good second sentence, but on its own it lands as a reminder app or
+a macro recorder. The larger claim is the right one:
+
+> Becoming AI-native is not something you install. It is knowing which parts of your
+> work should stop being done by hand, and in what order.
+
+That is the gap Dystil fills, and it is why the product has to observe before it
+recommends. The site's opener carries it best:
+
+> **Everyone has a solution. Nobody's looked at your work.**
+>
+> Every vendor arrives with the answer already chosen, and none of them have watched
+> how work actually moves through your day. So you buy the answer and hope it matches
+> the question. Impressions, not evidence.
+
+Reusable phrases: *impressions, not evidence*; *fitted to you, not tuned on someone
+else's work*; *the finding comes to you*. Company sign-off: *Specific Intelligence.
+Built with you.*
 
 ## What Dystil is not
 
@@ -48,6 +82,13 @@ its own — not a demo of something better.
 **Teams are the paid product.** Shared automations, managed sync, administration.
 Individuals should never feel they are using a crippled version; teams should see
 an obvious reason to upgrade. Both things have to be true at once.
+
+**It is the same app.** What a team installs is the app in this repository; the team
+edition adds capability on top rather than replacing it. Say this plainly — it is
+what makes "the open-source edition is not a trial" credible instead of defensive.
+
+**Keep pricing and deployment tiers out of the README.** They belong on the site,
+where they can change without a commit. The README links to `2os.ai` and stops there.
 
 ---
 
@@ -136,6 +177,43 @@ or reveal what you were working on.* If a claim needs the reader not to check, d
 not make it.
 
 ---
+
+## What Dystil builds — and the rule for saying so
+
+The output list is the lead claim, so it is also the easiest place to overclaim.
+Split it every time it appears, in copy and in graphics:
+
+| In the app today | Being built next |
+|---|---|
+| Automations that run through Claude Code or Codex | Agents generated from a finding |
+| Prompts | Skills for Claude and ChatGPT |
+| Runbooks | Workflows for n8n and similar tools |
+| Pointers to a tool the user already owns | A browser extension |
+
+**The right column is a roadmap and must always be labelled as one.** It is fine —
+encouraged — to lead with the ambition. It is not fine to let a reader install the
+app expecting a browser extension. Every surface that names these has to carry the
+distinction: the README uses a status column, the hero banner uses "in the app
+today" and "being built next" chip groups.
+
+Checked at the time of writing: n8n appears nowhere in the codebase; the only
+"skill" references are `--no-skills` flags that disable them; every "browser
+extension" reference is capture code that *avoids* recording extension popups.
+Automation execution is real (`dystil-automation :: execute`).
+
+## What it looks for
+
+Five shapes, and the app shows this exact list on day one. Use all five — the last
+two are the ones no competitor asks about, because the user would never think to
+put them on a list.
+
+1. **The same work, over and over** — you do it the same way every time.
+2. **Work that arrives on a schedule** — the Monday report, the month-end close.
+3. **Work where you make the call** — the judgement is yours; the groundwork is not.
+4. **Work that could come out better** — done to the standard you would want if you
+   had the time.
+5. **What you would do if you had the time** — skipped because the day is full, not
+   because it does not matter.
 
 ## Vocabulary
 
