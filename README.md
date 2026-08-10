@@ -18,7 +18,7 @@
 </div>
 
 <p align="center">
-  <img src="public_docs/media/banner-hero.png" alt="Dystil — make your workday genuinely AI-native" width="100%">
+  <img src="public_docs/media/hero.png" alt="Dystil — make your workday genuinely AI-native" width="100%">
 </p>
 
 ---
@@ -63,7 +63,7 @@ finding comes to you.
 ## What Dystil does
 
 <p align="center">
-  <img src="public_docs/media/banner-loop.png" alt="From scattered activity to reusable work" width="100%">
+  <img src="public_docs/media/loop.png" alt="From scattered activity to reusable work" width="100%">
 </p>
 
 Three surfaces, in order. This is the whole product.
@@ -177,8 +177,6 @@ database dump.
 ---
 
 ## Status
-
-Honest about what runs today.
 
 **✅ Works today**
 - Activity-triggered capture via OS accessibility APIs (macOS AX, Windows UIA)
@@ -327,8 +325,7 @@ wall-clock uptime.
 | Cost | **$0** | _TBD_ | _TBD_ |
 | Leaves your machine | nothing | prompt + bounded context | prompt + bounded context |
 
-> Figures marked _TBD_ are being measured. We would rather leave them blank than
-> publish an estimate you might budget against.
+> Figures marked _TBD_ are still being measured.
 
 ---
 
@@ -368,7 +365,7 @@ disabling also clears anything counted but not yet sent. Nothing is sent before
 onboarding completes. A build made from source without `DYSTIL_TELEMETRY_ENDPOINT`
 has no endpoint and cannot report at all.
 
-**One honest caveat:** if you choose a hosted provider, your prompts and their
+If you choose a hosted provider, your prompts and their
 bounded context go to that provider. Dystil does not require one.
 
 You can delete captured data by time range, by application, or by site, or reset

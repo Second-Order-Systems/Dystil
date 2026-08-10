@@ -11,8 +11,8 @@ re-shoot.
 
 | File | Source | Used in |
 |---|---|---|
-| `banner-hero.png` | `src/hero.html` | Top of README |
-| `banner-loop.png` | `src/loop.html` | "What Dystil does" |
+| `hero.png` | `src/hero.html` | Top of README |
+| `loop.png` | `src/loop.html` | "What Dystil does" |
 | `screen-worth-fixing.png` | `src/worth-fixing.html` | "Everyone has a solution" |
 | `screen-evidence.png` | `src/evidence.html` | Worth fixing |
 | `screen-ask-for-fix.png` | `src/ask-for-fix.html` | Ask for a fix |
@@ -37,11 +37,16 @@ done
       --screenshot=../loop.png "file://$PWD/loop.html"
 ```
 
-Then rename `hero.png` → `banner-hero.png`, `loop.png` → `banner-loop.png`, and the
-rest to their `screen-` names. Rendering at scale factor 2 is what keeps the type
-crisp when GitHub scales the image down to its content width.
+Then rename the four app shots to their `screen-` names. Rendering at scale factor 2
+is what keeps the type crisp when GitHub scales the image down to its content width.
 
-## Keeping them honest
+**If you replace an image, give it a new filename.** GitHub's image cache is keyed on
+the URL, so overwriting `hero.png` in place leaves readers looking at the old picture
+for an unpredictable amount of time — a hard refresh does not reliably clear it. The
+banners were originally `banner-hero.png` and `banner-loop.png`; they were renamed
+for exactly this reason.
+
+## Keeping them accurate
 
 `src/app.css` mirrors the real components — `components/dystil/sidebar.tsx`,
 `worth-fixing/finding-card.tsx`, `pages/ask-for-fix.tsx`, `pages/ready-to-use.tsx`

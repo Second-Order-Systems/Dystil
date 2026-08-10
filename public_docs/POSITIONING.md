@@ -164,7 +164,7 @@ Supporting facts worth using, all verifiable:
 
 **Hosted model providers.** If a user chooses Anthropic or OpenAI, their prompts and
 the bounded context go to that provider. Never claim data "never leaves the device"
-without this caveat. The honest framing: Dystil does not require it, and Ollama
+without this caveat. The accurate framing: Dystil does not require it, and Ollama
 avoids it entirely.
 
 **Anonymous usage counts.** Official community builds send operational counters by
