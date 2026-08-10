@@ -33,7 +33,15 @@ Redaction state is persisted in the `dystil_text_redaction_state` table.
 ### Community builds: anonymous counters, on by default
 
 **Captured content never leaves.** No accessibility text, window titles, app names,
-URLs, file paths, prompts, or model replies are transmitted in any build.
+URLs, file paths, prompts, or model replies are transmitted in any build that exists
+today.
+
+> **Planned change — do not write copy that assumes this stays true for teams.**
+> The team edition is intended to process raw capture **server-side**, which is the
+> designed difference between the editions. When that ships, the sentence above
+> becomes true of the open-source build only, and this section must be split per
+> edition before the feature lands — not after. The open-source guarantee is
+> unaffected: processing stays on the machine, which is what that edition is.
 
 **Anonymous operational counters do leave, by default.** Official community releases
 are built with `DYSTIL_TELEMETRY_ENDPOINT` set from the `vars.DYSTIL_TELEMETRY_ENDPOINT`

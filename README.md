@@ -3,96 +3,169 @@
 
   <h1>Dystil</h1>
 
-  <p><strong>Dystil finds the work you keep redoing, and makes it something you can reuse.</strong></p>
-  <p>A private desktop app that watches how you work, notices what repeats, and turns it into instructions that can do that work again. On your machine.</p>
+  <p><strong>Make your workday genuinely AI-native.</strong></p>
+  <p>Dystil watches how you actually work, then builds the agents, automations, and skills that do that work — for the AI you already use. On your machine, from your own evidence.</p>
 
   <p><code>Rust</code> · <code>Tauri v2</code> · <code>Next.js</code> · <code>SQLite</code> · <code>Ollama</code> · <code>MCP</code></p>
 
   <p>
-    <a href="#the-loop">How it works</a> ·
+    <a href="#what-dystil-does">What it does</a> ·
     <a href="#getting-started">Getting started</a> ·
     <a href="#architecture">Architecture</a> ·
     <a href="#privacy">Privacy</a> ·
-    <a href="#individual-vs-teams">Teams</a>
+    <a href="#for-teams">For teams</a>
   </p>
 </div>
 
 <p align="center">
-  <img src="public_docs/media/banner-hero.png" alt="Dystil — find the work you repeat, and stop repeating it" width="100%">
+  <img src="public_docs/media/banner-hero.png" alt="Dystil — make your workday genuinely AI-native" width="100%">
 </p>
 
-> [!NOTE]
-> The open-source app is built for **one person on their own machine**, and it is
-> complete on its own. **Teams** — shared automations, managed sync, administration —
-> is the commercial edition. See [Individual vs Teams](#individual-vs-teams).
+---
+
+## Everyone has a solution. Nobody's looked at your work.
+
+You have the models. You have the tools. You have probably paid for a few of them.
+And your day still looks almost exactly like it did before.
+
+That is not a tooling problem. Becoming AI-native is not something you install — it
+is knowing which parts of your work should stop being done by hand, and in what
+order. Nobody can tell you that. Every vendor arrives with the answer already
+chosen, and none of them have watched how work actually moves through your day.
+
+So you buy the answer and hope it matches the question. Impressions, not evidence.
+
+**Dystil starts from the other end.**
+
+> ### It watches how you work, then builds the agent, automation, or skill that does that work — for the AI you already use.
+
+Not a report. Not a list of recommendations you still have to act on. Dystil finds
+the work, shows you the evidence, asks you the questions only you can answer, and
+builds the thing that does it — an agent, an automation wired into Claude or
+ChatGPT or n8n, a skill, a browser extension that works where you already work.
+
+You never write anything down for it. You never have to remember to use it. The
+finding comes to you.
+
+<p align="center">
+  <img src="public_docs/media/screen-worth-fixing.png" alt="The Worth fixing screen: findings about repeated work, each with the evidence behind it" width="100%">
+</p>
 
 > [!IMPORTANT]
 > **Dystil sends anonymous usage counts, and it is on by default.** Counts and
 > timings only — never what Dystil read, and never window titles, app names, URLs,
 > file paths, prompts, or model replies. Nothing is sent until you finish setting up.
->
 > Turn it off in **Settings → Send anonymous usage counts**, or set
-> `DYSTIL_TELEMETRY=0`. Full payload list: [What we send](#what-we-send).
+> `DYSTIL_TELEMETRY=0`. Details: [Privacy](#privacy).
 
 ---
 
-## What Dystil is
-
-You already know the work you do over and over. The Friday report rebuilt from six
-places. The customer details copied between two apps. The review that catches the
-same mistake every time.
-
-Dystil watches how you work, finds those, and turns them into something reusable.
-You never write anything down for it, and you never have to remember to use it —
-it arrives with the finding.
-
-**What it is not:** a note-taking app, a day planner, or a chatbot over your
-history. It can tell you what you did on Tuesday, but that is a by-product. The
-point is automation.
-
-<!-- MEDIA SLOT 1 — hero screenshot. See public_docs/media/BRIEF.md -->
-
----
-
-## The loop
+## What Dystil does
 
 <p align="center">
   <img src="public_docs/media/banner-loop.png" alt="From scattered activity to reusable work" width="100%">
 </p>
 
+Three surfaces, in order. This is the whole product.
+
 ### 1 · Worth fixing
 
 Dystil surfaces work that repeats, with the evidence that led it there. You did not
-ask it to look.
+ask it to look — that is the difference between this and a tool you have to
+remember to open.
 
-<!-- MEDIA SLOT 2 — Worth fixing screen, a finding with its evidence expanded -->
+<p align="center">
+  <img src="public_docs/media/screen-evidence.png" alt="A finding with its evidence expanded, showing what Dystil observed and when" width="100%">
+</p>
+
+Every finding opens. "Show me what you saw" lists what it actually observed, so you
+can disagree with it.
 
 ### 2 · Ask for fix
 
 You clarify. It asks what it misunderstood and which reading is closer. Your
-judgement is the one input it cannot generate.
+judgement is the one input it cannot generate — and the one that makes what comes
+out fitted to you rather than tuned on someone else's work.
 
-<!-- MEDIA SLOT 3 — Ask for fix conversation -->
+<p align="center">
+  <img src="public_docs/media/screen-ask-for-fix.png" alt="Ask for a fix: Dystil offers two readings of the problem and asks which is closer" width="100%">
+</p>
 
 ### 3 · Ready to use
 
-What you keep. Reusable instructions for work you want done the same way again —
-the report, the reply, the summary, done to the standard you would want if you had
-the time.
+What you keep, and what runs. The automation, the prompt, the runbook — the report,
+the reply, the summary, done to the standard you would want if you had the time.
+See [What it builds](#what-it-builds) for the full list, including what is still
+being built.
 
-<!-- MEDIA SLOT 4 — Ready to use, saved artifacts -->
+<p align="center">
+  <img src="public_docs/media/screen-ready-to-use.png" alt="Ready to use: kept prompts, runbooks, and existing tools, each ready to run" width="100%">
+</p>
+
+**What this is not:** a note-taking app, a day planner, or a chatbot over your
+history. It can tell you what you did on Tuesday, but that is a by-product. The
+point is getting the work done without you.
 
 ---
 
-## Why Dystil
+## What it looks for
 
-**It finds work you did not think to ask about.** Most automation tools need you to
-already know what to automate and to sit down and build it. Dystil brings you the
-finding and the evidence.
+Repetition is only the easiest thing to spot. These are the five shapes Dystil
+watches for — the same list the app shows you on day one.
+
+**The same work, over and over.** You do it the same way every time. If nothing
+about it changes, it does not need you.
+
+**Work that arrives on a schedule.** The Monday report, the month-end close. Most of
+that time is setup and waiting, and it can be done before you sit down.
+
+**Work where you make the call.** The judgement has to be yours. Rebuilding the same
+groundwork before every one of them does not.
+
+**Work that could come out better.** The report, the reply, the summary. Done to the
+standard you would want if you had the time.
+
+**What you would do if you had the time.** The prep before the call, the check
+before the decision. Skipped because the day is full, not because it does not
+matter.
+
+The last two are the ones no automation tool asks you about, because you would never
+think to put them on a list.
+
+---
+
+## What it builds
+
+Not advice. Something that runs — in the tools you already pay for, not in a
+console you have to learn.
+
+| What Dystil builds | | |
+| --- | --- | --- |
+| **Automations** that run through Claude Code or Codex | Shipping | ✅ |
+| **Prompts** — reusable instructions for work you want done the same way again | Shipping | ✅ |
+| **Runbooks** — a clear sequence for work that still needs your judgment | Shipping | ✅ |
+| **A tool you already own** — the path to a capability you are already paying for | Shipping | ✅ |
+| **Agents** fitted to how you work, not tuned on someone else's | Building | 🚧 |
+| **Skills** for Claude and ChatGPT | Building | 🚧 |
+| **Workflows** for n8n and the automation tools you already run | Building | 🚧 |
+| **A browser extension** that works where the work happens | Building | 🚧 |
+
+> ✅ works in the current build. 🚧 is what we are building next.
+
+Nothing is kept unless you keep it, and each one traces back to the evidence it
+came from.
+
+---
+
+## Why it can do this
+
+**It works from evidence, not from a questionnaire.** Most automation tools need you
+to already know what to automate and to sit down and build it. Dystil brings you the
+finding and what led to it.
 
 **It runs on your machine.** Capture, redaction, storage, and search are local.
-Point it at [Ollama](https://ollama.com) and inference is local too — no API key,
-no per-token cost, nothing leaving the device.
+Point it at [Ollama](https://ollama.com) and inference is local too — no API key, no
+per-token cost, nothing leaving the device.
 
 **Your judgement stays yours.** Dystil does the groundwork that repeats, not the
 deciding.
@@ -100,22 +173,6 @@ deciding.
 **It plugs into the agents you already use.** Your work history is available over
 MCP to Claude Code, Codex, or any MCP client — bounded and sanitized, never a raw
 database dump.
-
----
-
-## Three situations
-
-**The same work, over and over.** You copy customer details between two apps a
-dozen times a week. Dystil notices the shape, shows you the evidence, and builds
-the step you keep doing by hand.
-
-**Work that arrives on a schedule.** Every Friday you rebuild the same client report
-from scattered files. Dystil recognises the pattern across weeks, not just within
-one, and hands you a reusable version.
-
-**The same avoidable mistake.** Your final review catches the same errors every
-time. Dystil surfaces the recurrence — and once it is written down, it stops being
-something you have to remember.
 
 ---
 
@@ -128,13 +185,19 @@ Honest about what runs today.
 - Two-pass local PII redaction — deterministic before storage, ML model after
 - Local SQLite storage with full-text search
 - Worth fixing → Ask for fix → Ready to use
-- Local models via Ollama; Anthropic, OpenAI, and custom endpoints
+- Prompts, runbooks, and pointers to tools you already own
+- Automations executed through Claude Code or Codex, with per-run logs
+- Local models via Ollama; Anthropic, OpenAI, and any OpenAI-compatible endpoint
 - MCP server exposing bounded search over your work
 - Per-app, per-site, and per-range deletion
 
-**🚧 Being wired up**
+**🚧 Being built**
+- Agents generated from a finding
+- Skills for Claude and ChatGPT
+- Workflows for n8n and similar automation tools
+- A browser extension
+- Broader automation execution beyond the coding-agent runners
 - Self-hosted operational telemetry
-- Broader automation execution
 
 **💭 Planned**
 - Semantic search over the work index (retrieval is keyword-based today)
@@ -173,14 +236,14 @@ bunx tauri build
 Same command CI runs.
 
 Dystil needs operating-system accessibility permission to see anything, and will
-request it on first launch. If it gets denied or the grant goes stale after an
-update, the app has a recovery screen that walks you back through it.
+request it on first launch. If the grant is denied or goes stale after an update,
+the app has a recovery screen that walks you back through it.
 
 ### Connect a model
 
 Point Dystil at a running Ollama instance (`http://localhost:11434` by default) and
-it will list the models you have already pulled. Or configure Anthropic, OpenAI, or
-any OpenAI-compatible endpoint in settings.
+it will list the models you have already pulled — Llama, Mistral, Qwen, whatever you
+have. Or configure Anthropic, OpenAI, or any OpenAI-compatible endpoint in settings.
 
 ---
 
@@ -193,7 +256,7 @@ any OpenAI-compatible endpoint in settings.
 | Backend | Rust, Tokio |
 | Storage | SQLite (FTS5 for search) |
 | Redaction | Local ONNX model + deterministic detectors |
-| Inference | Your provider — Ollama, Anthropic, OpenAI, or custom |
+| Inference | Your provider — Ollama, Anthropic, OpenAI, or OpenAI-compatible |
 | Agent integration | Model Context Protocol |
 | Sync | Optional, off by default |
 
@@ -253,7 +316,7 @@ Full technical detail lives in [`agent_docs/`](agent_docs/README.md).
 
 ## Token use
 
-Dystil calls whichever model provider you configure, so cost is yours to control.
+Dystil calls whichever provider you configure, so the cost is yours to control.
 Measured **per active hour** — an hour in which Dystil actually observed work, not
 wall-clock uptime.
 
@@ -263,7 +326,6 @@ wall-clock uptime.
 | Output tokens | n/a | _TBD_ | _TBD_ |
 | Cost | **$0** | _TBD_ | _TBD_ |
 | Leaves your machine | nothing | prompt + bounded context | prompt + bounded context |
-| Works offline | yes | no | no |
 
 > Figures marked _TBD_ are being measured. We would rather leave them blank than
 > publish an estimate you might budget against.
@@ -275,69 +337,62 @@ wall-clock uptime.
 > Everything Dystil has read stays in one folder on this machine, and there is no
 > copy of it to ask for.
 
-Captured content is never transmitted. What Dystil read about your work does not
-leave the device — not to us, not to anyone.
+**In the open-source app, captured content is never transmitted.** Processing
+happens on your machine — that is what this edition is. Sensitive text is redacted
+twice, deterministically before anything is written and then by a local model
+afterwards. No account is required.
 
-| Boundary | Default |
-| --- | --- |
-| Captured activity | Local SQLite, on the originating device. Never transmitted. |
-| Sensitive text | Redacted twice — deterministically before storage, then by a local ML model |
-| Screenshots | Off |
-| Inference | Local if you use Ollama; otherwise your chosen provider |
-| Anonymous usage counts | **On** — see [What we send](#what-we-send). One switch to disable. |
-| Cloud endpoint | **Not compiled into open-source builds** |
-| Accounts | Not required |
+Teams is different by design, and it is the actual difference between the editions:
+there, raw capture is processed on Dystil's servers so a team gets analysis no
+single machine can do. An administrator agrees to that. If you are running the
+open-source app, none of it applies to you.
 
-The cloud row is worth being precise about: it is not a setting that defaults to
-off. `cloud_base_url()` is `option_env!`, so the endpoint is absent from the
-community binary, and `app_config.rs :: community_build_has_no_cloud_url` fails if
-that changes.
+**Dystil does not take screenshots unless you turn them on.** It reads accessibility
+text — the same text a screen reader sees. Text-only capture is the product default,
+and in that mode it never touches screen-capture APIs at all
+(`capture_policy.rs :: product_capture_mode`; `recording_settings.rs` sets the
+default with the note *"screenshots require an explicit user opt-in"*).
 
-### What we send
+**No cloud endpoint is compiled into open-source builds.** Not disabled — absent.
+`cloud_base_url()` is `option_env!`, and `app_config.rs :: community_build_has_no_cloud_url`
+fails the build if that changes.
 
-Anonymous operational counters, every five minutes, to a Dystil-operated endpoint:
+**What does leave:** anonymous operational counters — counts, timings, error
+categories as fixed enums, app version, platform, a random install ID. No free text
+of any kind; every attribute is a bounded enum or a number, enforced by
+`registry_has_no_known_sensitive_attribute_keys`. Never anything Dystil read, and
+never window titles, app names, URLs, file paths, prompts, or model replies.
 
-| Included | Never included |
-| --- | --- |
-| Counts of capture runs, successes, failures | Anything Dystil read |
-| Durations and error categories (as fixed enums) | Window titles, app names, URLs |
-| App version, platform, architecture | File paths, document names |
-| An install ID (random, not tied to you) | Prompts, model replies, model endpoints |
-| Edition (community or enterprise) | Evidence, findings, artifacts, database contents |
-
-The payload carries no free text. Every attribute is a bounded enum or a number,
-enforced by the schema in `crates/dystil-telemetry/src/schema.rs` — there is a test,
-`registry_has_no_known_sensitive_attribute_keys`, that fails if a sensitive key is
-added.
-
-**Turning it off:**
-
-```bash
-DYSTIL_TELEMETRY=0        # environment, wins over everything
-```
-
-or **Settings → Send anonymous usage counts**. Disabling also clears whatever has
-been counted locally but not yet sent.
-
-**Nothing is sent before onboarding completes**, so you see this disclosure in the
-app before the first payload leaves. If you build from source without setting
-`DYSTIL_TELEMETRY_ENDPOINT`, your build has no endpoint and cannot report at all.
-
-In enterprise builds telemetry is organization-managed and configured by your
-administrator.
-
-You can delete captured data by time range, by application, or by site, or reset
-everything. Deleting activity also removes what Dystil derived from it.
+Turn it off with `DYSTIL_TELEMETRY=0` or **Settings → Send anonymous usage counts**;
+disabling also clears anything counted but not yet sent. Nothing is sent before
+onboarding completes. A build made from source without `DYSTIL_TELEMETRY_ENDPOINT`
+has no endpoint and cannot report at all.
 
 **One honest caveat:** if you choose a hosted provider, your prompts and their
 bounded context go to that provider. Dystil does not require one.
 
-Details: [`agent_docs/PRIVACY_AND_TELEMETRY.md`](agent_docs/PRIVACY_AND_TELEMETRY.md).
+You can delete captured data by time range, by application, or by site, or reset
+everything — and deleting activity removes what Dystil derived from it.
+
+Full detail: [`agent_docs/PRIVACY_AND_TELEMETRY.md`](agent_docs/PRIVACY_AND_TELEMETRY.md).
 Please report security issues privately rather than opening a public issue.
 
 ---
 
-## Individual vs Teams
+## For teams
+
+Everything above is one person and one machine, and for one person it is the whole
+product — not a trial, not a demo of something better.
+
+The problem gets harder with more people. The work that repeats is spread across
+them, the expertise sits with whoever has been there longest, and no one has a map
+of how any of it moves. **This repo is the app teams install.**
+
+The real difference is **where the work is processed.** The open-source app does it
+all on your machine, which is why nothing has to leave. Teams sends raw capture to
+Dystil's servers, because finding the work that repeats *across people* is not
+something one laptop can see. That is a trade, and it should be made deliberately —
+by an administrator, on the record.
 
 | | Individual (open source) | Teams |
 | --- | --- | --- |
@@ -346,13 +401,10 @@ Please report security issues privately rather than opening a public issue.
 | MCP access for your agents | ✅ | ✅ |
 | Anonymous usage counts | on, one switch to disable | organization-managed |
 | Cloud endpoint compiled in | never | managed sync |
-| Screenshot + segment capture | — | consent-gated |
 | Signed official builds | build it yourself | ✅ |
 | Shared automations, admin | — | ✅ |
 
-The open-source edition is not a trial. For one person it is the whole product, and
-it keeps the stronger guarantee where it counts: no cloud endpoint is compiled in at
-all, and the usage counters are one switch away from off.
+More at **[2os.ai](https://2os.ai)**.
 
 ---
 
@@ -369,4 +421,21 @@ latter.
 
 ## License
 
-Apache License 2.0.
+**[Apache License 2.0](LICENSE)** — the desktop application and every crate in
+`crates/`. Everything that runs on your machine is open source, including the
+client-side sync code. That is deliberate: in a product that reads your work, a
+closed component is exactly the thing you would want to inspect.
+
+Not covered: [`cloud/`](cloud/LICENSE), Dystil's server-side services. Those are not
+part of the open-source distribution and are being moved to a separate repository.
+
+"Dystil" and the Dystil logo are trademarks of Second Order Systems. Apache 2.0
+grants no trademark rights — you are free to fork and build on the code, but please
+ship it under your own name.
+
+Contributions are welcome under a [DCO](CONTRIBUTING.md) — no CLA, and you keep the
+copyright in your work.
+
+<div align="center">
+  <sub>Specific Intelligence. Built with you.</sub>
+</div>
