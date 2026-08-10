@@ -2,7 +2,7 @@
 name = "dystil-redact"
 version.workspace = true
 edition.workspace = true
-license-file.workspace = true
+license.workspace = true
 
 [features]
 default = []

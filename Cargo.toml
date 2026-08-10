@@ -18,10 +18,10 @@ resolver = "2"
 
 [workspace.package]
 version = "0.0.8"
-authors = ["aryan@frnd.app"]
-description = ""
-repository = ""
-license-file = "LICENSE.md"
+authors = ["Second Order Systems <udit@2os.ai>"]
+description = "Dystil — finds the work you repeat and builds the thing that does it. Local-first desktop app."
+repository = "https://github.com/Second-Order-Systems/Dystil"
+license = "Apache-2.0"
 edition = "2021"
 
 [workspace.dependencies]

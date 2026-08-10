@@ -2,7 +2,7 @@
 name = "dystil-retrieval"
 version.workspace = true
 edition.workspace = true
-license-file.workspace = true
+license.workspace = true
 
 [dependencies]
 chrono.workspace = true

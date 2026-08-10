@@ -2,7 +2,7 @@
 name = "dystil-insights"
 version.workspace = true
 edition.workspace = true
-license-file.workspace = true
+license.workspace = true
 description = "Local, durable Worth Fixing inference and projection engine."
 
 [dependencies]

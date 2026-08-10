@@ -1,0 +1,13 @@
+Copyright 2026 Second Order Systems (Motiseth Technologies Pvt Ltd). All rights reserved.
+
+This directory is NOT part of the Apache-2.0 licensed distribution.
+
+The Apache License 2.0 in the repository root covers the Dystil desktop
+application and its crates — everything that runs on a user's own machine. It does
+not cover this directory.
+
+`cloud/` contains Dystil's server-side services. No licence to use, copy, modify,
+or distribute these files is granted. They are present here only during an
+in-progress migration to a separate repository, and will be removed.
+
+Questions: udit@2os.ai
