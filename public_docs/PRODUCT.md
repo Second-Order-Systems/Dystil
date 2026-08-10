@@ -22,7 +22,7 @@ Dystil serves employees, knowledge workers, and domain experts whose work repeat
 
 ## Product Purpose
 
-Dystil makes a person's workday AI-native. It observes how they actually work, distils what is worth taking off their plate, and builds the thing that does it — an automation, a prompt, a runbook, or a pointer to a capability they already own. The output runs in the tools they already pay for.
+Dystil watches how a person works and builds the AI that does that work. It observes how they actually work, distils what is worth taking off their plate, and builds the thing that does it — an automation, a prompt, a runbook, or a pointer to a capability they already own. The output runs in the tools they already pay for.
 
 ## Positioning
 

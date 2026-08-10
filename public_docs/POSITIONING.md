@@ -18,10 +18,15 @@ fix this file.
 
 ## The one-liner
 
-**Make your workday genuinely AI-native.**
+**It watches how you work, then builds the AI that does it.**
 
-Supporting line: *Dystil watches how you actually work, then builds the agents,
-automations, and skills that do that work — for the AI you already use.*
+Supporting line: *Automations, prompts and agents fitted to how you actually work —
+for the AI you already use. On your machine.*
+
+This replaced "Make your workday genuinely AI-native." AI-native is a category
+label, not a claim: the reader cannot picture anything, every vendor says it, and it
+hides the two things nobody else can say — that it **watched you**, and that it
+**builds the thing**.
 
 The bold claim, and the one to lead with everywhere:
 
@@ -41,12 +46,12 @@ It runs on your machine. Nothing has to leave it.
 
 ## The frame that matters
 
-Lead with **AI-native**, not with repetition. "Finds the work you keep redoing" is
+Lead with **what it builds**, not with repetition. "Finds the work you keep redoing" is
 true and it is a good second sentence, but on its own it lands as a reminder app or
 a macro recorder. The larger claim is the right one:
 
-> Becoming AI-native is not something you install. It is knowing which parts of your
-> work should stop being done by hand, and in what order.
+> The hard part was never running a model. It is knowing which parts of your work
+> should stop being done by hand, and in what order.
 
 That is the gap Dystil fills, and it is why the product has to observe before it
 recommends. The site's opener carries it best:

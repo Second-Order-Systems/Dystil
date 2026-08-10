@@ -33,7 +33,7 @@ The long-term promise is not “software that takes notes for you.” It is:
 
 ## The shortest version
 
-**Make your workday genuinely AI-native.**
+**It watches how you work, then builds the AI that does it.**
 
 ## One-line options
 

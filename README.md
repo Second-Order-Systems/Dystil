@@ -3,8 +3,8 @@
 
   <h1>Dystil</h1>
 
-  <p><strong>Make your workday genuinely AI-native.</strong></p>
-  <p>Dystil watches how you actually work, then builds the agents, automations, and skills that do that work — for the AI you already use. On your machine, from your own evidence.</p>
+  <p><strong>It watches how you work, then builds the AI that does it.</strong></p>
+  <p>Automations, prompts and agents fitted to how you actually work — for the AI you already use. On your machine, from your own evidence.</p>
 
   <p><code>Rust</code> · <code>Tauri v2</code> · <code>Next.js</code> · <code>SQLite</code> · <code>Ollama</code> · <code>MCP</code></p>
 
@@ -18,7 +18,7 @@
 </div>
 
 <p align="center">
-  <img src="public_docs/media/hero.png" alt="Dystil — make your workday genuinely AI-native" width="100%">
+  <img src="public_docs/media/hero.png" alt="Dystil — it watches how you work, then builds the AI that does it" width="100%">
 </p>
 
 ---
@@ -28,16 +28,16 @@
 You have the models. You have the tools. You have probably paid for a few of them.
 And your day still looks almost exactly like it did before.
 
-That is not a tooling problem. Becoming AI-native is not something you install — it
-is knowing which parts of your work should stop being done by hand, and in what
-order. Nobody can tell you that. Every vendor arrives with the answer already
-chosen, and none of them have watched how work actually moves through your day.
+That is not a tooling problem. The hard part was never running a model — it is
+knowing which parts of your work should stop being done by hand, and in what order.
+Nobody can tell you that. Every vendor arrives with the answer already chosen, and
+none of them have watched how work actually moves through your day.
 
 So you buy the answer and hope it matches the question. Impressions, not evidence.
 
 **Dystil starts from the other end.**
 
-> ### It watches how you work, then builds the agent, automation, or skill that does that work — for the AI you already use.
+> ### It finds the work, asks you the one thing it cannot infer, and builds the agent, automation, or skill that does it.
 
 Not a report. Not a list of recommendations you still have to act on. Dystil finds
 the work, shows you the evidence, asks you the questions only you can answer, and
