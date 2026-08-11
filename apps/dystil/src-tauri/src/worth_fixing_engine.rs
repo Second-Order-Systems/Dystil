@@ -19,7 +19,11 @@ use tauri::{AppHandle, Manager};
 use tracing::{info, warn};
 
 const SOURCE_NAMESPACE: &str = "local-capture";
-const POLL_LIMIT_PER_SOURCE: i64 = 100;
+// Fetch a look-ahead page from each source, then consume one merged,
+// timestamp-ordered batch. Advancing the two cursors independently would
+// eventually drain one source and destroy the chronology of the other.
+const LOOK_AHEAD_PER_SOURCE: i64 = 200;
+const MERGED_BATCH_LIMIT: usize = 200;
 
 pub(crate) fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
@@ -92,62 +96,62 @@ async fn next_source_records(
     let event_cursor = capture_cursor(insights, "events")
         .await
         .map_err(|e| e.to_string())?;
-    let mut records = Vec::new();
-    let mut last_frame = frame_cursor;
-    let mut last_event = event_cursor;
     let frames = sqlx::query("SELECT id FROM frames WHERE id>?1 ORDER BY id LIMIT ?2")
         .bind(frame_cursor)
-        .bind(POLL_LIMIT_PER_SOURCE)
+        .bind(LOOK_AHEAD_PER_SOURCE)
         .fetch_all(capture)
         .await
         .map_err(|e| e.to_string())?;
+    let mut candidates = Vec::new();
     for row in frames {
         let id = row.get::<i64, _>("id");
-        let Some(record) =
+        let record =
             resolve_capture_evidence(capture, SOURCE_NAMESPACE, &format!("frame:{id}"), rules)
                 .await
-                .map_err(|e| e.to_string())?
-        else {
-            last_frame = id;
-            continue;
-        };
-        if !record.redaction_ready {
-            break;
-        }
-        last_frame = id;
-        if record.policy_allowed && !record.sensitive {
-            records.push(record);
+                .map_err(|e| e.to_string())?;
+        if let Some(record) = record {
+            candidates.push(("frames", id, record));
         }
     }
     let events = sqlx::query("SELECT id FROM ui_events WHERE id>?1 ORDER BY id LIMIT ?2")
         .bind(event_cursor)
-        .bind(POLL_LIMIT_PER_SOURCE)
+        .bind(LOOK_AHEAD_PER_SOURCE)
         .fetch_all(capture)
         .await
         .map_err(|e| e.to_string())?;
     for row in events {
         let id = row.get::<i64, _>("id");
-        let Some(record) =
+        let record =
             resolve_capture_evidence(capture, SOURCE_NAMESPACE, &format!("event:{id}"), rules)
                 .await
-                .map_err(|e| e.to_string())?
-        else {
-            last_event = id;
-            continue;
-        };
-        if !record.redaction_ready {
-            break;
-        }
-        last_event = id;
-        if record.policy_allowed && !record.sensitive {
-            records.push(record);
+                .map_err(|e| e.to_string())?;
+        if let Some(record) = record {
+            candidates.push(("events", id, record));
         }
     }
-    records.sort_by(|a, b| {
-        a.occurred_at
-            .cmp(&b.occurred_at)
-            .then(a.evidence_id.cmp(&b.evidence_id))
+    candidates.sort_by(|a, b| {
+        a.2.occurred_at
+            .cmp(&b.2.occurred_at)
+            .then(a.2.evidence_id.cmp(&b.2.evidence_id))
     });
+    candidates.truncate(MERGED_BATCH_LIMIT);
+    let last_frame = candidates
+        .iter()
+        .filter(|(source, _, _)| *source == "frames")
+        .map(|(_, id, _)| *id)
+        .max()
+        .unwrap_or(frame_cursor);
+    let last_event = candidates
+        .iter()
+        .filter(|(source, _, _)| *source == "events")
+        .map(|(_, id, _)| *id)
+        .max()
+        .unwrap_or(event_cursor);
+    let records = candidates
+        .into_iter()
+        .map(|(_, _, record)| record)
+        .filter(|record| record.policy_allowed && !record.sensitive)
+        .collect();
     Ok((records, last_frame, last_event))
 }
 

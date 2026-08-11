@@ -7,6 +7,13 @@ automation, invent counts or cadence, or expose internal construct names in
 finding copy. The deterministic kernel owns admissibility, eligibility, rank,
 labels, identities, and selection.
 
+Only surface an opportunity when its evidence clears the applicable minimum:
+recognition needs one occurrence; manual transfer needs one established
+directional transfer; unchanged repetition needs two occurrences; temporal
+pattern needs three occurrences with supported cadence; and repeated
+composition needs three authored occurrences. Otherwise return no opportunity
+for that candidate.
+
 Every surfaced finding must include a complete, directly usable, bounded handoff
 body. For a prompt or saved prompt, return copy-ready prompt text. For a runbook,
 return ordered executable steps including prerequisites and a completion signal.

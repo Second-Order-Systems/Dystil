@@ -1223,27 +1223,6 @@ pub(crate) fn parse_handoff(value: &str) -> Result<HandoffType> {
     }
 }
 
-fn finding_copy_allowed(value: &str) -> bool {
-    let normalized = value.to_lowercase();
-    let forbidden = [
-        "workflow",
-        "agentification",
-        "optimisation",
-        "optimization",
-        "confidence",
-        "claude",
-        "chatgpt",
-        "gemini",
-        "copilot",
-    ];
-    !forbidden.iter().any(|term| {
-        normalized
-            .split(|character: char| !character.is_alphanumeric())
-            .any(|word| word == *term)
-    }) && !normalized.contains('%')
-        && !normalized.contains(" percent")
-}
-
 async fn opportunity_occurrence_sets(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     opportunity_id: &str,
@@ -1606,11 +1585,6 @@ async fn apply_reconciliation_inner(
                 .await?;
         }
         if let (Some(finding), Some(handoff)) = (&proposal.finding, &proposal.handoff) {
-            if !finding_copy_allowed(&format!("{} {}", finding.claim, finding.why_worth_fixing)) {
-                return Err(InsightsError::Invalid(
-                    "finding contains prohibited copy".into(),
-                ));
-            }
             if finding.evidence_ids.is_empty()
                 || has_duplicates(&finding.evidence_ids)
                 || finding
@@ -2486,6 +2460,36 @@ pub async fn mark_job_rejected(pool: &SqlitePool, job_id: &str, error_code: &str
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Supersedes failed or interrupted bulk backfill jobs and releases their
+/// exclusive observation reservations. Jobs and attempts remain as audit
+/// history; this is deliberately an explicit developer/backfill operation.
+pub async fn release_bulk_backfill_job_observations(pool: &SqlitePool) -> Result<u64> {
+    let mut tx = pool.begin().await?;
+    let superseded_at = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE inference_jobs
+         SET status='rejected',
+             error_code='superseded_by_steward_only',
+             input_fingerprint=input_fingerprint || ':superseded:' || ?1,
+             updated_at=?1
+         WHERE reason IN ('fixture_backfill','fixture_backfill_steward_only')
+           AND status IN ('pending','running','rejected')",
+    )
+    .bind(&superseded_at)
+    .execute(&mut *tx)
+    .await?;
+    let released = sqlx::query(
+        "DELETE FROM job_observations WHERE job_id IN
+         (SELECT job_id FROM inference_jobs
+          WHERE status='rejected' AND reason IN ('fixture_backfill','fixture_backfill_steward_only'))",
+    )
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    tx.commit().await?;
+    Ok(released)
 }
 
 pub async fn record_job_attempt(

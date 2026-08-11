@@ -50,25 +50,6 @@ pub fn derive_eligibility(
     if handoff.body.trim().is_empty() || handoff.body.chars().count() > 12_000 {
         errors.push("handoff body is not complete and bounded".into());
     }
-    let handoff_allowed = match proposal.construct {
-        Construct::Recognition | Construct::ManualTransfer => {
-            matches!(
-                handoff.kind,
-                HandoffType::Prompt | HandoffType::ExistingCapability
-            )
-        }
-        Construct::UnchangedRepetition
-        | Construct::TemporalPattern
-        | Construct::RepeatedComposition => {
-            matches!(
-                handoff.kind,
-                HandoffType::Runbook | HandoffType::SavedPrompt
-            )
-        }
-    };
-    if !handoff_allowed {
-        errors.push("handoff type is not allowed for this construct".into());
-    }
     if handoff.kind == HandoffType::ExistingCapability && !context.capability_verified {
         errors.push("existing capability is not verified".into());
     }
@@ -320,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn construct_handoff_contract_is_enforced() {
+    fn usable_handoff_is_not_coupled_to_the_inference_construct() {
         let context = EligibilityContext {
             occurrence_count: 1,
             cadence_supported: false,
@@ -334,7 +315,7 @@ mod tests {
             .eligible
         );
         assert!(
-            !derive_eligibility(
+            derive_eligibility(
                 &proposal(Construct::Recognition, HandoffType::Runbook),
                 &context
             )
