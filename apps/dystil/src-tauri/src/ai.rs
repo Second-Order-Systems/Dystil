@@ -1025,7 +1025,7 @@ pub(crate) async fn internal_mcp_server(
                 .to_string_lossy()
                 .into_owned(),
             "--max-calls".into(),
-            "6".into(),
+            "30".into(),
         ],
     })
 }

@@ -69,6 +69,7 @@ function QuestionCard({
   question,
   questionId,
   questionNumber,
+  maxQuestions,
   disabled,
   onSubmit,
   onCustom,
@@ -76,6 +77,7 @@ function QuestionCard({
   question: AskQuestion;
   questionId: string | null;
   questionNumber: number;
+  maxQuestions: number;
   disabled: boolean;
   onSubmit: (text: string, event: AskInputEvent) => void;
   onCustom: () => void;
@@ -112,7 +114,7 @@ function QuestionCard({
     <section className="ml-0 mt-5 overflow-hidden rounded-[15px] bg-[#fbfcfa] shadow-[0_15px_38px_rgba(28,42,33,0.09)] ring-1 ring-[#cfd6d1] sm:ml-[50px]" aria-label="Answer choices">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#e4e8e4] px-4 py-3 text-[12px]">
         <span className="font-semibold text-[#116849]">{question.kind === "compare" ? "Which reading is closer?" : isMulti ? "Select all that apply" : "Choose the closest answer"}</span>
-        <span className="text-[#7c847e]">Question {questionNumber} of up to 5</span>
+        <span className="text-[#7c847e]">Question {questionNumber} of up to {maxQuestions}</span>
       </div>
       {question.helper && <p className="px-4 pt-4 text-[13px] leading-5 text-[#69716b]">{question.helper}</p>}
       <div className={question.kind === "compare" ? "grid gap-3 p-4 md:grid-cols-2" : "space-y-1 p-2"} role="group" aria-label={question.text}>
@@ -182,7 +184,7 @@ function ArtifactCard({ artifact, route, kept, busy, onKeep, onRevise }: { artif
   return (
     <article className="mt-5 overflow-hidden rounded-[16px] bg-white shadow-[0_20px_50px_rgba(23,34,27,0.13)] ring-1 ring-[#c8d0ca]">
       <header className="bg-[#202622] px-5 py-5 text-white sm:px-6">
-        <div className="flex flex-wrap justify-between gap-2 text-[11px] font-semibold text-[#55c696]"><span>{route.replaceAll("_", " ")} · {artifact.kind.replaceAll("_", " ")}</span><span className="font-normal text-[#a7b0aa]">Based on your answers only</span></div>
+        <div className="flex flex-wrap justify-between gap-2 text-[11px] font-semibold text-[#55c696]"><span>{route.replaceAll("_", " ")} · {artifact.kind.replaceAll("_", " ")}</span><span className="font-normal text-[#a7b0aa]">Based on the current understanding</span></div>
         <h3 className="mt-3 text-[22px] font-medium tracking-[-0.025em]">{artifact.title}</h3>
         <p className="mt-1.5 max-w-[68ch] text-[13px] leading-5 text-[#b7c0ba]">{artifact.description}</p>
       </header>
@@ -201,7 +203,7 @@ function ArtifactCard({ artifact, route, kept, busy, onKeep, onRevise }: { artif
 }
 
 function PresentationCard({ presentation, session, busy, onKeep, onRevise }: { presentation: AskPresentation; session: AskSessionView; busy: boolean; onKeep: () => void; onRevise: () => void }) {
-  return <section className="mt-6 sm:ml-[50px]"><div className="rounded-[14px] bg-[#eef5f1] p-5 ring-1 ring-[#c9d9d0]"><p className="text-[11px] font-semibold text-[#116849]">Answer · based on your answers only</p><h2 className="mt-2 text-balance text-[23px] font-medium leading-[1.35] tracking-[-0.025em] text-[#202722]">{presentation.headline}</h2><p className="mt-3 max-w-[70ch] whitespace-pre-wrap text-[14px] leading-6 text-[#505a53]">{presentation.explanation}</p>{presentation.limitations.length > 0 && <div className="mt-4 border-t border-[#d5e1da] pt-4"><p className="text-[11px] font-semibold text-[#657169]">What this does not assume</p><ul className="mt-2 space-y-1.5 text-[13px] leading-5 text-[#5c655f]">{presentation.limitations.map((item) => <li key={item}>• {item}</li>)}</ul></div>}</div>{presentation.artifact && <ArtifactCard artifact={presentation.artifact} route={presentation.route} kept={Boolean(session.artifactKeptId)} busy={busy} onKeep={onKeep} onRevise={onRevise} />}</section>;
+  return <section className="mt-6 sm:ml-[50px]"><div className="rounded-[14px] bg-[#eef5f1] p-5 ring-1 ring-[#c9d9d0]"><p className="text-[11px] font-semibold text-[#116849]">Answer · based on the current understanding</p><h2 className="mt-2 text-balance text-[23px] font-medium leading-[1.35] tracking-[-0.025em] text-[#202722]">{presentation.headline}</h2><p className="mt-3 max-w-[70ch] whitespace-pre-wrap text-[14px] leading-6 text-[#505a53]">{presentation.explanation}</p>{presentation.limitations.length > 0 && <div className="mt-4 border-t border-[#d5e1da] pt-4"><p className="text-[11px] font-semibold text-[#657169]">What this does not assume</p><ul className="mt-2 space-y-1.5 text-[13px] leading-5 text-[#5c655f]">{presentation.limitations.map((item) => <li key={item}>• {item}</li>)}</ul></div>}</div>{presentation.artifact && <ArtifactCard artifact={presentation.artifact} route={presentation.route} kept={Boolean(session.artifactKeptId)} busy={busy} onKeep={onKeep} onRevise={onRevise} />}</section>;
 }
 
 function Composer({ value, onChange, onSubmit, disabled, placeholder, autoFocus = false }: { value: string; onChange: (value: string) => void; onSubmit: () => void; disabled: boolean; placeholder: string; autoFocus?: boolean }) {
@@ -261,9 +263,9 @@ export function AskForFix() {
 
         {optimisticText && <div className="mt-7 flex justify-end"><div className="max-w-[min(78%,620px)] rounded-[16px_16px_4px_16px] bg-[#252b27] px-4 py-3 text-[15px] leading-6 text-white">{optimisticText}</div></div>}
 
-        {busy && <div className="mt-7 grid grid-cols-[36px_minmax(0,1fr)] gap-3.5"><DystilAvatar /><div className="pt-1"><div className="inline-flex items-center gap-2 rounded-[10px] bg-[#edf1ee] px-3 py-2 text-[13px] text-[#5e6861]"><span className="dystil-thinking-dots" aria-hidden="true"><i /><i /><i /></span><span>{session?.phase === "present" || session?.locked ? "Building the answer" : "Working through what you said"}</span></div><button type="button" onClick={() => void cancel()} className="ml-3 inline-flex items-center gap-1.5 text-[12px] font-medium text-[#717a74] hover:text-[#8b3f32] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8b3f32]"><Square size={10} fill="currentColor" />Stop</button></div></div>}
+        {busy && <div className="mt-7 grid grid-cols-[36px_minmax(0,1fr)] gap-3.5"><DystilAvatar /><div className="pt-1"><div className="inline-flex items-center gap-2 rounded-[10px] bg-[#edf1ee] px-3 py-2 text-[13px] text-[#5e6861]"><span className="dystil-thinking-dots" aria-hidden="true"><i /><i /><i /></span><span>{session?.phase === "present" || session?.locked ? "Building the answer" : "Looking through relevant work..."}</span></div><button type="button" onClick={() => void cancel()} className="ml-3 inline-flex items-center gap-1.5 text-[12px] font-medium text-[#717a74] hover:text-[#8b3f32] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8b3f32]"><Square size={10} fill="currentColor" />Stop</button></div></div>}
 
-        {!busy && question && <QuestionCard question={question} questionId={session?.currentQuestionId ?? null} questionNumber={session?.questionCount ?? 1} disabled={busy} onCustom={() => setCustomAnswer(true)} onSubmit={(text, event) => void submit(text, event)} />}
+        {!busy && question && <QuestionCard question={question} questionId={session?.currentQuestionId ?? null} questionNumber={session?.questionCount ?? 1} maxQuestions={session?.maxQuestions ?? 12} disabled={busy} onCustom={() => setCustomAnswer(true)} onSubmit={(text, event) => void submit(text, event)} />}
         {!busy && isConsolidating && session && <UnderstandingCard understanding={session.understanding} busy={busy} onConfirm={() => void confirm()} onRefine={() => setCustomAnswer(true)} />}
         {!busy && session?.presentation && <PresentationCard presentation={session.presentation} session={session} busy={busy} onKeep={() => void keepArtifact()} onRevise={() => setRevisionMode(true)} />}
 

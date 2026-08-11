@@ -509,6 +509,9 @@ pub async fn delete_capture_data(
             .await
             .map_err(|error| error.to_string())?
         };
+        dystil_insights::invalidate_ask_for_fix_retrieval_memos(&insights_pool)
+            .await
+            .map_err(|error| error.to_string())?;
 
         if is_all {
             let mut tx = capture.begin().await.map_err(|error| error.to_string())?;

@@ -3,7 +3,11 @@ import { spawn } from "node:child_process";
 
 const command = process.env.DYSTIL_MCP_COMMAND || "";
 const args = JSON.parse(process.env.DYSTIL_MCP_ARGS || "[]") as string[];
-let remainingCalls = 6;
+// Retrieval is deliberately more generous than an answer call: an explorer
+// may need to search, inspect promising records, and then test whether a
+// pattern repeats. The 120-second structured-request deadline remains the
+// outer bound.
+let remainingCalls = 30;
 
 const tools = [
   {
