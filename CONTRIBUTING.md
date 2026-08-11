@@ -61,11 +61,7 @@ By contributing you agree that your contribution is licensed under the
 [Apache License 2.0](LICENSE), the same terms as the rest of the desktop
 application.
 
-Note that [`cloud/`](cloud/LICENSE) is **not** part of the Apache-licensed
-distribution — it holds Dystil's server-side services and is being migrated to a
-separate repository. Please do not send patches against it.
-
 ## Reporting security issues
 
-Please report security issues privately to udit@2os.ai rather than opening a
+Please report security issues privately to <udit@2os.ai> rather than opening a
 public issue.

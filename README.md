@@ -301,7 +301,6 @@ crates/
   dystil-sync/         Optional peer and cloud synchronization
   dystil-protocol/     Multiplayer and wire-protocol types
 
-cloud/                 Optional self-hosted ingest and telemetry services
 agent_docs/            Verified engineering reference
 public_docs/           Positioning and marketing
 ```
@@ -423,8 +422,7 @@ latter.
 client-side sync code. That is deliberate: in a product that reads your work, a
 closed component is exactly the thing you would want to inspect.
 
-Not covered: [`cloud/`](cloud/LICENSE), Dystil's server-side services. Those are not
-part of the open-source distribution and are being moved to a separate repository.
+Server-side deployment materials are outside this open-source distribution.
 
 "Dystil" and the Dystil logo are trademarks of Second Order Systems. Apache 2.0
 grants no trademark rights — you are free to fork and build on the code, but please
