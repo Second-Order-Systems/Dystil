@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "move", "assistantMessage", "understanding", "question", "presentation"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [2] },
+    "move": { "type": "string", "enum": ["ask", "retrieve", "consolidate", "present"] },
+    "assistantMessage": { "type": "string", "minLength": 1, "maxLength": 600 },
+    "understanding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["synthesis", "grounding", "inferences", "preservedBoundary", "uncertainty", "solutionTarget"],
+      "properties": {
+        "synthesis": { "type": "string", "maxLength": 900 },
+        "grounding": { "type": "array", "maxItems": 8, "items": { "type": "string", "minLength": 1, "maxLength": 280 } },
+        "inferences": { "type": "array", "maxItems": 6, "items": { "type": "string", "minLength": 1, "maxLength": 280 } },
+        "preservedBoundary": { "type": "string", "maxLength": 500 },
+        "uncertainty": { "type": "array", "maxItems": 5, "items": { "type": "string", "minLength": 1, "maxLength": 280 } },
+        "solutionTarget": { "type": "string", "maxLength": 500 }
+      }
+    },
+    "question": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "required": ["kind", "text", "helper", "options", "minSelections", "maxSelections"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["free_text", "single_select", "multi_select", "compare"] },
+        "text": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "helper": { "type": "string", "maxLength": 400 },
+        "options": { "type": "array", "maxItems": 7, "items": { "type": "object", "additionalProperties": false, "required": ["id", "label", "description"], "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-z0-9_]+$" }, "label": { "type": "string", "minLength": 1, "maxLength": 120 }, "description": { "type": "string", "maxLength": 260 } } } },
+        "minSelections": { "type": "integer", "minimum": 0, "maximum": 7 },
+        "maxSelections": { "type": "integer", "minimum": 0, "maximum": 7 }
+      }
+    },
+    "presentation": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "required": ["route", "headline", "explanation", "limitations", "artifact"],
+      "properties": {
+        "route": { "type": "string", "enum": ["answer_now", "something_now_more_later", "cannot_see", "needs_more_than_one_person"] },
+        "headline": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "explanation": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "limitations": { "type": "array", "maxItems": 5, "items": { "type": "string", "minLength": 1, "maxLength": 300 } },
+        "artifact": { "type": ["object", "null"], "additionalProperties": false, "required": ["kind", "title", "description", "body", "steps", "tool", "capability", "instructions"], "properties": { "kind": { "type": "string", "enum": ["prompt", "runbook", "existing_capability"] }, "title": { "type": "string", "minLength": 1, "maxLength": 160 }, "description": { "type": "string", "minLength": 1, "maxLength": 500 }, "body": { "type": "string", "maxLength": 12000 }, "steps": { "type": "array", "maxItems": 8, "items": { "type": "string", "minLength": 1, "maxLength": 800 } }, "tool": { "type": "string", "maxLength": 160 }, "capability": { "type": "string", "maxLength": 220 }, "instructions": { "type": "array", "maxItems": 8, "items": { "type": "string", "minLength": 1, "maxLength": 800 } } } }
+      }
+    }
+  }
+}

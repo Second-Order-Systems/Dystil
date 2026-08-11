@@ -25,6 +25,15 @@ const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.80.6";
 const DYSTIL_AI_ENDPOINT: &str = "https://coconut.2os.ai/v1";
 const ANTHROPIC_DEFAULT_MODEL: &str = "claude-haiku-4-5";
 const OPENAI_DEFAULT_MODEL: &str = "gpt-5.6-luna";
+const DYSTIL_RETRIEVAL_TOOLS: &str = "dystil_get_activity_overview,dystil_search_activity,dystil_get_source,dystil_get_activity_context,dystil_get_activity_range";
+
+fn pi_structured_tool_args(policy: dystil_ai::AiToolPolicy) -> &'static str {
+    if matches!(policy, dystil_ai::AiToolPolicy::Retrieval) {
+        DYSTIL_RETRIEVAL_TOOLS
+    } else {
+        ""
+    }
+}
 
 #[derive(Default)]
 struct PiRpcAccumulator {
@@ -809,6 +818,7 @@ pub(crate) async fn pi_answer(
 
 pub(crate) async fn pi_structured(
     preset: &ActiveAiPreset,
+    mcp: &dystil_ai::McpServerConfig,
     request: dystil_ai::AiStructuredRequest,
 ) -> Result<dystil_ai::AiStructuredRun, String> {
     let executable = pi_executable()?;
@@ -830,6 +840,9 @@ pub(crate) async fn pi_structured(
     }
     let (stable_system_prompt, prompt) = pi_structured_prompts(&request)?;
     let agent_dir = write_pi_models(preset)?;
+    let extension = matches!(request.tool_policy, dystil_ai::AiToolPolicy::Retrieval)
+        .then(write_dystil_tools_extension)
+        .transpose()?;
     let provider = match preset.provider_kind.as_str() {
         "ollama" => "ollama",
         "anthropic" => "anthropic",
@@ -850,9 +863,6 @@ pub(crate) async fn pi_structured(
         "--system-prompt",
         &stable_system_prompt,
         "--no-builtin-tools",
-        "--tools",
-        "",
-        "--no-extensions",
         "--no-skills",
         "--no-prompt-templates",
         "--no-context-files",
@@ -860,6 +870,20 @@ pub(crate) async fn pi_structured(
         "--no-session",
         "--offline",
     ]);
+    if let Some(extension) = &extension {
+        command.args([
+            "--tools",
+            pi_structured_tool_args(request.tool_policy),
+            "--extension",
+            extension.to_string_lossy().as_ref(),
+        ]);
+    } else {
+        command.args([
+            "--tools",
+            pi_structured_tool_args(request.tool_policy),
+            "--no-extensions",
+        ]);
+    }
     if let Some(cache_key) = provider_cache_key(&request) {
         // Pi forwards its in-memory session id as the provider's native cache
         // affinity key. `--no-session` keeps the canonical transcript solely
@@ -871,6 +895,11 @@ pub(crate) async fn pi_structured(
         .env("PI_SKIP_VERSION_CHECK", "1")
         .env("PI_TELEMETRY", "0")
         .env("CUSTOM_API_KEY", preset.api_key.as_deref().unwrap_or(""))
+        .env("DYSTIL_MCP_COMMAND", &mcp.command)
+        .env(
+            "DYSTIL_MCP_ARGS",
+            serde_json::to_string(&mcp.args).map_err(|error| error.to_string())?,
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -921,108 +950,6 @@ pub(crate) async fn pi_structured(
     })
 }
 
-pub(crate) async fn openai_structured(
-    preset: &ActiveAiPreset,
-    request: dystil_ai::AiStructuredRequest,
-) -> Result<dystil_ai::AiStructuredRun, String> {
-    let endpoint = preset
-        .endpoint
-        .as_deref()
-        .unwrap_or("https://api.openai.com/v1")
-        .trim_end_matches('/');
-    let api_key = preset
-        .api_key
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or("OpenAI API key is unavailable")?;
-    let body = openai_structured_request_body(&request, &preset.model)?;
-    let started = Instant::now();
-    let client = reqwest::Client::builder()
-        .timeout(request.timeout)
-        .build()
-        .map_err(|error| format!("Could not configure OpenAI: {error}"))?;
-    let response = client
-        .post(format!("{endpoint}/responses"))
-        .bearer_auth(api_key)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|error| {
-            if error.is_timeout() {
-                "OpenAI timed out".to_string()
-            } else {
-                format!("OpenAI request failed: {error}")
-            }
-        })?;
-    let status = response.status();
-    let payload: Value = response
-        .json()
-        .await
-        .map_err(|error| format!("OpenAI returned unreadable JSON: {error}"))?;
-    if !status.is_success() {
-        let detail = payload
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .unwrap_or("request was rejected");
-        return Err(format!("OpenAI provider failed: HTTP {status}: {detail}"));
-    }
-    let (output, usage, response_model) = parse_openai_structured_response(&payload)?;
-    Ok(dystil_ai::AiStructuredRun {
-        runtime: dystil_ai::AiRuntimeKind::Pi,
-        runtime_version: Some(format!("responses-api:{}", preset.id)),
-        model: response_model.unwrap_or_else(|| preset.model.clone()),
-        elapsed_ms: started.elapsed().as_millis() as u64,
-        output,
-        usage,
-    })
-}
-
-fn openai_structured_request_body(
-    request: &dystil_ai::AiStructuredRequest,
-    model: &str,
-) -> Result<Value, String> {
-    if request.tool_policy != dystil_ai::AiToolPolicy::None {
-        return Err("OpenAI structured inference does not accept tools".into());
-    }
-    let (stable_system_prompt, prompt) = pi_structured_prompts(request)?;
-    let schema_name = structured_schema_name(&request.purpose);
-    let mut body = json!({
-        "model": model,
-        "store": false,
-        "max_output_tokens": 8192,
-        "input": [
-            {
-                "role": "system",
-                "content": [{
-                    "type": "input_text",
-                    "text": stable_system_prompt,
-                    "prompt_cache_breakpoint": {"mode": "explicit"}
-                }]
-            },
-            {
-                "role": "user",
-                "content": [{"type": "input_text", "text": prompt}]
-            }
-        ],
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": schema_name,
-                "strict": true,
-                "schema": request.output_schema
-            }
-        },
-        "prompt_cache_options": {"mode": "explicit"}
-    });
-    if request.reasoning_effort == dystil_ai::AiReasoningEffort::High {
-        body["reasoning"] = json!({"effort": "high"});
-    }
-    if let Some(cache_key) = provider_cache_key(request) {
-        body["prompt_cache_key"] = Value::String(cache_key);
-    }
-    Ok(body)
-}
-
 fn provider_cache_key(request: &dystil_ai::AiStructuredRequest) -> Option<String> {
     let source = request
         .cache_key
@@ -1056,83 +983,6 @@ fn provider_cache_key(request: &dystil_ai::AiStructuredRequest) -> Option<String
     Some(key)
 }
 
-fn structured_schema_name(purpose: &str) -> String {
-    let mut name = String::from("dystil_");
-    for character in purpose.chars() {
-        if name.len() >= 64 {
-            break;
-        }
-        name.push(
-            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
-                character
-            } else {
-                '_'
-            },
-        );
-    }
-    name
-}
-
-fn parse_openai_structured_response(
-    payload: &Value,
-) -> Result<(Value, BTreeMap<String, u64>, Option<String>), String> {
-    if payload.get("status").and_then(Value::as_str) != Some("completed") {
-        let detail = payload
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .or_else(|| {
-                payload
-                    .pointer("/incomplete_details/reason")
-                    .and_then(Value::as_str)
-            })
-            .unwrap_or("response did not complete");
-        return Err(format!(
-            "OpenAI structured response was incomplete: {detail}"
-        ));
-    }
-    let text = payload
-        .get("output")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get("content").and_then(Value::as_array))
-        .flatten()
-        .find(|part| part.get("type").and_then(Value::as_str) == Some("output_text"))
-        .and_then(|part| part.get("text").and_then(Value::as_str))
-        .ok_or("OpenAI completed without structured output text")?;
-    let output = serde_json::from_str(text)
-        .map_err(|error| format!("OpenAI returned invalid structured JSON: {error}"))?;
-    let mut usage = BTreeMap::new();
-    for (key, pointer) in [
-        ("input_tokens", "/usage/input_tokens"),
-        (
-            "cached_input_tokens",
-            "/usage/input_tokens_details/cached_tokens",
-        ),
-        (
-            "cache_write_tokens",
-            "/usage/input_tokens_details/cache_write_tokens",
-        ),
-        ("output_tokens", "/usage/output_tokens"),
-        (
-            "reasoning_output_tokens",
-            "/usage/output_tokens_details/reasoning_tokens",
-        ),
-    ] {
-        if let Some(value) = payload.pointer(pointer).and_then(Value::as_u64) {
-            usage.insert(key.into(), value);
-        }
-    }
-    Ok((
-        output,
-        usage,
-        payload
-            .get("model")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    ))
-}
-
 fn pi_structured_prompts(
     request: &dystil_ai::AiStructuredRequest,
 ) -> Result<(String, String), String> {
@@ -1142,7 +992,8 @@ fn pi_structured_prompts(
         return Err("structured schema is too large".into());
     }
     let stable_system_prompt = format!(
-        "You are a bounded Dystil structured inference worker. Use only the supplied packet, call no tools, preserve uncertainty, and return exactly the requested JSON.{}{}\n\nReturn only JSON matching this schema:\n{}",
+        "You are a bounded Dystil structured inference worker. {} Use only Dystil's enabled read-only retrieval tools when needed; preserve uncertainty and return exactly the requested JSON.{}{}\n\nReturn only JSON matching this schema:\n{}",
+        if matches!(request.tool_policy, dystil_ai::AiToolPolicy::Retrieval) { "The supplied packet and sanitized Dystil retrieval tools are your only context." } else { "Use only the supplied packet and call no tools." },
         if request.stable_prompt.is_empty() { "" } else { "\n\n" },
         request.stable_prompt,
         schema,
@@ -1481,7 +1332,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_structured_marks_the_stable_prefix_and_preserves_cache_affinity() {
+    fn pi_structured_retrieval_prompt_allows_only_dystil_retrieval_context() {
         let request = dystil_ai::AiStructuredRequest {
             purpose: "ask_for_fix_intake".into(),
             cache_key: Some("afs_0123456789abcdef".into()),
@@ -1498,53 +1349,17 @@ mod tests {
             reasoning_effort: dystil_ai::AiReasoningEffort::High,
             tool_policy: dystil_ai::AiToolPolicy::None,
         };
-        let first = openai_structured_request_body(&request, "gpt-5.6-sol").unwrap();
-        let mut second_request = request.clone();
-        second_request.prompt = "VOLATILE TURN TWO".into();
-        let second = openai_structured_request_body(&second_request, "gpt-5.6-sol").unwrap();
-
-        assert_eq!(first["prompt_cache_key"], "dystil-afs_0123456789abcdef");
-        assert_eq!(first["prompt_cache_options"]["mode"], "explicit");
-        assert_eq!(first["reasoning"]["effort"], "high");
+        let (none_prompt, _) = pi_structured_prompts(&request).unwrap();
+        let mut retrieval = request;
+        retrieval.tool_policy = dystil_ai::AiToolPolicy::Retrieval;
+        let (retrieval_prompt, _) = pi_structured_prompts(&retrieval).unwrap();
+        assert!(none_prompt.contains("call no tools"));
+        assert!(retrieval_prompt.contains("read-only retrieval tools"));
+        assert!(!retrieval_prompt.contains("call no tools"));
+        assert_eq!(pi_structured_tool_args(dystil_ai::AiToolPolicy::None), "");
         assert_eq!(
-            first.pointer("/input/0/content/0/prompt_cache_breakpoint/mode"),
-            Some(&json!("explicit"))
+            pi_structured_tool_args(dystil_ai::AiToolPolicy::Retrieval),
+            DYSTIL_RETRIEVAL_TOOLS
         );
-        assert_eq!(
-            first.pointer("/input/0/content/0/text"),
-            second.pointer("/input/0/content/0/text")
-        );
-        assert_ne!(
-            first.pointer("/input/1/content/0/text"),
-            second.pointer("/input/1/content/0/text")
-        );
-        assert_eq!(first["text"]["format"]["strict"], true);
-        assert_eq!(first["text"]["format"]["schema"], request.output_schema);
-    }
-
-    #[test]
-    fn openai_structured_parses_output_and_complete_cache_receipts() {
-        let payload = json!({
-            "status": "completed",
-            "model": "gpt-5.6-sol-2026-07-01",
-            "output": [{
-                "type": "message",
-                "content": [{"type":"output_text","text":"{\"move\":\"ask\"}"}]
-            }],
-            "usage": {
-                "input_tokens": 2400,
-                "input_tokens_details": {"cached_tokens": 1800, "cache_write_tokens": 0},
-                "output_tokens": 240,
-                "output_tokens_details": {"reasoning_tokens": 170}
-            }
-        });
-        let (output, usage, model) = parse_openai_structured_response(&payload).unwrap();
-        assert_eq!(output, json!({"move":"ask"}));
-        assert_eq!(usage.get("input_tokens"), Some(&2400));
-        assert_eq!(usage.get("cached_input_tokens"), Some(&1800));
-        assert_eq!(usage.get("cache_write_tokens"), Some(&0));
-        assert_eq!(usage.get("output_tokens"), Some(&240));
-        assert_eq!(usage.get("reasoning_output_tokens"), Some(&170));
-        assert_eq!(model.as_deref(), Some("gpt-5.6-sol-2026-07-01"));
     }
 }

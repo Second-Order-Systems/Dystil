@@ -16,7 +16,7 @@ use crate::{
     WorthFixingCard, WorthFixingEvidenceLine, WorthFixingSummary,
 };
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const MANUAL_REFRESH_MIN_OBSERVATION_SPAN_HOURS: f64 = 3.0;
 
 #[derive(Debug, Error)]
@@ -472,6 +472,24 @@ async fn migrate(pool: &SqlitePool) -> Result<()> {
         .await?;
         sqlx::query(
             "INSERT OR IGNORE INTO insights_schema_migrations(version,applied_at) VALUES(4,?1)",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .execute(&mut *tx)
+        .await?;
+    }
+    if current_version < 5 {
+        sqlx::query(
+            "CREATE TABLE ask_retrieval_reports(
+              retrieval_id TEXT PRIMARY KEY,session_id TEXT NOT NULL REFERENCES ask_sessions(session_id),
+              input_fingerprint TEXT NOT NULL,status TEXT NOT NULL,report_json TEXT NOT NULL,memo TEXT NOT NULL,
+              provider TEXT,model TEXT,usage_json TEXT NOT NULL,latency_ms INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,
+              error_code TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,ready_at TEXT,
+              UNIQUE(session_id,input_fingerprint))",
+        ).execute(&mut *tx).await?;
+        sqlx::query("CREATE INDEX ask_retrieval_reports_session ON ask_retrieval_reports(session_id,updated_at DESC)")
+            .execute(&mut *tx).await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO insights_schema_migrations(version,applied_at) VALUES(5,?1)",
         )
         .bind(Utc::now().to_rfc3339())
         .execute(&mut *tx)

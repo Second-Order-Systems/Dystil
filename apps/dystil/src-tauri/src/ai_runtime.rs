@@ -122,15 +122,9 @@ impl AiRuntime for PiRuntimeAdapter {
     ) -> Result<AiStructuredRun, AiRuntimeError> {
         let mut preset = self.preset.clone();
         preset.model = self.model_for_tier(request.model_tier);
-        if preset.provider_kind == "openai" {
-            ai_presets::openai_structured(&preset, request)
-                .await
-                .map_err(normalize_pi_error)
-        } else {
-            ai_presets::pi_structured(&preset, request)
-                .await
-                .map_err(normalize_pi_error)
-        }
+        ai_presets::pi_structured(&preset, &self.mcp, request)
+            .await
+            .map_err(normalize_pi_error)
     }
 }
 
