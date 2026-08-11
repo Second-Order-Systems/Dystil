@@ -2470,6 +2470,7 @@ version = "0.0.8"
 dependencies = [
  "async-trait",
  "chrono",
+ "clap",
  "dystil-ai",
  "hex",
  "serde",

@@ -8,6 +8,7 @@ description = "Local, durable Worth Fixing inference and projection engine."
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+clap.workspace = true
 dystil-ai = { path = "../dystil-ai" }
 hex.workspace = true
 serde.workspace = true

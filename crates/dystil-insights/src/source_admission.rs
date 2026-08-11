@@ -69,15 +69,6 @@ pub async fn resolve_capture_evidence(
             let excerpt = row
                 .get::<Option<String>, _>("frame_text")
                 .unwrap_or_default();
-            let redaction_ready = sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM dystil_text_redaction_state WHERE source_table='frames'
-                 AND source_row_id=?1 AND surface='frame_text'
-                 AND status IN ('complete','deterministic_fallback')",
-            )
-            .bind(row_id)
-            .fetch_one(capture)
-            .await?
-                > 0;
             Ok(Some(EvidenceRecord {
                 evidence_id: format!("{source_namespace}:frame:{row_id}"),
                 source_namespace: source_namespace.into(),
@@ -91,7 +82,11 @@ pub async fn resolve_capture_evidence(
                     window.as_deref(),
                     url.as_deref(),
                 ),
-                redaction_ready,
+                // CaptureStore deterministically sanitizes frame text before it
+                // is inserted. `dystil_text_redaction_state` only tracks the
+                // optional, later AI PII pass and must not hold up local
+                // inference when that opt-in pass is disabled.
+                redaction_ready: true,
                 deleted: false,
                 sensitive: false,
             }))

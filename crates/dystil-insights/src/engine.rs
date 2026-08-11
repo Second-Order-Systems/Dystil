@@ -24,6 +24,7 @@ const EXPLORER_MODEL_TIER: AiModelTier = AiModelTier::Economy;
 const STEWARD_PROMPT_VERSION: &str = "worth-fixing-steward-v2";
 const STEWARD_PROMPT: &str = include_str!("../resources/steward_prompt_v2.md");
 const STEWARD_MODEL_TIER: AiModelTier = AiModelTier::Frontier;
+const STEWARD_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Error)]
 pub enum EngineError {
@@ -338,7 +339,7 @@ async fn infer_once<R: AiRuntime + ?Sized>(
             stable_prompt: String::new(),
             prompt,
             output_schema: schema(),
-            timeout: Duration::from_secs(180),
+            timeout: STEWARD_TIMEOUT,
             reasoning_effort: AiReasoningEffort::High,
             tool_policy: AiToolPolicy::None,
         })
@@ -355,6 +356,50 @@ pub async fn run_steward_wake<R: AiRuntime + ?Sized>(
     timezone: &str,
     reason: &str,
     observation_limit: u32,
+) -> EngineResult<WakeResult> {
+    run_steward_wake_inner(
+        pool,
+        runtime,
+        local_day,
+        timezone,
+        reason,
+        observation_limit,
+        None,
+    )
+    .await
+}
+
+/// Backfill-only variant that keeps normal application job identity unchanged
+/// while allowing an explicit replay to supersede a rejected frozen packet.
+pub async fn run_steward_replay_wake<R: AiRuntime + ?Sized>(
+    pool: &SqlitePool,
+    runtime: &R,
+    local_day: &str,
+    timezone: &str,
+    reason: &str,
+    observation_limit: u32,
+    replay_nonce: &str,
+) -> EngineResult<WakeResult> {
+    run_steward_wake_inner(
+        pool,
+        runtime,
+        local_day,
+        timezone,
+        reason,
+        observation_limit,
+        Some(replay_nonce),
+    )
+    .await
+}
+
+async fn run_steward_wake_inner<R: AiRuntime + ?Sized>(
+    pool: &SqlitePool,
+    runtime: &R,
+    local_day: &str,
+    timezone: &str,
+    reason: &str,
+    observation_limit: u32,
+    replay_nonce: Option<&str>,
 ) -> EngineResult<WakeResult> {
     let model = runtime.model_for_tier(STEWARD_MODEL_TIER);
     let stored = recoverable_job(pool).await?;
@@ -382,8 +427,12 @@ pub async fn run_steward_wake<R: AiRuntime + ?Sized>(
         let schema_hash = hash_bytes(&schema_json);
         let input_fingerprint = hash_bytes(
             format!(
-                "{}\n{}\n{}\n{}",
-                model, prompt_hash, schema_hash, packet_json
+                "{}\n{}\n{}\n{}\n{}",
+                model,
+                prompt_hash,
+                schema_hash,
+                packet_json,
+                replay_nonce.unwrap_or_default(),
             )
             .as_bytes(),
         );
