@@ -30,7 +30,6 @@ allowed to run ahead of the code — never implement from it.
 | `DESIGN_SYSTEM.md` | Design tokens and component specs |
 | `GLOSSARY.md` | Marketing term → real type. Read this before trusting a noun. |
 | `TELEMETRY_FOUNDATION_PLAN.md` | Telemetry design and constraints |
-| `TELEMETRY_LOCAL_VALIDATION.md` | How to validate telemetry locally |
 | `A11Y_CAPTURE_FOLLOWUPS.md` | Open accessibility-capture work |
 
 ## Keeping this folder honest

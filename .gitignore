@@ -40,9 +40,8 @@ onnxruntime-win-x64*/
 .env.local
 .openai_key
 .local/work-card-eval/
-cloud/.env.docker
-cloud/.env.vm
-
+.local/process-mining-sop-comparison/
+.local/process-mining-v5/
 # JavaScript stuff
 node_modules/
 *.tsbuildinfo
@@ -52,10 +51,6 @@ bun-debug.log*
 
 # Bun/auth service local artifacts
 .bun/
-cloud/services/auth/dist/
-cloud/services/auth/.env*
-!cloud/services/auth/.env.example
-
 # Swift build artifacts (ee/sdk)
 .build/
 
@@ -76,9 +71,11 @@ app.py
 *.py3z
 __pycache__/
 .pytest_cache/
-!memory/**/*.py
-
-screenpipe-app-tauri/src-tauri/.next/
+experiments
+fixture
+designs
+.impeccable
+.local
 .vercel
 .wrangler/
 

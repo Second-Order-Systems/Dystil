@@ -85,7 +85,8 @@ crates/
   dystil-sync/          Optional peer and cloud synchronization
   dystil-protocol/      Multiplayer and wire-protocol types
 
-cloud/                  Optional self-hosted ingest and telemetry services
+Hosted ingest and telemetry services are outside this repository; this repository
+contains the desktop client and shared wire protocol.
 
 agent_docs/             Verified reference. Cite it. Start at agent_docs/README.md
 public_docs/            Positioning and marketing. Do not implement from it.
