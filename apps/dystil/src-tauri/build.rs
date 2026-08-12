@@ -102,32 +102,27 @@ fn configure_cloud_build() {
         .ok()
         .map(|value| value.trim().trim_end_matches('/').to_string())
         .filter(|value| !value.is_empty());
-    match (cloud_sync, telemetry_endpoint) {
-        (false, None) => {}
-        (false, Some(_)) => panic!(
-            "DYSTIL_TELEMETRY_ENDPOINT is set but the cloud-sync feature is disabled; \
-             refuse to embed a telemetry endpoint in a community build"
-        ),
-        (true, None) => {}
-        (true, Some(endpoint)) => {
-            let parsed = url::Url::parse(&endpoint).unwrap_or_else(|error| {
-                panic!("DYSTIL_TELEMETRY_ENDPOINT must be a valid URL: {error}")
-            });
-            let localhost_http = parsed.scheme() == "http"
-                && matches!(
-                    parsed.host_str(),
-                    Some("localhost") | Some("127.0.0.1") | Some("::1")
-                );
-            let release = std::env::var("PROFILE").as_deref() == Ok("release");
-            if parsed.host_str().is_none()
-                || (parsed.scheme() != "https" && (release || !localhost_http))
-            {
-                panic!(
-                    "DYSTIL_TELEMETRY_ENDPOINT must be HTTPS (debug builds may use localhost HTTP)"
-                );
-            }
-            println!("cargo:rustc-env=DYSTIL_TELEMETRY_ENDPOINT={endpoint}");
+    if let Some(endpoint) = telemetry_endpoint {
+        // Telemetry is independent of cloud-sync: official community builds
+        // may export anonymous operational counters without embedding a cloud
+        // service URL or enabling cloud authentication.
+        let parsed = url::Url::parse(&endpoint).unwrap_or_else(|error| {
+            panic!("DYSTIL_TELEMETRY_ENDPOINT must be a valid URL: {error}")
+        });
+        let localhost_http = parsed.scheme() == "http"
+            && matches!(
+                parsed.host_str(),
+                Some("localhost") | Some("127.0.0.1") | Some("::1")
+            );
+        let release = std::env::var("PROFILE").as_deref() == Ok("release");
+        if parsed.host_str().is_none()
+            || (parsed.scheme() != "https" && (release || !localhost_http))
+        {
+            panic!(
+                "DYSTIL_TELEMETRY_ENDPOINT must be HTTPS (debug builds may use localhost HTTP)"
+            );
         }
+        println!("cargo:rustc-env=DYSTIL_TELEMETRY_ENDPOINT={endpoint}");
     }
 }
 

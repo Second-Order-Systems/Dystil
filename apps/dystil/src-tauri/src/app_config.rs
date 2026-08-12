@@ -5,8 +5,8 @@ pub fn cloud_base_url() -> Option<&'static str> {
     option_env!("DYSTIL_CLOUD_BASE_URL")
 }
 
-/// Optional, build-time telemetry relay endpoint. It is absent from community
-/// builds and must use HTTPS outside a debug localhost build.
+/// Optional, build-time telemetry relay endpoint. It may be present in official
+/// community builds and must use HTTPS outside a debug localhost build.
 pub fn telemetry_endpoint() -> Option<&'static str> {
     option_env!("DYSTIL_TELEMETRY_ENDPOINT")
 }
