@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "candidates"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "candidates": {
+      "type": "array", "maxItems": 8,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["observation_groups", "decision", "reason_code", "reason", "shared_goal", "reducible_burden", "stable_steps", "variable_inputs", "distinct_episode_basis", "missing_to_qualify", "opportunity"],
+        "properties": {
+          "observation_groups": {
+            "type": "array", "minItems": 1, "maxItems": 8,
+            "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["observation_refs", "steps", "distinctness_basis"],
+              "properties": {
+                "observation_refs": { "type": "array", "minItems": 1, "maxItems": 40, "items": { "type": "integer", "minimum": 1 } },
+                "steps": { "type": "array", "minItems": 1, "maxItems": 6, "items": { "type": "string", "maxLength": 160 } },
+                "distinctness_basis": { "type": "array", "maxItems": 4, "items": { "type": "string", "maxLength": 160 } }
+              }
+            }
+          },
+          "decision": { "type": "string", "enum": ["qualified", "watching", "discarded"] },
+          "reason_code": { "type": "string", "enum": ["meaningful_repeated_work", "meaningful_but_immature", "system_mechanics", "no_user_goal", "no_recognizable_output", "no_reducible_burden", "same_episode", "different_goals", "insufficient_evidence", "uncertain_completion", "handoff_not_grounded", "one_off_without_reusable_help"] },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "shared_goal": { "type": "string", "maxLength": 240 },
+          "reducible_burden": { "type": "string", "maxLength": 240 },
+          "stable_steps": { "type": "array", "maxItems": 6, "items": { "type": "string", "maxLength": 120 } },
+          "variable_inputs": { "type": "array", "maxItems": 6, "items": { "type": "string", "maxLength": 120 } },
+          "distinct_episode_basis": { "type": "array", "maxItems": 4, "items": { "type": "string", "maxLength": 160 } },
+          "missing_to_qualify": { "type": "array", "maxItems": 3, "items": { "type": "string", "maxLength": 160 } },
+          "opportunity": {
+            "anyOf": [
+              { "type": "null" },
+              {
+                "type": "object", "additionalProperties": false,
+                "required": ["existing_opportunity_ref", "construct", "summary", "signature", "withdraw_current_finding", "retire", "transfer_established", "authorship_established", "cadence", "unresolved_questions", "evidence_quality", "handoff", "finding", "rank_signals", "automation_potential"],
+                "properties": {
+                  "existing_opportunity_ref": { "type": ["integer", "null"], "minimum": 1 },
+                  "construct": { "type": "string", "enum": ["recognition", "manual_transfer", "unchanged_repetition", "temporal_pattern", "repeated_composition"] },
+                  "summary": { "type": "string", "minLength": 1, "maxLength": 300 },
+                  "signature": { "type": "string", "minLength": 1, "maxLength": 300 },
+                  "withdraw_current_finding": { "type": "boolean" }, "retire": { "type": "boolean" },
+                  "transfer_established": { "type": "boolean" }, "authorship_established": { "type": "boolean" },
+                  "cadence": { "type": "string", "enum": ["none", "daily", "weekly", "monthly"] },
+                  "unresolved_questions": { "type": "array", "maxItems": 4, "items": { "type": "string", "maxLength": 180 } },
+                  "evidence_quality": { "type": "string", "enum": ["high", "medium", "low"] },
+                  "handoff": { "anyOf": [{ "type": "null" }, { "type": "object", "additionalProperties": false, "required": ["kind", "title", "body", "capability_id"], "properties": { "kind": { "type": "string", "enum": ["prompt", "saved_prompt", "existing_capability", "runbook"] }, "title": { "type": "string", "minLength": 1, "maxLength": 120 }, "body": { "type": "string", "minLength": 1, "maxLength": 4000 }, "capability_id": { "type": ["string", "null"] } } }] },
+                  "finding": { "anyOf": [{ "type": "null" }, { "type": "object", "additionalProperties": false, "required": ["claim", "why_worth_fixing"], "properties": { "claim": { "type": "string", "minLength": 1, "maxLength": 400 }, "why_worth_fixing": { "type": "string", "minLength": 1, "maxLength": 400 } } }] },
+                  "rank_signals": { "type": "object", "additionalProperties": false, "required": ["actionability", "estimated_burden", "novelty", "user_relevance", "sensitivity_risk"], "properties": { "actionability": { "type": "integer", "minimum": 0, "maximum": 3 }, "estimated_burden": { "type": "integer", "minimum": 0, "maximum": 3 }, "novelty": { "type": "integer", "minimum": 0, "maximum": 3 }, "user_relevance": { "type": "integer", "minimum": 0, "maximum": 3 }, "sensitivity_risk": { "type": "integer", "minimum": 0, "maximum": 3 } } },
+                  "automation_potential": { "type": "boolean" }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

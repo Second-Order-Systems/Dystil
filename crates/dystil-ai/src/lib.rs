@@ -91,6 +91,8 @@ pub enum AiModelTier {
 #[serde(rename_all = "snake_case")]
 pub enum AiReasoningEffort {
     Default,
+    Low,
+    Medium,
     High,
 }
 
@@ -765,8 +767,17 @@ impl CliProvider {
         if let Some(model) = model {
             command.args(["--model", model]);
         }
-        if matches!(reasoning_effort, AiReasoningEffort::High) {
-            command.args(["-c", "model_reasoning_effort=\"high\""]);
+        let reasoning_setting = match reasoning_effort {
+            AiReasoningEffort::Default => None,
+            AiReasoningEffort::Low => Some("low"),
+            AiReasoningEffort::Medium => Some("medium"),
+            AiReasoningEffort::High => Some("high"),
+        };
+        if let Some(reasoning_setting) = reasoning_setting {
+            command.args([
+                "-c",
+                &format!("model_reasoning_effort=\"{reasoning_setting}\""),
+            ]);
         }
         command
             .arg("-")
@@ -1160,11 +1171,15 @@ async fn run_command_with_stdin(
                 "AI provider reported a terminal error; terminating immediately"
             );
             let _ = child.kill().await;
-            let _ = child.wait().await;
+            let status = child.wait().await.ok();
+            // The fatal event is detected inside `stdout_task`; waiting for that
+            // drain here can deadlock while the provider's process tree keeps a
+            // pipe open. The event itself is the authoritative provider detail.
             stdout_task.abort();
             stderr_task.abort();
+            let detail = format!("provider terminal error: {message}; exit_status={status:?}");
             return Err(AiError::Process(dystil_redact::sanitize_text(
-                &message.chars().take(1000).collect::<String>(),
+                &detail.chars().take(1000).collect::<String>(),
             )));
         }
         ProviderCompletion::TimedOut => {
@@ -1201,7 +1216,10 @@ async fn run_command_with_stdin(
         String::from_utf8(stdout).map_err(|error| AiError::InvalidOutput(error.to_string()))
     } else {
         let detail = if stderr.is_empty() { &stdout } else { &stderr };
-        Err(AiError::Process(bounded_stderr(detail)))
+        Err(AiError::Process(format!(
+            "provider exited with {status}: {}",
+            bounded_stderr(detail)
+        )))
     }
 }
 

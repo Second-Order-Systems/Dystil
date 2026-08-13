@@ -188,11 +188,54 @@ pub struct OpportunityDelta {
     pub automation_potential: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateDecision {
+    Qualified,
+    Watching,
+    Discarded,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateReasonCode {
+    MeaningfulRepeatedWork,
+    MeaningfulButImmature,
+    SystemMechanics,
+    NoUserGoal,
+    NoRecognizableOutput,
+    NoReducibleBurden,
+    SameEpisode,
+    DifferentGoals,
+    InsufficientEvidence,
+    UncertainCompletion,
+    HandoffNotGrounded,
+    OneOffWithoutReusableHelp,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CandidateAssessment {
+    pub local_id: String,
+    pub observation_ids: Vec<String>,
+    pub decision: CandidateDecision,
+    pub reason_code: CandidateReasonCode,
+    pub reason: String,
+    pub shared_goal: String,
+    pub reducible_burden: String,
+    pub stable_steps: Vec<String>,
+    pub variable_inputs: Vec<String>,
+    pub distinct_episode_basis: Vec<String>,
+    pub missing_to_qualify: Vec<String>,
+    pub opportunity_local_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReconciliationOutput {
     pub schema_version: u32,
     pub considered_observation_ids: Vec<String>,
     pub opportunities: Vec<OpportunityDelta>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidate_assessments: Vec<CandidateAssessment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
