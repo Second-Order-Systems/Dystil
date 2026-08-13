@@ -14,7 +14,7 @@
     "predev": "bun scripts/pre_build.js",
     "prebuild": "bun scripts/pre_build.js",
     "tauri": "tauri",
-    "tauri:build": "scripts/build_macos.sh",
+    "tauri:build": "bash scripts/build_macos_enterprise.sh",
     "tauri:build:on-demand": "scripts/build_macos.sh",
     "tauri:build:continuous": "scripts/build_macos.sh --features macos-continuous-capture",
     "clean": "rm -rf out && cargo clean && rm -rf src-tauri/{dystil-*,tesseract-*,openblas*,bun*,ollama*,ui_monitor*} node_modules"

@@ -2257,7 +2257,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "dystil-ai"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "async-trait",
  "dystil-redact",
@@ -2271,7 +2271,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-app"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2389,7 +2389,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-automation"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2405,7 +2405,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-capture"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -2454,7 +2454,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-engine"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "async-trait",
  "dystil-sync",
@@ -2466,7 +2466,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-insights"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2485,7 +2485,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-protocol"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "chrono",
  "hex",
@@ -2496,7 +2496,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-redact"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2518,7 +2518,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-retrieval"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "chrono",
  "clap",
@@ -2533,7 +2533,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-storage"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "serde",
  "serde_json",
@@ -2544,7 +2544,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-sync"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "chrono",
  "dystil-capture",
@@ -2564,7 +2564,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-telemetry"
-version = "0.0.8"
+version = "0.0.9"
 
 [[package]]
 name = "either"

@@ -38,6 +38,7 @@ onnxruntime-win-x64*/
 # ignore environment variables
 .env
 .env.local
+.env.build
 .openai_key
 .local/work-card-eval/
 .local/process-mining-sop-comparison/
