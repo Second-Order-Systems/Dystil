@@ -48,6 +48,13 @@ are built with `DYSTIL_TELEMETRY_ENDPOINT` set from the `vars.DYSTIL_TELEMETRY_E
 repository variable in `.github/workflows/release-app.yml`. A source build without
 that variable has no endpoint and cannot report.
 
+The desktop exporter does not require a device credential to attempt an export
+(`telemetry_exporter.rs :: start`). When a device token is available, it adds the
+`Authorization: Device <token>` header; otherwise it sends the same sanitized
+OTLP payload anonymously (`telemetry_exporter.rs :: build_export_request`).
+Authentication and any identity association are relay concerns; the client does
+not add a user identifier to telemetry.
+
 `cloud_base_url()` remains absent from community builds — it is only passed by
 `release-enterprise.yml`. Test: `app_config.rs :: community_build_has_no_cloud_url`.
 

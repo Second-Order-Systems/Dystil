@@ -44,9 +44,10 @@ pub fn start(telemetry: Arc<Telemetry>, instance_id: String) -> Option<JoinHandl
             let Some(snapshot) = telemetry.drain_interval() else {
                 continue;
             };
-            let Some(token) = crate::auth::current_device_token().await.ok().flatten() else {
-                continue;
-            };
+            // Community builds may export anonymously. Enterprise/cloud builds
+            // attach the device credential when one is available; telemetry
+            // must not wait for authentication before attempting an export.
+            let token = crate::auth::current_device_token().await.ok().flatten();
             if !telemetry.snapshot_is_current(&snapshot) {
                 continue;
             }
@@ -71,13 +72,14 @@ pub fn start(telemetry: Arc<Telemetry>, instance_id: String) -> Option<JoinHandl
             let body = encode_metrics(snapshot, &instance_id);
             // A failed export is intentionally best effort: no local queue and
             // no retry loop that could amplify traffic or retain old data.
-            match client
-                .post(format!("{endpoint}/v1/metrics"))
-                .header("authorization", format!("Device {token}"))
-                .header("content-type", "application/x-protobuf")
-                .body(body)
-                .send()
-                .await
+            match build_export_request(
+                &client,
+                format!("{endpoint}/v1/metrics"),
+                token.as_deref(),
+                body,
+            )
+            .send()
+            .await
             {
                 Ok(response) if response.status().is_success() => {
                     info!(metric_points, "telemetry metrics export accepted")
@@ -88,13 +90,14 @@ pub fn start(telemetry: Arc<Telemetry>, instance_id: String) -> Option<JoinHandl
                 Err(error) => warn!(%error, metric_points, "telemetry metrics export failed"),
             }
             if let Some(body) = trace_body {
-                match client
-                    .post(format!("{endpoint}/v1/traces"))
-                    .header("authorization", format!("Device {token}"))
-                    .header("content-type", "application/x-protobuf")
-                    .body(body)
-                    .send()
-                    .await
+                match build_export_request(
+                    &client,
+                    format!("{endpoint}/v1/traces"),
+                    token.as_deref(),
+                    body,
+                )
+                .send()
+                .await
                 {
                     Ok(response) if response.status().is_success() => {
                         info!(trace_count, "telemetry traces export accepted")
@@ -107,6 +110,22 @@ pub fn start(telemetry: Arc<Telemetry>, instance_id: String) -> Option<JoinHandl
             }
         }
     }))
+}
+
+fn build_export_request(
+    client: &reqwest::Client,
+    url: String,
+    token: Option<&str>,
+    body: Vec<u8>,
+) -> reqwest::RequestBuilder {
+    let request = client
+        .post(url)
+        .header("content-type", "application/x-protobuf");
+    let request = match token {
+        Some(token) => request.header("authorization", format!("Device {token}")),
+        None => request,
+    };
+    request.body(body)
 }
 
 fn resource_metric_count(resources: &ResourceSnapshot) -> usize {
@@ -536,11 +555,54 @@ fn unix_nanos() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dystil_telemetry::{CaptureTriggerKind, Outcome, ReasonKind, TraceKind};
+    use dystil_telemetry::{
+        CaptureTriggerKind, ConsentDecision, Outcome, ReasonKind, TraceKind,
+        TELEMETRY_CONSENT_VERSION,
+    };
+
+    #[test]
+    fn anonymous_export_has_no_authorization_header() {
+        let client = reqwest::Client::new();
+        let request = build_export_request(
+            &client,
+            "https://telemetry.invalid/v1/metrics".to_string(),
+            None,
+            vec![1, 2, 3],
+        )
+        .build()
+        .unwrap();
+
+        assert_eq!(
+            request.headers().get("content-type").unwrap(),
+            "application/x-protobuf"
+        );
+        assert!(request.headers().get("authorization").is_none());
+    }
+
+    #[test]
+    fn authenticated_export_has_device_authorization_header() {
+        let client = reqwest::Client::new();
+        let request = build_export_request(
+            &client,
+            "https://telemetry.invalid/v1/metrics".to_string(),
+            Some("device-token"),
+            vec![1, 2, 3],
+        )
+        .build()
+        .unwrap();
+
+        assert_eq!(
+            request.headers().get("authorization").unwrap(),
+            "Device device-token"
+        );
+    }
 
     #[test]
     fn encodes_only_aggregate_metrics_and_allowlisted_resource_attributes() {
         let telemetry = Telemetry::new();
+        telemetry.set_consent(ConsentDecision::Granted {
+            policy_version: TELEMETRY_CONSENT_VERSION,
+        });
         telemetry.record_capture_trigger(
             CaptureTriggerKind::Click,
             Outcome::Succeeded,
@@ -559,7 +621,7 @@ mod tests {
         let encoded = encode_metrics(snapshot.clone(), "ephemeral-instance");
         let decoded = ExportMetricsServiceRequest::decode(encoded.as_slice()).unwrap();
         let resource = &decoded.resource_metrics[0];
-        assert_eq!(resource.scope_metrics[0].metrics.len(), 2);
+        assert_eq!(resource.scope_metrics[0].metrics.len(), 4);
         assert!(resource
             .resource
             .as_ref()
