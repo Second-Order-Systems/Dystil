@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+         xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+         xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+         xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+         IgnorableNamespaces="uap uap3 uap10 desktop rescap">
+  <Identity Name="SecondOrderSystems.Dystil"
+            Publisher="CN=86E192E9-5762-4E46-9A90-6EDAD1EAB5D1"
+            Version="__VERSION__"
+            ProcessorArchitecture="__ARCHITECTURE__" />
+  <Properties>
+    <DisplayName>Dystil</DisplayName>
+    <PublisherDisplayName>Second Order Systems</PublisherDisplayName>
+    <Description>Dystil understands your work</Description>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <uap10:PackageIntegrity>
+      <uap10:Content Enforcement="on" />
+    </uap10:PackageIntegrity>
+  </Properties>
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22000.1" />
+    <PackageDependency Name="Microsoft.WindowsAppRuntime.1.4" MinVersion="4000.1010.1349.0" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
+  </Dependencies>
+  <Applications>
+    <Application Id="DYSTILAPP" Executable="VFS\Local AppData\Dystil\dystil-app.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements BackgroundColor="transparent" DisplayName="Dystil" Square150x150Logo="Assets\DYSTILAPP-Square150x150Logo.png" Square44x44Logo="Assets\DYSTILAPP-Square44x44Logo.png" Description="Dystil">
+      </uap:VisualElements>
+      <Extensions>
+        <uap3:Extension Category="windows.protocol">
+          <uap3:Protocol Name="dystil" Parameters="&quot;%1&quot;">
+            <uap:DisplayName>dystil</uap:DisplayName>
+            <uap:Logo>Assets\dystil.png</uap:Logo>
+          </uap3:Protocol>
+        </uap3:Extension>
+        <desktop:Extension Category="windows.startupTask" Executable="VFS\Local AppData\Dystil\dystil-app.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="DystilStartupTask" Enabled="true" DisplayName="Dystil" />
+        </desktop:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

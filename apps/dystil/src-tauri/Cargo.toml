@@ -3,8 +3,8 @@
 [package]
 name = "dystil-app"
 version = "0.0.9"
-description = "24/7 memory for your desktop. 100% local."
-authors = ["you"]
+description = "Dystil your work."
+authors = ["jayhsiai"]
 license = ""
 repository = ""
 default-run = "dystil-app"
@@ -211,12 +211,17 @@ raw-window-handle = "0.6"
 webview2-com = "=0.38.2"
 windows-core = "0.61.2"
 windows = { version = "0.58", features = [
+    "ApplicationModel",
+    "Foundation_Collections",
+    "Services_Store",
     "Win32_Foundation",
     "Win32_Security",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
     "Win32_Graphics_Dwm",
     "Win32_System_Com",
+    "Win32_System_Recovery",
+    "Win32_System_WinRT",
     "Win32_System_Threading",
     "Win32_Security_Cryptography",
 ] }
@@ -260,6 +265,11 @@ custom-protocol = ["tauri/custom-protocol"]
 
 # Set by GitHub Actions release workflow. Cloud access remains independent.
 official-build = ["dep:tauri-plugin-updater"]
+
+# Microsoft Store/MSIX distribution for Windows. Store builds use
+# Windows.Services.Store rather than the Tauri/R2 updater, while retaining
+# the rest of the official build capabilities.
+windows-store = []
 
 jemalloc = ["tikv-jemallocator"]
 
