@@ -2,12 +2,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use dystil_telemetry::{ErrorKind, Outcome, StorageOperationKind, Telemetry};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use sqlx::{Row, SqlitePool};
 use tauri::{AppHandle, State};
 use tracing::{info, warn};
-use dystil_telemetry::{ErrorKind, Outcome, StorageOperationKind, Telemetry};
 
 use crate::recording::RecordingState;
 use crate::store::SettingsStore;
@@ -150,13 +150,9 @@ pub async fn set_retention_days(
                 .as_ref()
                 .map(|server| server.telemetry.clone())
         };
-        if let Err(error) = cleanup_expired_raw_history(
-            &pool,
-            &media_dir,
-            retention_days,
-            telemetry.as_deref(),
-        )
-        .await
+        if let Err(error) =
+            cleanup_expired_raw_history(&pool, &media_dir, retention_days, telemetry.as_deref())
+                .await
         {
             warn!(error = %error, "retention was saved; immediate cleanup will be retried");
         }

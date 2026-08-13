@@ -968,10 +968,7 @@ impl SettingsStore {
             // user choices are preserved by the marker.
             if !obj.contains_key(AI_PII_EXPLICIT_OPT_IN_KEY) {
                 obj.insert("asyncPiiRedaction".to_string(), Value::Bool(false));
-                obj.insert(
-                    AI_PII_EXPLICIT_OPT_IN_KEY.to_string(),
-                    Value::Bool(true),
-                );
+                obj.insert(AI_PII_EXPLICIT_OPT_IN_KEY.to_string(), Value::Bool(true));
             }
         }
         val
@@ -1289,9 +1286,11 @@ mod tests {
     fn ai_pii_is_opt_in_for_new_and_existing_settings() {
         let defaults = SettingsStore::default();
         assert!(!defaults.recording.async_pii_redaction);
-        assert!(!defaults
-            .to_dystil_capture_config(std::path::PathBuf::from("/tmp/dystil-test"))
-            .async_pii_redaction);
+        assert!(
+            !defaults
+                .to_dystil_capture_config(std::path::PathBuf::from("/tmp/dystil-test"))
+                .async_pii_redaction
+        );
 
         let migrated = SettingsStore::sanitize_legacy_fields(json!({
             "asyncPiiRedaction": true

@@ -118,9 +118,7 @@ fn configure_cloud_build() {
         if parsed.host_str().is_none()
             || (parsed.scheme() != "https" && (release || !localhost_http))
         {
-            panic!(
-                "DYSTIL_TELEMETRY_ENDPOINT must be HTTPS (debug builds may use localhost HTTP)"
-            );
+            panic!("DYSTIL_TELEMETRY_ENDPOINT must be HTTPS (debug builds may use localhost HTTP)");
         }
         println!("cargo:rustc-env=DYSTIL_TELEMETRY_ENDPOINT={endpoint}");
     }

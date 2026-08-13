@@ -123,8 +123,13 @@ fn watch_codex_login(app_handle: AppHandle) {
                 } else {
                     Err("Codex sign-in ended without an authenticated session".into())
                 };
-                record_ai_result(&state, &ProviderKind::Codex, AiOperationKind::SignIn, &result)
-                    .await;
+                record_ai_result(
+                    &state,
+                    &ProviderKind::Codex,
+                    AiOperationKind::SignIn,
+                    &result,
+                )
+                .await;
                 let _ = app_handle.emit("ai-provider-login-updated", status);
                 return;
             }
@@ -132,7 +137,13 @@ fn watch_codex_login(app_handle: AppHandle) {
         }
         let state = app_handle.state::<RecordingState>();
         let result: Result<(), String> = Err("Codex sign-in timed out".into());
-        record_ai_result(&state, &ProviderKind::Codex, AiOperationKind::SignIn, &result).await;
+        record_ai_result(
+            &state,
+            &ProviderKind::Codex,
+            AiOperationKind::SignIn,
+            &result,
+        )
+        .await;
         let _ = app_handle.emit(
             "ai-provider-login-updated",
             serde_json::json!({"error": "Codex sign-in timed out. Try again."}),
@@ -206,13 +217,21 @@ fn telemetry_error_kind(operation: AiOperationKind, error: &str) -> AiErrorKind 
         AiErrorKind::AuthenticationFailed
     } else if error.contains("invalid output") {
         AiErrorKind::InvalidOutput
-    } else if error.contains("database") || error.contains("directory") || error.contains("guidance") {
+    } else if error.contains("database")
+        || error.contains("directory")
+        || error.contains("guidance")
+    {
         AiErrorKind::Filesystem
-    } else if matches!(operation, AiOperationKind::McpSetup | AiOperationKind::McpConnect)
-        && (error.contains("could not start") || error.contains("cli"))
+    } else if matches!(
+        operation,
+        AiOperationKind::McpSetup | AiOperationKind::McpConnect
+    ) && (error.contains("could not start") || error.contains("cli"))
     {
         AiErrorKind::McpClientUnavailable
-    } else if matches!(operation, AiOperationKind::McpSetup | AiOperationKind::McpConnect) {
+    } else if matches!(
+        operation,
+        AiOperationKind::McpSetup | AiOperationKind::McpConnect
+    ) {
         AiErrorKind::McpRegistrationFailed
     } else {
         AiErrorKind::ProcessFailed
@@ -652,12 +671,20 @@ pub async fn external_mcp_add(
         "codex" | "claude" => client,
         _ => return Err("client must be codex or claude".into()),
     };
-    let provider = if client == "codex" { AiProviderKind::Codex } else { AiProviderKind::Claude };
+    let provider = if client == "codex" {
+        AiProviderKind::Codex
+    } else {
+        AiProviderKind::Claude
+    };
     let sidecar = match mcp_binary(&app_handle) {
         Ok(value) => value,
         Err(error) => {
             let result: Result<(), String> = Err(error.clone());
-            let provider_kind = if matches!(provider, AiProviderKind::Codex) { ProviderKind::Codex } else { ProviderKind::Claude };
+            let provider_kind = if matches!(provider, AiProviderKind::Codex) {
+                ProviderKind::Codex
+            } else {
+                ProviderKind::Claude
+            };
             record_ai_result(&state, &provider_kind, AiOperationKind::McpSetup, &result).await;
             return Err(error);
         }
@@ -666,7 +693,11 @@ pub async fn external_mcp_add(
         Ok(value) => value,
         Err(error) => {
             let result: Result<(), String> = Err(error.clone());
-            let provider_kind = if matches!(provider, AiProviderKind::Codex) { ProviderKind::Codex } else { ProviderKind::Claude };
+            let provider_kind = if matches!(provider, AiProviderKind::Codex) {
+                ProviderKind::Codex
+            } else {
+                ProviderKind::Claude
+            };
             record_ai_result(&state, &provider_kind, AiOperationKind::McpSetup, &result).await;
             return Err(error);
         }
@@ -699,14 +730,22 @@ pub async fn external_mcp_add(
         Ok(Err(error)) => {
             let error = format!("could not start the external {client} CLI: {error}");
             let result: Result<(), String> = Err(error.clone());
-            let provider_kind = if matches!(provider, AiProviderKind::Codex) { ProviderKind::Codex } else { ProviderKind::Claude };
+            let provider_kind = if matches!(provider, AiProviderKind::Codex) {
+                ProviderKind::Codex
+            } else {
+                ProviderKind::Claude
+            };
             record_ai_result(&state, &provider_kind, AiOperationKind::McpSetup, &result).await;
             return Err(error);
         }
         Err(_) => {
             let error = format!("{client} did not finish configuring Dystil within 30 seconds");
             let result: Result<(), String> = Err(error.clone());
-            let provider_kind = if matches!(provider, AiProviderKind::Codex) { ProviderKind::Codex } else { ProviderKind::Claude };
+            let provider_kind = if matches!(provider, AiProviderKind::Codex) {
+                ProviderKind::Codex
+            } else {
+                ProviderKind::Claude
+            };
             record_ai_result(&state, &provider_kind, AiOperationKind::McpSetup, &result).await;
             return Err(error);
         }
@@ -715,7 +754,11 @@ pub async fn external_mcp_add(
         let detail = String::from_utf8_lossy(&output.stderr);
         let detail = dystil_redact::sanitize_text(detail.trim());
         warn!(client, "external MCP setup failed");
-        let provider_kind = if matches!(provider, AiProviderKind::Codex) { ProviderKind::Codex } else { ProviderKind::Claude };
+        let provider_kind = if matches!(provider, AiProviderKind::Codex) {
+            ProviderKind::Codex
+        } else {
+            ProviderKind::Claude
+        };
         let result: Result<(), String> = Err("MCP registration failed".into());
         record_ai_result(&state, &provider_kind, AiOperationKind::McpSetup, &result).await;
         return Err(if detail.is_empty() {
@@ -732,7 +775,11 @@ pub async fn external_mcp_add(
         })?;
     }
     info!(client, "external MCP sidecar added");
-    let provider_kind = if matches!(provider, AiProviderKind::Codex) { ProviderKind::Codex } else { ProviderKind::Claude };
+    let provider_kind = if matches!(provider, AiProviderKind::Codex) {
+        ProviderKind::Codex
+    } else {
+        ProviderKind::Claude
+    };
     let result: Result<(), String> = Ok(());
     record_ai_result(&state, &provider_kind, AiOperationKind::McpSetup, &result).await;
     Ok(ExternalMcpSetupView {
@@ -825,51 +872,56 @@ pub async fn ai_provider_complete_claude_login(
     authorization_code: String,
 ) -> Result<AiProviderStatusView, String> {
     let result = async {
-    let authorization_code = authorization_code.trim();
-    if authorization_code.is_empty() || authorization_code.len() > 4096 {
-        return Err("Paste the authorization code shown by Claude.".into());
-    }
-    let mut child =
-        claude_login_process().lock().await.take().ok_or_else(|| {
+        let authorization_code = authorization_code.trim();
+        if authorization_code.is_empty() || authorization_code.len() > 4096 {
+            return Err("Paste the authorization code shown by Claude.".into());
+        }
+        let mut child = claude_login_process().lock().await.take().ok_or_else(|| {
             "Start Claude Code sign-in again before submitting a code.".to_string()
         })?;
-    if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-        if status.success() {
-            return ai_provider_status("claude".into()).await;
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            if status.success() {
+                return ai_provider_status("claude".into()).await;
+            }
+            return Err("Claude Code sign-in ended before the code was submitted.".into());
         }
-        return Err("Claude Code sign-in ended before the code was submitted.".into());
-    }
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "Claude Code sign-in input is unavailable.".to_string())?;
-    stdin
-        .write_all(format!("{authorization_code}\n").as_bytes())
-        .await
-        .map_err(|error| error.to_string())?;
-    stdin.shutdown().await.map_err(|error| error.to_string())?;
-    let output = timeout(Duration::from_secs(60), child.wait_with_output())
-        .await
-        .map_err(|_| "Claude Code sign-in timed out after the code was submitted.".to_string())?
-        .map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        let detail = [output.stderr, output.stdout].concat();
-        let detail = String::from_utf8_lossy(&detail)
-            .lines()
-            .take(6)
-            .collect::<Vec<_>>()
-            .join(" ");
-        let message = if detail.is_empty() {
-            "Claude Code rejected the authorization code.".to_string()
-        } else {
-            detail
-        };
-        return Err(dystil_redact::sanitize_text(&message));
-    }
-    ai_provider_status("claude".into()).await
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "Claude Code sign-in input is unavailable.".to_string())?;
+        stdin
+            .write_all(format!("{authorization_code}\n").as_bytes())
+            .await
+            .map_err(|error| error.to_string())?;
+        stdin.shutdown().await.map_err(|error| error.to_string())?;
+        let output = timeout(Duration::from_secs(60), child.wait_with_output())
+            .await
+            .map_err(|_| "Claude Code sign-in timed out after the code was submitted.".to_string())?
+            .map_err(|error| error.to_string())?;
+        if !output.status.success() {
+            let detail = [output.stderr, output.stdout].concat();
+            let detail = String::from_utf8_lossy(&detail)
+                .lines()
+                .take(6)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let message = if detail.is_empty() {
+                "Claude Code rejected the authorization code.".to_string()
+            } else {
+                detail
+            };
+            return Err(dystil_redact::sanitize_text(&message));
+        }
+        ai_provider_status("claude".into()).await
     }
     .await;
-    record_ai_result(&state, &ProviderKind::Claude, AiOperationKind::SignIn, &result).await;
+    record_ai_result(
+        &state,
+        &ProviderKind::Claude,
+        AiOperationKind::SignIn,
+        &result,
+    )
+    .await;
     result
 }
 
@@ -1085,33 +1137,39 @@ pub async fn mcp_connect(
     state: State<'_, RecordingState>,
 ) -> Result<McpConnectionStatus, String> {
     let result = async {
-    let runtime = provider_runtime(ProviderKind::Claude)?;
-    let binary = mcp_binary(&app)?;
-    let database = capture_database_path(&state).await?;
-    let args = vec![
-        "mcp".into(),
-        "add".into(),
-        "--transport".into(),
-        "stdio".into(),
-        "--scope".into(),
-        "user".into(),
-        "dystil".into(),
-        "--".into(),
-        binary.to_string_lossy().into_owned(),
-        "--database".into(),
-        database.to_string_lossy().into_owned(),
-    ];
-    let (success, detail) = claude_mcp_command(&runtime, &args).await?;
-    if !success {
-        return Err(detail);
-    }
-    Ok(McpConnectionStatus {
-        connected: true,
-        detail,
-    })
+        let runtime = provider_runtime(ProviderKind::Claude)?;
+        let binary = mcp_binary(&app)?;
+        let database = capture_database_path(&state).await?;
+        let args = vec![
+            "mcp".into(),
+            "add".into(),
+            "--transport".into(),
+            "stdio".into(),
+            "--scope".into(),
+            "user".into(),
+            "dystil".into(),
+            "--".into(),
+            binary.to_string_lossy().into_owned(),
+            "--database".into(),
+            database.to_string_lossy().into_owned(),
+        ];
+        let (success, detail) = claude_mcp_command(&runtime, &args).await?;
+        if !success {
+            return Err(detail);
+        }
+        Ok(McpConnectionStatus {
+            connected: true,
+            detail,
+        })
     }
     .await;
-    record_ai_result(&state, &ProviderKind::Claude, AiOperationKind::McpConnect, &result).await;
+    record_ai_result(
+        &state,
+        &ProviderKind::Claude,
+        AiOperationKind::McpConnect,
+        &result,
+    )
+    .await;
     result
 }
 
