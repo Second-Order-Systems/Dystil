@@ -81,6 +81,33 @@ written specification yet; see Phase 5.
 > the token *values* restyles them automatically — they will shift to the new palette without
 > breaking, and get proper design attention in a later effort.
 
+### Decisions taken after the first build pass
+
+The prototype (`Dystil App v2.dc.html`) contains eight screens the README does not spec: Ask, Your
+shortcuts, Scan, Running, Done, Failed, Invite and Privacy. They are designed, with final copy, and
+are to be followed exactly. Resolving them against what already exists:
+
+- **Restyle, do not rebuild.** Where a screen already works — Ask, Privacy, Settings — keep its
+  behaviour and change only its appearance. Concretely: Ask keeps its four-phase machine
+  (`Understand → Follow up → Consolidate → Present`) and its single-select / multi-select / compare
+  question types; Privacy keeps the entire deletion sub-app including the type-DELETE gate; Settings
+  keeps all seven tabs. The prototype's Ask is a simplification of one moment in that machine, not a
+  replacement for it.
+- **Settings is restyled by extrapolation.** The prototype has no Settings screen, only the top-bar
+  icon. Derive it from the handoff's tokens and patterns.
+- **Everything goes behind the mock interface**, including screens with working backend calls. This
+  buys one consistent boundary at the cost of temporarily disconnecting live screens — the app
+  becomes a UI prototype until the interface is implemented. **Preserve every real-wiring hook rather
+  than deleting it**, so the integration is recoverable: `use-worth-fixing.ts`,
+  `use-ready-artifacts.ts`, `use-ask-for-fix.ts`, and the raw `invoke` calls in Privacy and Settings.
+- **Adopt the handoff's vocabulary now.** "Ready to use" becomes "Your shortcuts" in UI copy, route
+  naming and `GLOSSARY.md`, so navigation and destination stop disagreeing.
+- **Onboarding is untouched** — a design is coming; do not extrapolate it.
+- **Job states (Running / Done / Failed) are deferred.** Note the consequence: "Yes, run it" settles
+  the item and shows the bottom-strip chip, but has no destination screen until they are built.
+
+Build order: Ask → Scan → Your shortcuts.
+
 > **The interface is the deliverable.** Because other engineers wire it up later, the UI/data boundary
 > matters more than usual. One module defines the types, one provides fixtures, and no screen calls
 > `commands.*` or `invoke` directly. If a screen needs data the interface does not expose, the
