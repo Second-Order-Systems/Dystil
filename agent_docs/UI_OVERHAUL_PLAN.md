@@ -72,6 +72,14 @@ written specification yet; see Phase 5.
 - Automation-driven job states (Running / Done / Failed) are in scope **as screens**.
 - Handoff copy is final: "Your shortcuts" replaces "Ready to use"; findings are "settled".
 - Core screens first.
+- **The sidebar is deleted.** `components/dystil/sidebar.tsx` goes; navigation moves to the top bar.
+- **No dark mode** on the new screens — they are built light-only, per the handoff.
+- **Settings and onboarding are out of scope** for this effort and keep their current design.
+
+> **The theme system is retired, not just unused.** Dark mode goes; there is a single light token set.
+> Because Settings, onboarding, auth and permission-recovery consume tokens rather than hex, changing
+> the token *values* restyles them automatically — they will shift to the new palette without
+> breaking, and get proper design attention in a later effort.
 
 > **The interface is the deliverable.** Because other engineers wire it up later, the UI/data boundary
 > matters more than usual. One module defines the types, one provides fixtures, and no screen calls
@@ -144,9 +152,19 @@ handoff's scale (`36 / 33 / 24 / 21 / 19 / 16.5 / 15.5 / 14.5 / 14 / 13.5 / 13 /
   count. Build once.
 - **Droplet icon**, extracted from `dystil.svg`, used at 8–11px throughout.
 
-> **Dark mode is unresolved.** The handoff specifies light only. Today a toggle exists
-> (`components/theme-provider.tsx`, with cross-window sync) and the product screens ignore it.
-> Decide before this phase lands — see Open questions.
+**0.5 Retire the theme system.** The handoff is light-only, so collapse to one token set and remove
+the machinery rather than leaving it dormant:
+
+- the `.dark` block in `app/globals.css`, and `darkMode: ["class"]` in `tailwind.config.ts`
+- `components/theme-provider.tsx` and its cross-window sync (`storage` / `focus` /
+  `visibilitychange` listeners plus Tauri's `onThemeChanged`)
+- the pre-paint theme script in `app/layout.tsx` and `defaultTheme` in `app/providers.tsx`
+- `ColorTheme` in `lib/constants/colors.ts`, the theme field in `lib/hooks/use-settings.tsx`, the
+  Settings control that sets it, and the `setNativeTheme` mirroring to Rust
+- the `prefers-color-scheme` fallback blocks behind the macOS vibrancy classes in `app/globals.css`
+
+Settings, onboarding, auth and permission-recovery consume tokens, so they inherit the new palette
+automatically and keep working. They are not redesigned in this effort.
 
 ---
 
@@ -305,14 +323,18 @@ without scrolling at the 800×600 minimum.
    makes the window draggable, and it is invisible to every automated check. It must survive the shell
    rewrite — verify by dragging the window.
 4. **Mock fixtures leaking into a release build.**
-5. **The app will straddle two design languages** until Settings and onboarding are also redesigned.
+5. **Retiring the theme touches shared surfaces.** Removing the pre-paint script in `app/layout.tsx`
+   risks reintroducing the FOUC it was added to prevent, and the macOS vibrancy classes carry
+   `prefers-color-scheme` fallbacks that must come out cleanly. Verify first paint under
+   `bunx tauri dev`, not just in a browser.
+6. **Settings and onboarding will look transitional** — new palette, old layout — until their own
+   redesign lands.
 
 ## Open questions
 
-- **Dark mode.** The handoff is light-only. Keep the toggle and invent dark values, or hide it until a
-  dark design exists? Needs deciding before Phase 0.2.
-- **Settings and onboarding** are not covered by the handoff. They keep the current design until
-  specified.
+- **Settings and onboarding** have no handoff yet. They inherit the new token values automatically but
+  keep their current layout and composition; a later effort will redesign them properly. Expect them
+  to look transitional in the meantime.
 - **Backend gaps**, recorded here for the engineers who will wire the interface, not to be solved in
   this effort: the four evidence stat tiles, `origin`, `recap`, `steps` / `runnable`, "Decide later",
   and correction option 4.
