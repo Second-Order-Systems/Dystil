@@ -82,6 +82,7 @@
     --marigold-hover: 39 63% 86%;     /* #F2E2C5 */
 
     --chevron: 42 15% 74%;            /* #C6C0B2 */
+    --droplet-on-deep: 158 47% 71%;   /* #8FD9BE  droplet on the deep-green button */
 
     /* --- Semantic aliases ------------------------------------------------
        Existing token names, re-pointed at the handoff palette. Settings,

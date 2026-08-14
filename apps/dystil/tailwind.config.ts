@@ -98,6 +98,7 @@ module.exports = {
           hover: "hsl(var(--marigold-hover))",
         },
         chevron: "hsl(var(--chevron))",
+        "droplet-on-deep": "hsl(var(--droplet-on-deep))",
 
         // --- Semantic aliases ------------------------------------------------
         // Consumed by settings, onboarding, auth and components/ui/*, which
