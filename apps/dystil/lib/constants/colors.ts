@@ -188,6 +188,5 @@ export const colorClasses = {
   },
 } as const;
 
-export type ColorTheme = 'light' | 'dark' | 'system';
 export type StatusType = keyof typeof statusColors;
 export type BrandColorIndex = 1 | 2 | 3 | 4 | 5; 

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ThemeProvider } from "@/components/theme-provider";
 import { PermissionMonitorProvider } from "@/lib/hooks/use-permission-monitor";
 import { DystilSessionProvider } from "@/components/auth/session-provider";
 import { Toaster } from "@/components/ui/toaster";
@@ -23,17 +22,15 @@ export function Providers({ children }: { children: React.ReactNode }) {
   }, []);
   return (
     <SettingsProvider>
-      <ThemeProvider defaultTheme="light" storageKey="dystil-ui-theme">
-        <PermissionMonitorProvider>
-          {mounted ? (
-            <>
-              <DeeplinkHandler />
-              <DystilSessionProvider>{children}</DystilSessionProvider>
-              <Toaster />
-            </>
-          ) : null}
-        </PermissionMonitorProvider>
-      </ThemeProvider>
+      <PermissionMonitorProvider>
+        {mounted ? (
+          <>
+            <DeeplinkHandler />
+            <DystilSessionProvider>{children}</DystilSessionProvider>
+            <Toaster />
+          </>
+        ) : null}
+      </PermissionMonitorProvider>
     </SettingsProvider>
   );
 }

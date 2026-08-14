@@ -30,111 +30,140 @@
 
 @layer base {
   :root {
-    /* Tell the engine the UI is light by default so native scrollbars and form
-       controls render correctly. Overridden by `.dark` below. (#3746) */
+    /* Native scrollbars and form controls. The app is light-only — the design
+       handoff (agent_docs/design_handoff_home_screen/README.md) specifies no
+       dark theme, and the `.dark` block was removed with it. */
     color-scheme: light;
 
     /*
-     * Dystil Brand Style Guide
-     * Black & White Geometric Minimalism
-     * No color. Sharp corners. Monospace typography.
+     * Palette — agent_docs/design_handoff_home_screen/README.md, "Design tokens".
+     * Every value there is exact; the hex is kept in a comment beside each HSL
+     * triplet so the two can be checked against each other.
+     *
+     * COLOUR RULES (semantic, not decorative — keep these):
+     *   green    = you can act / it is local and safe
+     *   marigold = something needs your judgement (a finding, a correction, a stop)
+     *   Never use green for navigation or movement.
+     *   At most ONE green element per region.
      */
 
-    /* Dystil — calm cream and green */
-    --background: 90 14% 97%; /* #F7F8F6 */
-    --foreground: 145 22% 10%; /* #14201B */
+    /* --- Raw handoff tokens --------------------------------------------- */
+    --ground: 42 31% 94%;             /* #F4F1EA  main app background */
+    --chrome: 43 30% 91%;             /* #EFEBE1  title bar, bottom strip, hover fills */
+    --paper: 45 100% 99%;             /* #FFFEFB  cards, panels, inputs */
+    --recessed: 42 36% 95%;           /* #F6F3EC  panels inside paper (stat tiles) */
 
-    /* Surface colors - Limited grays */
-    --surface: 90 12% 94%;
-    --surface-secondary: 90 10% 91%;
-    --surface-tertiary: 90 8% 87%;
+    --ink: 45 8% 10%;                 /* #1B1A17  primary text, filled track */
+    --ink-2: 44 10% 21%;              /* #3A372F  body inside panels */
+    --ink-3: 42 7% 34%;               /* #5E5A51  secondary buttons */
+    --muted-ink: 41 10% 38%;          /* #6B6558  supporting copy */
+    --muted-ink-2: 42 10% 41%;        /* #726C5E  labels, placeholders — lightest permissible grey */
 
-    /* Card colors */
-    --card: 0 0% 100%;
-    --card-foreground: 145 22% 10%;
-    --card-hover: 151 25% 96%;
+    --line: 41 23% 86%;               /* #E4DFD4  dividers */
+    --line-2: 42 26% 87%;             /* #E7E2D6  panel borders */
+    --line-2b: 42 25% 84%;            /* #E1DBCD  chrome borders */
+    --line-2c: 42 22% 82%;            /* #DCD6C8  strong borders, waiting track */
+    --line-3: 42 32% 92%;             /* #F1EDE4  dividers inside paper */
 
-    /* Popover colors */
-    --popover: 0 0% 100%;
-    --popover-foreground: 145 22% 10%;
+    --green-deep: 162 70% 18%;        /* #0E4F3C  primary buttons */
+    --green-deep-hover: 162 71% 14%;  /* #0A3B2C */
+    --green-mark: 161 54% 40%;        /* #2F9E7B  droplet, live progress */
+    --green-mid: 147 39% 30%;         /* #2F6B4A  status dot, step ticks */
 
-    --primary: 161 54% 40%; /* #2F9E7B */
-    --primary-foreground: 0 0% 100%;
-    --primary-hover: 158 56% 28%;
-    --primary-muted: 153 45% 94%;
+    --sage: 143 17% 36%;              /* #4C6B58  reassurance text */
+    --sage-dark: 151 38% 23%;         /* #24503B  text on sage tint */
+    --sage-tint: 127 20% 91%;         /* #E4EDE5  privacy / actionable surfaces */
+    --sage-border: 129 18% 85%;       /* #D2E0D4 */
+    --sage-hover: 131 19% 77%;        /* #B9CFBD */
 
-    /* Secondary - Gray */
-    --secondary: 90 12% 94%;
-    --secondary-foreground: 145 22% 10%;
-    --secondary-hover: 90 10% 90%;
+    --marigold: 36 65% 48%;           /* #C98A2B  droplet accents, stopped segment */
+    --marigold-text: 36 78% 30%;      /* #8A5A11  text on marigold tint */
+    --marigold-tint: 39 70% 91%;      /* #F8EDD8  "aha" and correction affordances */
+    --marigold-hover: 39 63% 86%;     /* #F2E2C5 */
 
-    /* Status colors - Grayscale only */
-    --success: 151 59% 45%;
-    --success-foreground: 0 0% 100%;
-    --success-muted: 153 45% 94%;
+    --chevron: 42 15% 74%;            /* #C6C0B2 */
 
-    --warning: 38 83% 48%;
-    --warning-foreground: 0 0% 100%;
-    --warning-muted: 43 90% 93%;
+    /* --- Semantic aliases ------------------------------------------------
+       Existing token names, re-pointed at the handoff palette. Settings,
+       onboarding, auth and permission-recovery consume these, so they inherit
+       the new palette without changes. */
+    --background: var(--ground);
+    --foreground: var(--ink);
 
+    --surface: var(--chrome);
+    --surface-secondary: var(--recessed);
+    --surface-tertiary: var(--line-3);
+
+    --card: var(--paper);
+    --card-foreground: var(--ink);
+    --card-hover: var(--recessed);
+
+    --popover: var(--paper);
+    --popover-foreground: var(--ink);
+
+    --primary: var(--green-deep);
+    --primary-foreground: var(--paper);
+    --primary-hover: var(--green-deep-hover);
+    --primary-muted: var(--sage-tint);
+
+    --secondary: var(--chrome);
+    --secondary-foreground: var(--ink-2);
+    --secondary-hover: var(--line-2);
+
+    --success: var(--green-mid);
+    --success-foreground: var(--paper);
+    --success-muted: var(--sage-tint);
+
+    /* Marigold is the "needs your judgement" channel, not a severity. */
+    --warning: var(--marigold);
+    --warning-foreground: var(--paper);
+    --warning-muted: var(--marigold-tint);
+
+    /* The handoff defines no destructive colour; these are carried over so
+       existing destructive affordances keep working. */
     --destructive: 359 61% 47%;
-    --destructive-foreground: 0 0% 100%;
+    --destructive-foreground: var(--paper);
     --destructive-hover: 359 61% 37%;
     --destructive-muted: 359 50% 94%;
 
-    --info: 195 66% 42%;
-    --info-foreground: 0 0% 100%;
-    --info-muted: 0 0% 90%;
+    --info: var(--sage);
+    --info-foreground: var(--paper);
+    --info-muted: var(--sage-tint);
 
-    /* Muted colors */
-    --muted: 90 12% 94%;
-    --muted-foreground: 145 10% 38%;
+    --muted: var(--chrome);
+    --muted-foreground: var(--muted-ink);
 
-    /* Accent colors */
-    --accent: 153 45% 94%;
-    --accent-foreground: 158 56% 28%;
-    --accent-hover: 153 35% 89%;
+    --accent: var(--sage-tint);
+    --accent-foreground: var(--sage-dark);
+    --accent-hover: var(--sage-hover);
 
-    /* Border and input - 1px black/gray */
-    --border: 120 12% 91%;
-    --input: 0 0% 100%;
-    --input-focus: 161 54% 40%;
-    --ring: 161 54% 40%;
+    --border: var(--line-2);
+    --input: var(--paper);
+    --input-focus: var(--sage-hover);
+    --ring: var(--green-mark);
 
-    /* Text colors - B&W hierarchy */
-    --text-primary: 145 22% 10%;
-    --text-secondary: 145 10% 38%;
-    --text-tertiary: 145 8% 57%;
-    --text-disabled: 145 7% 67%;
+    --text-primary: var(--ink);
+    --text-secondary: var(--muted-ink);
+    --text-tertiary: var(--muted-ink-2);
+    --text-disabled: var(--chevron);
 
-    /* Brand colors - All black for B&W aesthetic */
-    --brand-1: 0 0% 0%;
-    --brand-2: 0 0% 20%;
-    --brand-3: 0 0% 40%;
-    --brand-4: 0 0% 60%;
-    --brand-5: 0 0% 80%;
+    /* Radius — handoff: 2 track / 5 small badge / 7 strip button / 8 icon
+       button / 9 panel tile & buttons / 10 primary button / 13 panel /
+       14 card & hero / 20 pill / 50% dots. --radius is the panel step. */
+    --radius: 13px;
 
-    --color-1: 0 0% 0%;
-    --color-2: 0 0% 20%;
-    --color-3: 0 0% 40%;
-    --color-4: 0 0% 60%;
-    --color-5: 0 0% 80%;
+    /* Layout constants that were duplicated across files. */
+    --titlebar-height: 38px;
+    --topbar-height: 54px;
+    --statusbar-height: 34px;
 
-    /* Sidebar colors */
-    --sidebar-background: 0 0% 98%;
-    --sidebar-foreground: 0 0% 0%;
-    --sidebar-primary: 0 0% 0%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 0 0% 96%;
-    --sidebar-accent-foreground: 0 0% 0%;
-    --sidebar-border: 0 0% 80%;
-    --sidebar-ring: 0 0% 0%;
-
-    /* Sharp corners - no radius */
-    --radius: 0.75rem;
-
-    /* Font size scale — controlled by the font size setting */
+    /* Type scale.
+       Everything derives from --font-size-base so the Settings font-size
+       control (lib/utils/font-size.ts) actually moves the whole interface.
+       It previously reached only the ~25% of text using these tokens. */
     --font-size-base: 16px;
+
+    /* Stock steps, kept — used by settings, onboarding, auth and ui/*. */
     --text-xs: calc(var(--font-size-base) * 0.75);
     --text-sm: calc(var(--font-size-base) * 0.875);
     --text-base: var(--font-size-base);
@@ -143,104 +172,23 @@
     --text-2xl: calc(var(--font-size-base) * 1.5);
     --text-3xl: calc(var(--font-size-base) * 1.875);
     --text-4xl: calc(var(--font-size-base) * 2.25);
-  }
 
-  .dark {
-    /* Match native scrollbars and form controls to the dark UI even when the OS
-       is in light mode. The theme is class-based (`.dark` on <html>), not
-       prefers-color-scheme, so without this the WebView keeps painting a light
-       scrollbar/controls in dark mode (most visible on Windows). (#3746) */
-    color-scheme: dark;
-
-    /* Dark counterpart to the Dystil cream and green palette */
-    --background: 150 13% 8%;
-    --foreground: 120 15% 95%;
-
-    /* Surface colors */
-    --surface: 150 11% 11%;
-    --surface-secondary: 150 9% 14%;
-    --surface-tertiary: 150 8% 17%;
-
-    /* Card colors */
-    --card: 150 11% 10%;
-    --card-foreground: 120 15% 95%;
-    --card-hover: 150 12% 15%;
-
-    /* Popover colors */
-    --popover: 150 11% 10%;
-    --popover-foreground: 120 15% 95%;
-
-    --primary: 161 54% 45%;
-    --primary-foreground: 150 13% 8%;
-    --primary-hover: 161 54% 55%;
-    --primary-muted: 158 30% 17%;
-
-    /* Secondary */
-    --secondary: 150 9% 15%;
-    --secondary-foreground: 120 15% 95%;
-    --secondary-hover: 150 8% 19%;
-
-    /* Status colors - Grayscale */
-    --success: 151 59% 48%;
-    --success-foreground: 150 13% 8%;
-    --success-muted: 158 30% 17%;
-
-    --warning: 0 0% 60%;
-    --warning-foreground: 0 0% 0%;
-    --warning-muted: 0 0% 15%;
-
-    --destructive: 0 0% 100%;
-    --destructive-foreground: 0 0% 0%;
-    --destructive-hover: 0 0% 80%;
-    --destructive-muted: 0 0% 15%;
-
-    --info: 0 0% 60%;
-    --info-foreground: 0 0% 0%;
-    --info-muted: 0 0% 15%;
-
-    /* Muted colors — brightened for vibrancy/translucent sidebar */
-    --muted: 150 9% 15%;
-    --muted-foreground: 130 8% 72%;
-
-    /* Accent colors */
-    --accent: 158 30% 17%;
-    --accent-foreground: 145 45% 76%;
-    --accent-hover: 158 25% 22%;
-
-    /* Border and input */
-    --border: 150 8% 25%;
-    --input: 150 11% 10%;
-    --input-focus: 161 54% 45%;
-    --ring: 161 54% 45%;
-
-    /* Text colors */
-    --text-primary: 120 15% 95%;
-    --text-secondary: 130 8% 72%;
-    --text-tertiary: 130 7% 50%;
-    --text-disabled: 130 6% 35%;
-
-    /* Brand colors */
-    --brand-1: 0 0% 100%;
-    --brand-2: 0 0% 80%;
-    --brand-3: 0 0% 60%;
-    --brand-4: 0 0% 40%;
-    --brand-5: 0 0% 20%;
-
-    --color-1: 0 0% 100%;
-    --color-2: 0 0% 80%;
-    --color-3: 0 0% 60%;
-    --color-4: 0 0% 40%;
-    --color-5: 0 0% 20%;
-
-    /* Sidebar colors */
-    --sidebar-background: 0 0% 5%;
-    --sidebar-foreground: 0 0% 100%;
-    --sidebar-primary: 0 0% 100%;
-    --sidebar-primary-foreground: 0 0% 0%;
-    --sidebar-accent: 0 0% 14%;
-    --sidebar-accent-foreground: 0 0% 100%;
-    --sidebar-border: 0 0% 22%;
-    --sidebar-ring: 0 0% 100%;
+    /* Handoff steps: 36 33 24 21 19 16.5 15.5 14.5 14 13.5 13 12.5 11.5 11 10.5 */
+    --text-display-lg: calc(var(--font-size-base) * 2.25);      /* 36 */
+    --text-display: calc(var(--font-size-base) * 2.0625);       /* 33 */
+    --text-display-sm: calc(var(--font-size-base) * 1.5);       /* 24 */
+    --text-num: calc(var(--font-size-base) * 1.3125);           /* 21 */
+    --text-num-sm: calc(var(--font-size-base) * 1.1875);        /* 19 */
+    --text-hero: calc(var(--font-size-base) * 1.03125);         /* 16.5 */
+    --text-title: calc(var(--font-size-base) * 0.96875);        /* 15.5 */
+    --text-body-lg: calc(var(--font-size-base) * 0.90625);      /* 14.5 */
+    --text-body: calc(var(--font-size-base) * 0.875);           /* 14 */
+    --text-body-sm: calc(var(--font-size-base) * 0.84375);      /* 13.5 */
+    --text-ui: calc(var(--font-size-base) * 0.8125);            /* 13 */
+    --text-ui-sm: calc(var(--font-size-base) * 0.78125);        /* 12.5 */
+    --text-meta: calc(var(--font-size-base) * 0.71875);         /* 11.5 */
+    --text-label: calc(var(--font-size-base) * 0.6875);         /* 11 */
+    --text-label-sm: calc(var(--font-size-base) * 0.65625);     /* 10.5 */
   }
 }
 
@@ -322,292 +270,6 @@
 
   body {
     @apply bg-background text-foreground !pointer-events-auto !overscroll-none;
-  }
-
-  /* When translucent sidebar is enabled on macOS, the OS handles the background */
-  html.macos-vibrancy,
-  body.macos-vibrancy {
-    background-color: transparent !important;
-  }
-
-  /* Prevent intermittent scrollbars on Windows overlay — html/body should never scroll,
-     inner containers handle their own scrolling with scrollbar-hide */
-  html, body {
-    overflow: hidden;
-    -ms-overflow-style: none;
-    scrollbar-width: none;
-  }
-  html::-webkit-scrollbar,
-  body::-webkit-scrollbar {
-    display: none;
-  }
-
-  *,
-  a,
-  button {
-    /* cursor: default; */
-    user-select: none;
-    -webkit-user-drag: none; /* Prevent element dragging */
-    -webkit-tap-highlight-color: transparent; /* Remove blue/purple flash on click */
-  }
-  :not(input):not(textarea),
-  :not(input):not(textarea)::after,
-  :not(input):not(textarea)::before {
-    -webkit-user-select: none; /* Safari */
-    -moz-user-select: none;    /* Firefox */
-   -ms-user-select: none;     /* Internet Explorer/Edge */
-    user-select: none;
-    -webkit-user-drag: none; /* Prevent element dragging */
-    /* cursor: default; */
-  }
-
-  input,
-  textarea,
-  [contenteditable],
-  [contenteditable="true"] {
-    -webkit-user-select: text !important;
-    -moz-user-select: text !important;
-    -ms-user-select: text !important;
-    user-select: text !important;
-  }
-
-  /* Prevent all image and element dragging globally */
-  img, a, [draggable] {
-    -webkit-user-drag: none;
-    user-drag: none;
-    -khtml-user-drag: none;
-    -moz-user-drag: none;
-    -o-user-drag: none;
-    -ms-user-drag: none;
-    draggable: false;
-  }
-
-  /* Disable macOS Live Text analysis on search modal thumbnail images.
-     Live Text creates invisible interactive overlays that steal click events. */
-  [role="dialog"] img {
-    -webkit-image-analysis: none;
-  }
-
-  /* Selectable text layer — override global user-select:none for OCR text overlay
-     and chat message prose content.
-     Must override *, :not(input):not(textarea), and ::before/::after rules above. */
-  .selectable-text-layer,
-  .selectable-text-layer *,
-  .selectable-text-layer *::before,
-  .selectable-text-layer *::after,
-  .prose,
-  .prose *,
-  .prose *::before,
-  .prose *::after {
-    -webkit-user-select: text !important;
-    -moz-user-select: text !important;
-    -ms-user-select: text !important;
-    user-select: text !important;
-    cursor: text !important;
-    -webkit-user-drag: none !important;
-  }
-  .selectable-text-layer::selection,
-  .selectable-text-layer *::selection,
-  .prose::selection,
-  .prose *::selection {
-    background-color: rgba(59, 130, 246, 0.35) !important;
-  }
-
-  .prose a,
-  .prose a * {
-    cursor: pointer !important;
-  }
-
-  /* Allow video controls to work normally */
-  video {
-    -webkit-user-drag: auto !important;
-    user-select: auto !important;
-  }
-
-  video::-webkit-media-controls,
-  video::-webkit-media-controls-enclosure,
-  video::-webkit-media-controls-panel,
-  video::-webkit-media-controls-timeline {
-    -webkit-user-drag: auto !important;
-    pointer-events: auto !important;
-    user-select: auto !important;
-  }
-
-  .scrollbar-hide {
-    -ms-overflow-style: none;  /* IE and Edge */
-    scrollbar-width: none;  /* Firefox */
-  }
-
-  .scrollbar-hide::-webkit-scrollbar {
-    display: none;  /* Chrome, Safari and Opera */
-  }
-
-  /* Minimal scrollbar: visible track + thumb, no up/down arrow buttons (like reference) */
-  .scrollbar-minimal {
-    scrollbar-width: thin;  /* Firefox: thin scrollbar, no arrows */
-    scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent;
-  }
-  .scrollbar-minimal::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-  }
-  .scrollbar-minimal::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  .scrollbar-minimal::-webkit-scrollbar-thumb {
-    background: hsl(var(--muted-foreground) / 0.4);
-    border-radius: 4px;
-  }
-  .scrollbar-minimal::-webkit-scrollbar-thumb:hover {
-    background: hsl(var(--muted-foreground) / 0.6);
-  }
-  .scrollbar-minimal::-webkit-scrollbar-button {
-    display: none;  /* No arrow buttons */
-  }
-
-  /* Vibrant sidebar theme — Minimal macOS backdrop */
-  .vibrant-sidebar {
-    /* Light mode: subtle light overlay on translucent background */
-    background-color: rgba(255, 255, 255, 0.08) !important;
-    border-color: transparent;
-  }
-  .light .vibrant-sidebar {
-    background-color: rgba(255, 255, 255, 0.08) !important;
-  }
-  .dark .vibrant-sidebar {
-    /* Dark mode: subtle bright overlay on translucent background */
-    background-color: rgba(255, 255, 255, 0.06) !important;
-  }
-
-  /* System light mode fallback — covers the gap before JS applies .light class */
-  @media (prefers-color-scheme: light) {
-    html:not(.dark) .vibrant-sidebar {
-      background-color: rgba(255, 255, 255, 0.08) !important;
-    }
-    html:not(.dark) .vibrant-sidebar-fg {
-      color: hsl(0 0% 0%) !important;
-    }
-    html:not(.dark) .vibrant-sidebar-fg-muted {
-      color: hsl(0 0% 40%) !important;
-    }
-    html:not(.dark) .vibrant-nav-active {
-      color: hsl(0 0% 0%) !important;
-    }
-    html:not(.dark) .vibrant-nav-hover:hover {
-      color: hsl(0 0% 0%) !important;
-    }
-    html:not(.dark) .vibrant-nav-item {
-      color: hsl(0 0% 40%) !important;
-    }
-    html:not(.dark) .vibrant-nav-item:hover {
-      color: hsl(0 0% 0%) !important;
-    }
-    html:not(.dark) .vibrant-nav-item:hover .vibrant-sidebar-fg-muted {
-      color: hsl(0 0% 0%) !important;
-    }
-    html:not(.dark) .vibrant-heading {
-      color: hsl(0 0% 0%) !important;
-    }
-    html:not(.dark) .vibrant-card-border {
-      border-color: hsl(0 0% 0% / 0.1) !important;
-    }
-    html:not(.dark) .vibrant-btn-border {
-      border-color: hsl(0 0% 0% / 0.2) !important;
-      color: hsl(0 0% 0%) !important;
-    }
-    html:not(.dark) .vibrant-btn-border:hover {
-      color: hsl(0 0% 0% / 0.8) !important;
-    }
-    html:not(.dark) .vibrant-sidebar-border {
-      border-color: hsl(0 0% 0% / 0.08) !important;
-    }
-  }
-
-  /* System dark mode fallback — covers the gap before JS applies .dark class.
-     Applies to BOTH background and all text colors so there is no flash of
-     dark-vibrancy-background + light-mode text (= invisible text) on first
-     paint when macOS is in Auto/dark mode. */
-  @media (prefers-color-scheme: dark) {
-    html:not(.light) .vibrant-sidebar {
-      background-color: rgba(255, 255, 255, 0.06) !important;
-    }
-    html:not(.light) .vibrant-sidebar-fg {
-      color: hsl(0 0% 100%) !important;
-    }
-    html:not(.light) .vibrant-sidebar-fg-muted {
-      color: hsl(0 0% 75%) !important;
-    }
-    html:not(.light) .vibrant-nav-active {
-      color: hsl(0 0% 100%) !important;
-    }
-    html:not(.light) .vibrant-nav-hover:hover {
-      color: hsl(0 0% 100%) !important;
-    }
-    html:not(.light) .vibrant-nav-item {
-      color: hsl(0 0% 80%) !important;
-    }
-    html:not(.light) .vibrant-nav-item:hover {
-      color: hsl(0 0% 100%) !important;
-    }
-    html:not(.light) .vibrant-nav-item:hover .vibrant-sidebar-fg-muted {
-      color: hsl(0 0% 100%) !important;
-    }
-    html:not(.light) .vibrant-heading {
-      color: hsl(0 0% 100%) !important;
-    }
-    html:not(.light) .vibrant-card-border {
-      border-color: hsl(0 0% 100% / 0.1) !important;
-    }
-    html:not(.light) .vibrant-btn-border {
-      border-color: hsl(0 0% 100% / 0.2) !important;
-      color: hsl(0 0% 100%) !important;
-    }
-    html:not(.light) .vibrant-btn-border:hover {
-      color: hsl(0 0% 100% / 0.8) !important;
-    }
-    html:not(.light) .vibrant-sidebar-border {
-      border-color: hsl(0 0% 100% / 0.08) !important;
-    }
-  }
-
-  .vibrant-sidebar-border {
-    border-color: transparent;
-  }
-  .vibrant-sidebar-fg {
-    color: hsl(var(--foreground));
-  }
-  .vibrant-sidebar-fg-muted {
-    color: hsl(var(--muted-foreground));
-  }
-  .vibrant-nav-active {
-    color: hsl(var(--foreground));
-    font-weight: 600;
-  }
-  .vibrant-nav-hover:hover {
-    color: hsl(var(--foreground));
-  }
-  .vibrant-nav-item {
-    color: hsl(var(--muted-foreground));
-  }
-  .vibrant-nav-item:hover {
-    color: hsl(var(--foreground));
-  }
-  /* Icon inside a hovered nav item inherits the foreground color */
-  .vibrant-nav-item:hover .vibrant-sidebar-fg-muted {
-    color: hsl(var(--foreground));
-  }
-  .vibrant-heading {
-    color: hsl(var(--foreground));
-  }
-  .vibrant-card-border {
-    border-color: hsl(var(--foreground) / 0.1);
-  }
-  .vibrant-btn-border {
-    border-color: hsl(var(--foreground) / 0.2);
-    color: hsl(var(--foreground));
-  }
-  .vibrant-btn-border:hover {
-    color: hsl(var(--foreground) / 0.8);
   }
 
   @keyframes shimmer {

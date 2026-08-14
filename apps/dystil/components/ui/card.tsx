@@ -37,8 +37,7 @@ const CardTitle = React.forwardRef<
   <h3
     ref={ref}
     className={cn(
-      // Dystil Brand: Monospace, lowercase
-      "text-xl font-mono font-medium leading-none tracking-tight lowercase",
+      "text-xl font-medium leading-none tracking-tight",
       className
     )}
     {...props}

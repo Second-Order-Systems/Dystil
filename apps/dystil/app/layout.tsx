@@ -1,11 +1,24 @@
 "use client";
 
-import { Inter } from "next/font/google";
+import { Instrument_Sans, Newsreader } from "next/font/google";
 import { useEffect } from "react";
 import "./globals.css";
 import { Providers } from "./providers";
 
-const inter = Inter({ subsets: ["latin"] });
+// Both faces are self-hosted at build time by next/font, which the app needs —
+// it must work offline, so the design prototype's Google CDN link is not an
+// option. Both are variable fonts; omitting `weight` keeps the full axis.
+const instrumentSans = Instrument_Sans({
+  subsets: ["latin"],
+  variable: "--font-instrument-sans",
+  display: "swap",
+});
+
+const newsreader = Newsreader({
+  subsets: ["latin"],
+  variable: "--font-newsreader",
+  display: "swap",
+});
 
 const startupRecoveryScript = `
 (function () {
@@ -70,13 +83,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: startupRecoveryScript }} />
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `try { var t = localStorage.getItem('dystil-ui-theme'); if (!t || t === 'system') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; document.documentElement.classList.add(t); } catch (_) {}`,
-          }}
-        />
       </head>
-      <body className={`${inter.className} scrollbar-hide`}>
+      <body className={`${instrumentSans.variable} ${newsreader.variable} font-sans scrollbar-hide`}>
         <Providers>{children}</Providers>
       </body>
     </html>
