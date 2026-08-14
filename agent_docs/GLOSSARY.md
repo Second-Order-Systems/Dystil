@@ -21,7 +21,7 @@ as a struct.**
 | **Work log / work trail** | *nothing* | Same as above — candidate outward-facing names for the same concept. |
 | **Surface visit** | `dystil-work-index` | The real unit. "Deterministic construction of compact surface visits from captured frames." ~18 references. |
 | **Worth fixing** | `dystil-insights`, `components/dystil/pages/worth-fixing.tsx` | Real, both backend and UI. Findings with evidence. |
-| **Ready to use** | `components/dystil/pages/ready-to-use.tsx`, `dystil-automation` | Real. Kept, reusable artifacts. |
+| **Ready to use** | `components/dystil/pages/ready-to-use.tsx`, `dystil-insights` via `ready_to_use_commands.rs` | Real. Kept, reusable artifacts. **Not** `dystil-automation` — that crate backs `automation_commands.rs`, a separate subsystem the UI never calls. |
 | **Ask for fix** | `components/dystil/pages/ask-for-fix.tsx` | Real UI surface. |
 | **Evidence** | `dystil-retrieval` | Real. Addressed by stable `evidence_id`. |
 | **Memory** | *no single type* | Loose umbrella for capture + work index + retrieval. Not a module. |

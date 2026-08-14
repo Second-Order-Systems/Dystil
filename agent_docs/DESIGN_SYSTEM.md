@@ -1,6 +1,5 @@
 ---
-status: verified
-authority: ground-truth
+status: unreviewed
 verified_against: e84d34c
 verified_on: 2026-08-08
 name: Dystil
@@ -51,6 +50,19 @@ components:
     rounded: "{rounded.surface}"
     padding: "{spacing.regular}"
 ---
+
+> **Demoted from `verified` / `authority: ground-truth` on 2026-08-14 — do not treat its specifics as
+> facts.** Checked against the code, this document describes an information architecture that exists
+> nowhere in the codebase: the destinations "Ask Your Work / Inquiries / Work Index" and the components
+> "Inquiry Control / Inquiry Trail / Work Index / Evidence Brief" have no counterpart in any `.tsx`
+> file. The real destinations are "Worth fixing", "Ready to use" and "Ask for a fix"
+> (`components/dystil/sidebar.tsx`). The fonts, radius, spacing and colour mechanism also diverge —
+> the palette below is not in the token layer, and `font-serif` is used zero times.
+>
+> A replacement will be written once the code matches the v2 design; see
+> `agent_docs/UI_OVERHAUL_PLAN.md` and the handoff in `agent_docs/design_handoff_home_screen/`.
+> Deliberately **not** rewritten from that handoff ahead of the code — stamping a `verified` spec for
+> a design that does not exist yet is how this document reached its current state.
 
 # Design System: Dystil
 
