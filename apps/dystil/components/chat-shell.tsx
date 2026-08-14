@@ -8,9 +8,7 @@ import { ReadyToUse } from "./dystil/pages/ready-to-use";
 import { WorthFixing } from "./dystil/pages/worth-fixing";
 import { SettingsWorkspace } from "./dystil/settings-workspace";
 import { Sidebar } from "./dystil/sidebar";
-import type { Chat, ChatSession, DystilShellProps, Peer, AgentMessage } from "./dystil/types";
-
-export type { Chat, ChatSession, Peer, AgentMessage } from "./dystil/types";
+import type { DystilShellProps } from "./dystil/types";
 
 export function ChatShell(props: DystilShellProps) {
   const pathname = usePathname();

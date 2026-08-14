@@ -2,92 +2,30 @@
 
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
-import { ChatShell, type Chat, type ChatSession } from "@/components/chat-shell";
+import { ChatShell } from "@/components/chat-shell";
 import { ToastAction } from "@/components/ui/toast";
 import { toast } from "@/components/ui/use-toast";
 import { signOut } from "@/lib/auth-session";
 import { useSettings } from "@/lib/hooks/use-settings";
-import { commands, type LocalChatMessageView } from "@/lib/utils/tauri";
 
-type AgentPeer = { userId: string; displayName: string | null; email: string; agentStatus: string };
-type AgentMessage = { messageId: string; peerUserId: string; direction: string; kind: string; localStatus: string; text: string; evidence: Array<{ label: string; localDate: string }> };
 type ManagedProvider = "codex" | "claude";
 type ProviderStatus = { state: string; authenticated?: boolean | null };
 type OnboardingStatus = { aiSetupChoice?: string | null };
 
 const providerName = (provider: ManagedProvider) => provider === "codex" ? "ChatGPT Plus" : "Claude Pro";
 
-function parseCitations(value?: string | null): Chat["citations"] {
-  if (!value) return [];
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((item) => {
-      if (!item || typeof item !== "object") return [];
-      const citation = item as Record<string, unknown>;
-      if (typeof citation.label !== "string") return [];
-      const localDate = citation.localDate ?? citation.local_date;
-      return [{ label: citation.label, localDate: typeof localDate === "string" ? localDate : "" }];
-    });
-  } catch {
-    return [];
-  }
-}
-
-function toChatTurns(messages: LocalChatMessageView[]): Chat[] {
-  const turns: Chat[] = [];
-  for (let index = 0; index < messages.length; index += 1) {
-    const user = messages[index];
-    if (user.role !== "user" || !user.question) continue;
-    const nextMessage = messages[index + 1];
-    const assistant = nextMessage?.role === "assistant" ? nextMessage : undefined;
-    turns.push({
-      id: assistant?.id || user.id,
-      conversationId: user.sessionId,
-      question: user.question,
-      mode: user.mode === "team" ? "team" : "local",
-      answer: assistant?.answer,
-      status: (assistant?.status as Chat["status"]) || "failed",
-      citations: parseCitations(assistant?.citationsJson),
-      provider: assistant?.provider,
-      model: assistant?.model,
-      elapsedMs: assistant?.elapsedMs,
-      historical: true,
-    });
-  }
-  return turns;
-}
-
 export default function HomePage() {
   const { settings } = useSettings();
   const [loggingOut, setLoggingOut] = useState(false);
   const [version, setVersion] = useState("");
-  const [peers, setPeers] = useState<AgentPeer[]>([]);
-  const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([]);
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
 
   const userName = settings.user?.name?.trim() || "Dystil user";
   const userEmail = settings.user?.email?.trim() || "No email available";
-  const refreshMailbox = async () => {
-    const [nextPeers, nextMessages] = await Promise.all([
-      invoke<AgentPeer[]>("agent_list_peers").catch(() => []),
-      invoke<AgentMessage[]>("agent_list_messages").catch(() => []),
-    ]);
-    setPeers(nextPeers); setAgentMessages(nextMessages);
-  };
-  const refreshSessions = async () => {
-    const result = await commands.localChatListSessions();
-    // Do not let Fast Refresh retain a previous implementation's in-memory
-    // history when the currently running desktop binary cannot serve sessions.
-    setSessions(result.status === "ok" ? result.data : []);
-  };
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
   }, []);
-  useEffect(() => { void refreshSessions(); }, []);
   useEffect(() => {
     let cancelled = false;
     const resumeProviderSetup = async () => {
@@ -150,29 +88,11 @@ export default function HomePage() {
     void resumeProviderSetup();
     return () => { cancelled = true; };
   }, []);
-  useEffect(() => {
-    void refreshMailbox(); let unlisten: (() => void) | undefined;
-    listen("agent-mailbox-updated", () => void refreshMailbox()).then((dispose) => { unlisten = dispose; }).catch(() => {});
-    return () => unlisten?.();
-  }, []);
 
   const logout = async () => { setLoggingOut(true); try { await signOut(); } catch (error) { toast({ title: "Logout failed", description: error instanceof Error ? error.message : String(error), variant: "destructive" }); } finally { setLoggingOut(false); } };
 
   return <ChatShell
     userName={userName} userEmail={userEmail}
-    peers={peers} agentMessages={agentMessages} sessions={sessions}
-    onLoadSession={async (sessionId) => {
-      const result = await commands.localChatGetMessages(sessionId);
-      if (result.status === "error") throw new Error(result.error);
-      return toChatTurns(result.data);
-    }}
-    onSendLocal={async (sessionId, question) => {
-      const result = await commands.localChatSend(sessionId, question);
-      if (result.status === "error") throw new Error(result.error);
-      await refreshSessions();
-      return { id: result.data.id, conversationId: sessionId, question, mode: "local", answer: result.data.answer, status: result.data.status as Chat["status"], citations: parseCitations(result.data.citationsJson), provider: result.data.provider, model: result.data.model, elapsedMs: result.data.elapsedMs };
-    }}
-    onAskPeer={async (recipientUserId, question) => { await invoke("agent_send_question", { recipientUserId, question }); await refreshMailbox(); }}
     onLogout={() => void logout()} loggingOut={loggingOut} version={version}
   />;
 }
