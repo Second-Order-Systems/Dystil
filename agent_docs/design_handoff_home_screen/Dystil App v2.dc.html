@@ -1,0 +1,1120 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,300;6..72,400;6..72,500&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  html, body { margin:0; padding:0; background:#DFDACE; }
+  * { box-sizing:border-box; }
+  a { color:#0E4F3C; text-decoration:none; }
+  a:hover { color:#0A3B2C; text-decoration:underline; }
+  button { font:inherit; cursor:pointer; border:none; background:none; padding:0; color:inherit; text-align:left; }
+  ::-webkit-scrollbar { width:10px; }
+  ::-webkit-scrollbar-thumb { background:#D8D2C4; border-radius:10px; border:3px solid transparent; background-clip:content-box; }
+  @keyframes halo { 0%,100% { opacity:.22; transform:scale(1); } 50% { opacity:.5; transform:scale(1.22); } }
+  @keyframes rise { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+  @keyframes crawl { 0% { transform:translateX(-100%); } 100% { transform:translateX(400%); } }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:28px 28px 60px;font-family:'Instrument Sans',system-ui,sans-serif;color:#1B1A17;gap:18px;">
+
+<div style="display:flex;align-items:center;gap:4px;background:#F4F1EA;border:1px solid #E1DBCD;border-radius:11px;padding:4px;box-shadow:0 2px 8px rgba(40,34,20,.08);">
+  <span style="font-size:10.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:#726C5E;padding:0 10px 0 8px;">States</span>
+  <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="7">
+    <button onClick="{{ t.go }}" style="position:relative;padding:6px 12px;border-radius:8px;font-size:12.5px;font-weight:500;" style-hover="background:#E7E2D6;">
+      <sc-if value="{{ t.on }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;inset:0;background:#1B1A17;border-radius:8px;"></span></sc-if>
+      <sc-if value="{{ t.on }}" hint-placeholder-val="{{ false }}"><span style="position:relative;color:#F4F1EA;">{{ t.label }}</span></sc-if>
+      <sc-if value="{{ t.off }}" hint-placeholder-val="{{ true }}"><span style="position:relative;color:#5E5A51;">{{ t.label }}</span></sc-if>
+    </button>
+  </sc-for>
+</div>
+
+<div style="width:1300px;height:850px;background:#F4F1EA;border-radius:14px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 40px 90px -30px rgba(40,34,20,.45),0 2px 6px rgba(40,34,20,.12);">
+
+  <!-- ============ NOTIFICATION ============ -->
+  <sc-if value="{{ isNotif }}" hint-placeholder-val="{{ false }}">
+  <div style="flex:1;background:#33302A;display:flex;align-items:flex-start;justify-content:flex-end;padding:26px;position:relative;">
+    <div style="position:absolute;left:34px;bottom:30px;max-width:330px;color:#C2BAA8;font-size:12.5px;line-height:1.6;">
+      <div style="font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#A79F8E;margin-bottom:7px;">The real front door</div>
+      It opens on a decision, not an announcement — so most weeks the whole product is this card and nothing else.
+    </div>
+    <div style="width:372px;background:rgba(250,248,243,.94);border-radius:16px;padding:15px 16px;box-shadow:0 20px 50px -12px rgba(0,0,0,.5);animation:rise .5s ease both;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;">
+        <svg width="11" height="18" viewBox="295 250 434 725" fill="none"><path d="M330 285 L512 570 L694 285 M512 570 L512 625" fill="none" stroke="#14201B" stroke-width="54" stroke-linecap="round" stroke-linejoin="round"></path><path d="M512 650 C578 733 620 782 620 840 C620 900 572 940 512 940 C452 940 404 900 404 840 C404 782 446 733 512 650 Z" fill="#2F9E7B"></path></svg>
+        <span style="font-size:11.5px;font-weight:700;letter-spacing:.14em;color:#5E5A51;">DYSTIL</span>
+        <span style="margin-left:auto;font-size:11.5px;color:#726C5E;">now</span>
+      </div>
+      <p style="margin:0 0 13px;font-size:14.5px;line-height:1.5;color:#1B1A17;text-wrap:pretty;">Yesterday you did one job four different ways — about two hours of it. Want a shortcut for next time?</p>
+      <div style="display:flex;gap:7px;">
+        <button onClick="{{ goStack }}" style="background:#0E4F3C;color:#FFFEFB;font-size:12.5px;font-weight:600;padding:7px 15px;border-radius:8px;" style-hover="background:#0A3B2C;">Show me</button>
+        <button style="font-size:12.5px;font-weight:500;color:#5E5A51;padding:7px 13px;border-radius:8px;" style-hover="background:#E7E2D6;">Not now</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ============ APP ============ -->
+  <sc-if value="{{ inWindow }}" hint-placeholder-val="{{ true }}">
+
+  <div style="height:38px;flex:none;background:#EFEBE1;border-bottom:1px solid #E1DBCD;display:flex;align-items:center;padding:0 14px;gap:8px;">
+    <span style="width:11px;height:11px;border-radius:50%;background:#E8705E;"></span>
+    <span style="width:11px;height:11px;border-radius:50%;background:#E5B94E;"></span>
+    <span style="width:11px;height:11px;border-radius:50%;background:#66B463;"></span>
+  </div>
+
+  <!-- top: identity + the one action -->
+  <div style="flex:none;height:54px;display:flex;align-items:center;padding:0 22px;gap:10px;">
+    <button onClick="{{ goHome }}" style="display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:8px;margin-left:-8px;" style-hover="background:#EFEBE1;">
+      <svg width="14" height="23" viewBox="295 250 434 725" fill="none"><path d="M330 285 L512 570 L694 285 M512 570 L512 625" fill="none" stroke="#14201B" stroke-width="54" stroke-linecap="round" stroke-linejoin="round"></path><path d="M512 650 C578 733 620 782 620 840 C620 900 572 940 512 940 C452 940 404 900 404 840 C404 782 446 733 512 650 Z" fill="#2F9E7B"></path></svg>
+      <span style="font-size:12.5px;font-weight:600;letter-spacing:.19em;color:#3A372F;">DYSTIL</span>
+    </button>
+    <sc-if value="{{ showQueuePill }}" hint-placeholder-val="{{ false }}">
+      <button onClick="{{ goStack }}" style="display:flex;align-items:center;gap:7px;background:#F8EDD8;padding:6px 12px 6px 10px;border-radius:20px;margin-left:4px;" style-hover="background:#F2E2C5;">
+        <svg width="8" height="11" viewBox="395 640 234 310" fill="none"><path d="M512 650 C578 733 620 782 620 840 C620 900 572 940 512 940 C452 940 404 900 404 840 C404 782 446 733 512 650 Z" fill="#C98A2B"/></svg>
+        <span style="font-size:11.5px;font-weight:700;color:#8A5A11;white-space:nowrap;">{{ queueCount }} worth fixing</span>
+      </button>
+    </sc-if>
+
+    <div style="flex:1;"></div>
+
+    <button onClick="{{ goInvite }}" style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:500;color:#3A372F;padding:8px 13px;border-radius:9px;" style-hover="background:#EFEBE1;">
+      <svg width="14" height="12" viewBox="0 0 14 12" fill="none"><circle cx="4.6" cy="3.4" r="2.4" stroke="#4C6B58" stroke-width="1.3"/><path d="M1 11c0-2 1.6-3.4 3.6-3.4S8.2 9 8.2 11" stroke="#4C6B58" stroke-width="1.3" stroke-linecap="round"/><path d="M10.8 4.4v3.2M9.2 6h3.2" stroke="#2F9E7B" stroke-width="1.3" stroke-linecap="round"/></svg>
+      Invite your team
+    </button>
+    <button onClick="{{ goToolkit }}" style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;color:#3A372F;padding:8px 13px;border-radius:9px;" style-hover="background:#EFEBE1;">
+      Your shortcuts
+      <span style="font-size:10.5px;font-weight:700;color:#726C5E;background:#E7E2D6;padding:1px 6px;border-radius:20px;">4</span>
+    </button>
+    <button onClick="{{ goAsk }}" style="display:flex;align-items:center;gap:7px;background:#0E4F3C;color:#FFFEFB;font-size:13px;font-weight:600;padding:9px 17px;border-radius:9px;margin-left:2px;box-shadow:0 2px 6px -2px rgba(14,79,60,.45);" style-hover="background:#0A3B2C;">
+      <svg width="8" height="11" viewBox="395 640 234 310" fill="none"><path d="M512 650 C578 733 620 782 620 840 C620 900 572 940 512 940 C452 940 404 900 404 840 C404 782 446 733 512 650 Z" fill="#8FD9BE"/></svg>
+      Ask for a fix
+    </button>
+    <button style="width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:8px;margin-left:4px;" style-hover="background:#EFEBE1;">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#5E5A51" stroke-width="1.5" stroke-linecap="round">
+        <path d="M2 4.5h12M2 11.5h12"></path>
+        <circle cx="6" cy="4.5" r="2" fill="#EFEBE1"></circle>
+        <circle cx="10.5" cy="11.5" r="2" fill="#EFEBE1"></circle>
+      </svg>
+    </button>
+  </div>
+
+  <div style="flex:1;display:flex;flex-direction:column;min-height:0;">
+
+    <!-- ---------- THE STACK ---------- -->
+    <sc-if value="{{ isStack }}" hint-placeholder-val="{{ true }}">
+    <div style="flex:1;display:flex;min-height:0;">
+
+      <div style="flex:1;overflow-y:auto;min-height:0;">
+      <div style="max-width:650px;margin:0 auto;padding:22px 40px 0;">
+
+        <div style="display:flex;align-items:center;gap:11px;margin-bottom:26px;">
+          <span style="display:flex;align-items:baseline;gap:5px;">
+            <span style="font-family:'Newsreader',serif;font-size:21px;line-height:1;color:#1B1A17;">{{ remaining }}</span>
+            <span style="font-size:11.5px;color:#6B6558;">{{ leftWord }}</span>
+          </span>
+          <span style="display:flex;gap:3px;">
+            <sc-for list="{{ track }}" as="t" hint-placeholder-count="3">
+              <sc-if value="{{ t.settled }}" hint-placeholder-val="{{ false }}">
+                <span style="width:15px;height:4px;border-radius:2px;background:#1B1A17;"></span>
+              </sc-if>
+              <sc-if value="{{ t.waiting }}" hint-placeholder-val="{{ true }}">
+                <span style="width:15px;height:4px;border-radius:2px;background:#DCD6C8;"></span>
+              </sc-if>
+            </sc-for>
+          </span>
+          <div style="flex:1;"></div>
+          <button onClick="{{ goAll }}" style="font-size:11.5px;font-weight:600;color:#5E5A51;padding:5px 10px;border-radius:7px;white-space:nowrap;margin-right:-10px;" style-hover="background:#EFEBE1;color:#1B1A17;">See all {{ queueCount }}</button>
+        </div>
+
+        <sc-if value="{{ item.fromYou }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-bottom:12px;">
+            <span style="font-size:10.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:#8A5A11;background:#F8EDD8;padding:4px 10px;border-radius:20px;">You asked · {{ item.when }}</span>
+          </div>
+        </sc-if>
+
+        <h1 style="margin:0 0 20px;font-family:'Newsreader',serif;font-weight:400;font-size:33px;line-height:1.26;letter-spacing:-.015em;text-wrap:pretty;">{{ item.title }}</h1>
+
+        <sc-if value="{{ showEvidence }}" hint-placeholder-val="{{ true }}">
+          <div style="background:#FFFEFB;border:1px solid #E7E2D6;border-radius:13px;padding:16px 18px 14px;margin-bottom:20px;">
+            <div style="display:flex;align-items:center;gap:9px;margin-bottom:13px;">
+              <span style="font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#726C5E;">What I saw</span>
+              <span style="width:3px;height:3px;border-radius:50%;background:#C6C0B2;"></span>
+              <span style="font-size:11.5px;color:#6B6558;">{{ item.when }}</span>
+              <button style="margin-left:auto;font-size:12px;font-weight:600;color:#5E5A51;" style-hover="color:#0E4F3C;">Open the record →</button>
+            </div>
+            <div style="display:flex;gap:8px;margin-bottom:12px;">
+              <sc-for list="{{ item.evidence }}" as="e" hint-placeholder-count="4">
+                <div style="flex:1;background:#F6F3EC;border-radius:9px;padding:10px 12px;">
+                  <div style="font-family:'Newsreader',serif;font-size:21px;line-height:1;">{{ e.n }}</div>
+                  <div style="font-size:11px;color:#6B6558;margin-top:4px;">{{ e.label }}</div>
+                </div>
+              </sc-for>
+            </div>
+            <div style="font-size:11.5px;color:#6B6558;">{{ item.evidenceNote }}</div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ showRecap }}" hint-placeholder-val="{{ false }}">
+          <div style="background:#FFFEFB;border:1px solid #E7E2D6;border-radius:13px;padding:16px 18px;margin-bottom:20px;">
+            <div style="font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#726C5E;margin-bottom:12px;">Built from what you told me</div>
+            <div style="display:flex;flex-direction:column;gap:9px;">
+              <sc-for list="{{ item.recap }}" as="r" hint-placeholder-count="3">
+                <div style="display:flex;gap:12px;align-items:baseline;">
+                  <span style="flex:none;width:96px;white-space:nowrap;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#4C6B58;">{{ r.label }}</span>
+                  <span style="flex:1;font-size:14px;line-height:1.45;color:#3A372F;">{{ r.text }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <button onClick="{{ goAsk }}" style="margin-top:13px;font-size:12px;font-weight:600;color:#5E5A51;" style-hover="color:#0E4F3C;">Something here is wrong →</button>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ notCorrecting }}" hint-placeholder-val="{{ true }}">
+        <div>
+          <h2 style="margin:0 0 14px;font-family:'Newsreader',serif;font-weight:400;font-size:24px;letter-spacing:-.01em;">{{ item.offer }}</h2>
+
+          <div style="background:#FFFEFB;border:1px solid #D2E0D4;border-radius:13px;padding:17px 19px;margin-bottom:16px;">
+            <div style="display:flex;align-items:baseline;gap:9px;margin-bottom:12px;">
+              <span style="font-size:15.5px;font-weight:600;">{{ item.fixName }}</span>
+              <span style="font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#8A5A11;background:#F8EDD8;padding:3px 8px;border-radius:5px;">Dystil can run this</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:9px;margin-bottom:14px;">
+              <sc-for list="{{ item.steps }}" as="s" hint-placeholder-count="3">
+                <div style="display:flex;gap:11px;align-items:flex-start;">
+                  <span style="flex:none;width:19px;height:19px;border-radius:50%;background:#E4EDE5;color:#24503B;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px;">{{ s.n }}</span>
+                  <span style="font-size:14px;line-height:1.45;color:#3A372F;">{{ s.t }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:flex;align-items:center;gap:7px;padding-top:12px;border-top:1px solid #F1EDE4;">
+              <svg width="9" height="12" viewBox="395 640 234 310" fill="none"><path d="M512 650 C578 733 620 782 620 840 C620 900 572 940 512 940 C452 940 404 900 404 840 C404 782 446 733 512 650 Z" fill="#2F9E7B"/></svg>
+              <span style="font-size:12px;color:#4C6B58;">Runs on this Mac, on material you already have. Nothing uploaded.</span>
+            </div>
+          </div>
+
+          <div style="position:sticky;bottom:0;margin:0 -40px;background:#F4F1EA;border-top:1px solid #E4DFD4;padding:13px 40px 17px;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <button onClick="{{ startRun }}" style="background:#0E4F3C;color:#FFFEFB;font-size:14px;font-weight:600;padding:12px 22px;border-radius:10px;" style-hover="background:#0A3B2C;">Yes, run it</button>
+              <button onClick="{{ settle }}" style="font-size:14px;font-weight:500;color:#3A372F;border:1px solid #E1DBCD;background:#FFFEFB;padding:12px 18px;border-radius:10px;" style-hover="border-color:#D2E0D4;background:#F9F7F2;">Just give me the prompt</button>
+              <div style="flex:1;"></div>
+              <button onClick="{{ startCorrect }}" style="font-size:13px;font-weight:600;color:#8A5A11;background:#F8EDD8;padding:10px 15px;border-radius:9px;" style-hover="background:#F2E2C5;">This isn't right</button>
+              <button onClick="{{ defer }}" style="font-size:13px;font-weight:500;color:#5E5A51;padding:10px 12px;border-radius:9px;" style-hover="background:#EFEBE1;color:#1B1A17;">Decide later</button>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ correcting }}" hint-placeholder-val="{{ false }}">
+        <div style="animation:rise .3s ease both;">
+          <h2 style="margin:0 0 5px;font-family:'Newsreader',serif;font-weight:400;font-size:24px;letter-spacing:-.01em;">What did I get wrong?</h2>
+          <p style="margin:0 0 13px;font-size:13.5px;color:#6B6558;">Each one changes what I do next. Nothing is hidden from you.</p>
+          <div style="display:flex;flex-direction:column;gap:8px;padding-bottom:20px;">
+            <sc-for list="{{ corrections }}" as="c" hint-placeholder-count="4">
+              <button onClick="{{ settle }}" style="background:#FFFEFB;border:1px solid #E7E2D6;border-radius:12px;padding:13px 16px;display:flex;align-items:flex-start;gap:14px;" style-hover="border-color:#4C6B58;background:#FBFAF6;">
+                <span style="flex:1;min-width:0;">
+                  <span style="display:block;font-size:14.5px;font-weight:600;margin-bottom:3px;">{{ c.label }}</span>
+                  <span style="display:block;font-size:12.5px;line-height:1.45;color:#6B6558;">{{ c.effect }}</span>
+                </span>
+                <span style="flex:none;font-size:15px;color:#C6C0B2;margin-top:2px;">›</span>
+              </button>
+            </sc-for>
+          </div>
+          <div style="position:sticky;bottom:0;margin:0 -40px;background:#F4F1EA;border-top:1px solid #E4DFD4;padding:12px 40px 16px;">
+            <button onClick="{{ stopCorrect }}" style="font-size:13px;font-weight:500;color:#5E5A51;padding:8px 13px;border-radius:9px;" style-hover="background:#EFEBE1;color:#1B1A17;">← Never mind, go back</button>
+          </div>
+        </div>
+        </sc-if>
+
+      </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ---------- CLEARED ---------- -->
+    <sc-if value="{{ isCleared }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;display:flex;flex-direction:column;justify-content:center;max-width:600px;margin:0 auto;width:100%;padding:20px 40px 40px;">
+      <div style="animation:rise .5s ease both;">
+        <div style="display:flex;align-items:center;gap:11px;margin-bottom:16px;">
+          <span style="display:flex;gap:3px;">
+            <span style="width:15px;height:4px;border-radius:2px;background:#1B1A17;"></span>
+            <span style="width:15px;height:4px;border-radius:2px;background:#1B1A17;"></span>
+            <span style="width:15px;height:4px;border-radius:2px;background:#1B1A17;"></span>
+          </span>
+          <span style="font-size:11px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:#726C5E;">All three settled · four minutes</span>
+        </div>
+
+        <h1 style="margin:0 0 9px;font-family:'Newsreader',serif;font-weight:400;font-size:36px;line-height:1.24;letter-spacing:-.018em;text-wrap:pretty;">That's the lot. Nothing else waiting.</h1>
+        <p style="margin:0 0 26px;font-size:14.5px;line-height:1.55;color:#6B6558;max-width:44ch;">I'll knock when I find the next one — probably not today. While you're here, anything else dragging?</p>
+
+        <div style="display:flex;flex-direction:column;background:#FFFEFB;border:1px solid #DDD6C7;border-radius:14px;padding:18px 20px 12px;box-shadow:0 3px 14px -6px rgba(40,34,20,.16);margin-bottom:14px;min-height:132px;" style-hover="border-color:#B9CFBD;box-shadow:0 10px 28px -12px rgba(40,34,20,.26);">
+          <span style="flex:1;font-size:16.5px;line-height:1.5;color:#726C5E;">What's slowing you down?</span>
+          <div style="display:flex;align-items:center;gap:12px;padding-top:12px;border-top:1px solid #F1EDE4;">
+            <span style="flex:1;font-size:12.5px;color:#6B6558;">Say it however it comes out — I'll ask a few questions after.</span>
+            <button onClick="{{ goAsk }}" style="flex:none;background:#0E4F3C;color:#FFFEFB;font-size:14px;font-weight:600;padding:11px 24px;border-radius:10px;" style-hover="background:#0A3B2C;">Ask</button>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:7px;">
+          <sc-for list="{{ starters }}" as="s" hint-placeholder-count="3">
+            <button onClick="{{ goAsk }}" style="font-size:13px;color:#5E5A51;background:#EFEBE1;padding:7px 14px;border-radius:20px;" style-hover="background:#E4EDE5;color:#24503B;">{{ s }}</button>
+          </sc-for>
+          <button onClick="{{ resetQueue }}" style="font-size:12.5px;font-weight:600;color:#5E5A51;padding:7px 12px;border-radius:20px;margin-left:auto;white-space:nowrap;" style-hover="background:#EFEBE1;color:#1B1A17;">Look at the three again</button>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ---------- RUNNING ---------- -->
+    <sc-if value="{{ isRunning }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;overflow-y:auto;min-height:0;">
+      <div style="max-width:650px;margin:0 auto;padding:26px 40px 0;">
+        <div style="display:flex;align-items:center;gap:11px;margin-bottom:26px;">
+          <span style="display:flex;align-items:center;gap:8px;">
+            <span style="position:relative;width:6px;height:6px;flex:none;">
+              <span style="position:absolute;inset:-4px;border-radius:50%;background:#4C6B58;animation:halo 2s ease-in-out infinite;"></span>
+              <span style="position:absolute;inset:0;border-radius:50%;background:#2F6B4A;"></span>
+            </span>
+            <span style="font-size:11.5px;color:#3A372F;"><span style="font-weight:600;">Running</span> · 40 seconds in</span>
+          </span>
+          <span style="display:flex;gap:3px;">
+            <sc-for list="{{ runTrack }}" as="t" hint-placeholder-count="3">
+              <sc-if value="{{ t.settled }}" hint-placeholder-val="{{ true }}">
+                <span style="width:15px;height:4px;border-radius:2px;background:#1B1A17;"></span>
+              </sc-if>
+              <sc-if value="{{ t.active }}" hint-placeholder-val="{{ false }}">
+                <span style="width:15px;height:4px;border-radius:2px;background:#2F9E7B;"></span>
+              </sc-if>
+              <sc-if value="{{ t.stopped }}" hint-placeholder-val="{{ false }}">
+                <span style="width:15px;height:4px;border-radius:2px;background:#C98A2B;"></span>
+              </sc-if>
+              <sc-if value="{{ t.waiting }}" hint-placeholder-val="{{ false }}">
+                <span style="width:15px;height:4px;border-radius:2px;background:#DCD6C8;"></span>
+              </sc-if>
+            </sc-for>
+          </span>
+          <div style="flex:1;"></div>
+          <span style="font-size:11.5px;color:#6B6558;margin-right:-10px;">Step 2 of 3</span>
+        </div>
+
+        <h1 style="margin:0 0 20px;font-family:'Newsreader',serif;font-weight:400;font-size:33px;line-height:1.26;letter-spacing:-.015em;text-wrap:pretty;">One review pass over all four.</h1>
+
+        <div style="background:#FFFEFB;border:1px solid #D2E0D4;border-radius:13px;overflow:hidden;margin-bottom:18px;">
+          <div style="height:3px;background:#EFEBE1;">
+            <div style="width:46%;height:100%;background:#2F9E7B;"></div>
+          </div>
+          <div style="padding:18px 20px;">
+            <div style="display:flex;flex-direction:column;gap:14px;">
+              <sc-for list="{{ runSteps }}" as="s" hint-placeholder-count="3">
+                <div style="display:flex;gap:12px;align-items:flex-start;">
+                  <sc-if value="{{ s.done }}" hint-placeholder-val="{{ true }}">
+                    <span style="flex:none;width:20px;height:20px;border-radius:50%;background:#2F6B4A;display:flex;align-items:center;justify-content:center;margin-top:1px;">
+                      <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#FFFEFB" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </span>
+                  </sc-if>
+                  <sc-if value="{{ s.active }}" hint-placeholder-val="{{ false }}">
+                    <span style="flex:none;width:20px;height:20px;border-radius:50%;border:2px solid #2F9E7B;display:flex;align-items:center;justify-content:center;margin-top:1px;animation:pulse 1.6s ease-in-out infinite;">
+                      <span style="width:7px;height:7px;border-radius:50%;background:#2F9E7B;"></span>
+                    </span>
+                  </sc-if>
+                  <sc-if value="{{ s.pending }}" hint-placeholder-val="{{ false }}">
+                    <span style="flex:none;width:20px;height:20px;border-radius:50%;border:1.5px solid #DCD6C8;margin-top:1px;"></span>
+                  </sc-if>
+                  <div style="flex:1;min-width:0;">
+                    <div style="font-size:14px;line-height:1.45;color:#3A372F;">{{ s.t }}</div>
+                    <sc-if value="{{ s.hasNote }}" hint-placeholder-val="{{ false }}">
+                      <div style="font-size:12.5px;color:#4C6B58;margin-top:3px;">{{ s.note }}</div>
+                    </sc-if>
+                  </div>
+                  <span style="flex:none;font-size:11.5px;color:#726C5E;margin-top:2px;">{{ s.time }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:flex;align-items:center;gap:7px;margin-top:16px;padding-top:14px;border-top:1px solid #F1EDE4;">
+              <svg width="9" height="12" viewBox="395 640 234 310" fill="none"><path d="M512 650 C578 733 620 782 620 840 C620 900 572 940 512 940 C452 940 404 900 404 840 C404 782 446 733 512 650 Z" fill="#2F9E7B"/></svg>
+              <span style="font-size:12px;color:#4C6B58;">Reading only what is already on this Mac. Nothing is being uploaded.</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="position:sticky;bottom:0;margin:0 -40px;background:#F4F1EA;border-top:1px solid #E4DFD4;padding:13px 40px 17px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button onClick="{{ goHome }}" style="background:#0E4F3C;color:#FFFEFB;font-size:14px;font-weight:600;padding:12px 20px;border-radius:10px;" style-hover="background:#0A3B2C;">Let it run, I'll carry on</button>
+            <button onClick="{{ goDone }}" style="font-size:14px;font-weight:500;color:#3A372F;border:1px solid #E1DBCD;background:#FFFEFB;padding:12px 18px;border-radius:10px;" style-hover="border-color:#D2E0D4;background:#F9F7F2;">Wait here for it</button>
+            <div style="flex:1;"></div>
+            <button onClick="{{ stopRun }}" style="font-size:13px;font-weight:600;color:#8A5A11;background:#F8EDD8;padding:10px 15px;border-radius:9px;" style-hover="background:#F2E2C5;">Stop it</button>
+          </div>
+          <div style="font-size:12.5px;color:#6B6558;margin-top:9px;">Stopping keeps whatever it has already worked out. Nothing is thrown away.</div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ---------- STOPPED PARTWAY ---------- -->
+    <sc-if value="{{ isFailed }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;overflow-y:auto;min-height:0;">
+      <div style="max-width:650px;margin:0 auto;padding:26px 40px 0;">
+        <div style="display:flex;align-items:center;gap:11px;margin-bottom:26px;">
+          <span style="font-size:11.5px;color:#3A372F;"><span style="font-weight:600;">Stopped partway</span> · 2 minutes in</span>
+          <span style="display:flex;gap:3px;">
+            <sc-for list="{{ failTrack }}" as="t" hint-placeholder-count="3">
+              <sc-if value="{{ t.settled }}" hint-placeholder-val="{{ true }}">
+                <span style="width:15px;height:4px;border-radius:2px;background:#1B1A17;"></span>
+              </sc-if>
+              <sc-if value="{{ t.active }}" hint-placeholder-val="{{ false }}">
+                <span style="width:15px;height:4px;border-radius:2px;background:#2F9E7B;"></span>
+              </sc-if>
+              <sc-if value="{{ t.stopped }}" hint-placeholder-val="{{ false }}">
+                <span style="width:15px;height:4px;border-radius:2px;background:#C98A2B;"></span>
+              </sc-if>
+              <sc-if value="{{ t.waiting }}" hint-placeholder-val="{{ false }}">
+                <span style="width:15px;height:4px;border-radius:2px;background:#DCD6C8;"></span>
+              </sc-if>
+            </sc-for>
+          </span>
+          <div style="flex:1;"></div>
+          <span style="font-size:11.5px;color:#6B6558;margin-right:-10px;">Nothing lost</span>
+        </div>
+
+        <h1 style="margin:0 0 8px;font-family:'Newsreader',serif;font-weight:400;font-size:33px;line-height:1.26;letter-spacing:-.015em;text-wrap:pretty;">I got through the reading, then hit a login I won't go past.</h1>
+        <p style="margin:0 0 20px;font-size:14.5px;line-height:1.55;color:#5E5A51;max-width:52ch;">Two of the nine profiles sit behind a sign-in. I don't enter credentials, so I stopped rather than guess.</p>
+
+        <div style="background:#FFFEFB;border:1px solid #E7E2D6;border-radius:13px;padding:18px 20px;margin-bottom:14px;">
+          <div style="display:flex;flex-direction:column;gap:13px;">
+            <sc-for list="{{ failSteps }}" as="s" hint-placeholder-count="3">
+              <div style="display:flex;gap:12px;align-items:flex-start;">
+                <sc-if value="{{ s.done }}" hint-placeholder-val="{{ true }}">
+                  <span style="flex:none;width:20px;height:20px;border-radius:50%;background:#2F6B4A;display:flex;align-items:center;justify-content:center;margin-top:1px;">
+                    <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#FFFEFB" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </span>
+                </sc-if>
+                <sc-if value="{{ s.stopped }}" hint-placeholder-val="{{ false }}">
+                  <span style="flex:none;width:20px;height:20px;border-radius:50%;background:#F8EDD8;border:1.5px solid #E0B265;display:flex;align-items:center;justify-content:center;margin-top:1px;">
+                    <span style="width:8px;height:2px;border-radius:2px;background:#8A5A11;"></span>
+                  </span>
+                </sc-if>
+                <sc-if value="{{ s.pending }}" hint-placeholder-val="{{ false }}">
+                  <span style="flex:none;width:20px;height:20px;border-radius:50%;border:1.5px solid #DCD6C8;margin-top:1px;"></span>
+                </sc-if>
+                <div style="flex:1;min-width:0;">
+                  <div style="font-size:14px;line-height:1.45;color:#3A372F;">{{ s.t }}</div>
+                  <sc-if value="{{ s.hasNote }}" hint-placeholder-val="{{ false }}">
+                    <div style="font-size:12.5px;color:#8A5A11;margin-top:3px;">{{ s.note }}</div>
+                  </sc-if>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="background:#E4EDE5;border:1px solid #D2E0D4;border-radius:13px;padding:16px 18px;margin-bottom:16px;">
+          <div style="font-size:10.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:#24503B;margin-bottom:9px;">What I have anyway</div>
+          <div style="display:flex;gap:22px;">
+            <sc-for list="{{ partial }}" as="p" hint-placeholder-count="3">
+              <div>
+                <div style="font-family:'Newsreader',serif;font-size:22px;line-height:1;color:#1B1A17;">{{ p.n }}</div>
+                <div style="font-size:11.5px;color:#4C6B58;margin-top:4px;">{{ p.label }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="font-size:12.5px;line-height:1.5;color:#2E4A3B;margin-top:12px;">Seven of nine is still a usable answer. It is saved either way.</div>
+        </div>
+
+        <div style="position:sticky;bottom:0;margin:0 -40px;background:#F4F1EA;border-top:1px solid #E4DFD4;padding:13px 40px 17px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button onClick="{{ goDone }}" style="background:#0E4F3C;color:#FFFEFB;font-size:14px;font-weight:600;padding:12px 20px;border-radius:10px;" style-hover="background:#0A3B2C;">Give me the seven</button>
+            <button onClick="{{ startRun }}" style="font-size:14px;font-weight:500;color:#3A372F;border:1px solid #E1DBCD;background:#FFFEFB;padding:12px 18px;border-radius:10px;" style-hover="border-color:#D2E0D4;background:#F9F7F2;">I'll sign in, try again</button>
+            <div style="flex:1;"></div>
+            <button onClick="{{ goStack }}" style="font-size:13px;font-weight:500;color:#5E5A51;padding:10px 12px;border-radius:9px;" style-hover="background:#EFEBE1;color:#1B1A17;">Drop it</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ---------- WHAT CAME BACK ---------- -->
+    <sc-if value="{{ isDone }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;overflow-y:auto;min-height:0;">
+      <div style="max-width:650px;margin:0 auto;padding:26px 40px 0;">
+        <div style="display:flex;align-items:center;gap:11px;margin-bottom:26px;">
+          <span style="font-size:11.5px;color:#3A372F;"><span style="font-weight:600;">Finished</span> · took 2m 10s</span>
+          <span style="display:flex;gap:3px;">
+            <sc-for list="{{ doneTrack }}" as="t" hint-placeholder-count="3">
+              <sc-if value="{{ t.settled }}" hint-placeholder-val="{{ true }}">
+                <span style="width:15px;height:4px;border-radius:2px;background:#1B1A17;"></span>
+              </sc-if>
+              <sc-if value="{{ t.active }}" hint-placeholder-val="{{ false }}">
+                <span style="width:15px;height:4px;border-radius:2px;background:#2F9E7B;"></span>
+              </sc-if>
+              <sc-if value="{{ t.stopped }}" hint-placeholder-val="{{ false }}">
+                <span style="width:15px;height:4px;border-radius:2px;background:#C98A2B;"></span>
+              </sc-if>
+              <sc-if value="{{ t.waiting }}" hint-placeholder-val="{{ false }}">
+                <span style="width:15px;height:4px;border-radius:2px;background:#DCD6C8;"></span>
+              </sc-if>
+            </sc-for>
+          </span>
+          <div style="flex:1;"></div>
+          <button style="font-size:11.5px;font-weight:600;color:#5E5A51;padding:5px 10px;border-radius:7px;margin-right:-10px;white-space:nowrap;" style-hover="background:#EFEBE1;color:#1B1A17;">Run it again</button>
+        </div>
+
+        <h1 style="margin:0 0 20px;font-family:'Newsreader',serif;font-weight:400;font-size:33px;line-height:1.26;letter-spacing:-.015em;text-wrap:pretty;">Nine profiles read. Six claims that nothing you saw supports.</h1>
+
+        <div style="background:#FFFEFB;border:1px solid #E7E2D6;border-radius:13px;padding:18px 20px;margin-bottom:14px;">
+          <div style="display:flex;align-items:center;margin-bottom:14px;">
+            <span style="font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#726C5E;">What came back</span>
+            <button style="margin-left:auto;font-size:12px;font-weight:600;color:#5E5A51;" style-hover="color:#0E4F3C;">Open the full result →</button>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <sc-for list="{{ results }}" as="r" hint-placeholder-count="3">
+              <div style="display:flex;gap:13px;align-items:baseline;padding:9px 12px;background:#F6F3EC;border-radius:9px;">
+                <span style="flex:none;font-family:'Newsreader',serif;font-size:19px;line-height:1;width:30px;">{{ r.n }}</span>
+                <span style="flex:1;font-size:13.5px;line-height:1.45;color:#3A372F;">{{ r.t }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:16px;">
+          <svg width="9" height="12" viewBox="395 640 234 310" fill="none" style="margin-top:3px;flex:none;"><path d="M512 650 C578 733 620 782 620 840 C620 900 572 940 512 940 C452 940 404 900 404 840 C404 782 446 733 512 650 Z" fill="#2F9E7B"/></svg>
+          <p style="margin:0;font-size:13px;line-height:1.5;color:#4C6B58;max-width:56ch;">I did not judge anyone. I only marked which claims had something behind them in what you had already read.</p>
+        </div>
+
+        <div style="position:sticky;bottom:0;margin:0 -40px;background:#F4F1EA;border-top:1px solid #E4DFD4;padding:13px 40px 17px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button style="background:#0E4F3C;color:#FFFEFB;font-size:14px;font-weight:600;padding:12px 20px;border-radius:10px;" style-hover="background:#0A3B2C;">Open the result</button>
+            <button onClick="{{ goToolkit }}" style="font-size:14px;font-weight:500;color:#3A372F;border:1px solid #E1DBCD;background:#FFFEFB;padding:12px 18px;border-radius:10px;" style-hover="border-color:#D2E0D4;background:#F9F7F2;">Keep it as a shortcut</button>
+            <div style="flex:1;"></div>
+            <button onClick="{{ goStack }}" style="font-size:13px;font-weight:500;color:#5E5A51;padding:10px 12px;border-radius:9px;" style-hover="background:#EFEBE1;color:#1B1A17;">Not useful</button>
+          </div>
+          <div style="font-size:12.5px;color:#6B6558;margin-top:9px;">Keeping the shortcut means I can do this again without asking. Say the word and I'll run it weekly.</div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ---------- SCAN VIEW ---------- -->
+    <sc-if value="{{ isAll }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:none;height:44px;display:flex;align-items:center;padding:0 30px;border-bottom:1px solid #E4DFD4;">
+      <span style="display:flex;align-items:baseline;gap:5px;margin-right:11px;">
+        <span style="font-family:'Newsreader',serif;font-size:19px;line-height:1;color:#1B1A17;">{{ remaining }}</span>
+        <span style="font-size:11.5px;color:#6B6558;">{{ leftWord }}</span>
+      </span>
+      <span style="display:flex;gap:3px;">
+        <sc-for list="{{ track }}" as="t" hint-placeholder-count="3">
+          <sc-if value="{{ t.settled }}" hint-placeholder-val="{{ false }}">
+            <span style="width:15px;height:4px;border-radius:2px;background:#1B1A17;"></span>
+          </sc-if>
+          <sc-if value="{{ t.waiting }}" hint-placeholder-val="{{ true }}">
+            <span style="width:15px;height:4px;border-radius:2px;background:#DCD6C8;"></span>
+          </sc-if>
+        </sc-for>
+      </span>
+      <div style="flex:1;"></div>
+      <button onClick="{{ goStack }}" style="font-size:12.5px;font-weight:500;color:#5E5A51;padding:5px 11px;border-radius:8px;" style-hover="background:#EFEBE1;color:#1B1A17;">Take them one at a time →</button>
+    </div>
+    <div style="flex:1;overflow-y:auto;min-height:0;">
+      <div style="max-width:700px;margin:0 auto;padding:22px 40px 50px;display:flex;flex-direction:column;gap:8px;">
+        <sc-if value="{{ allEmpty }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:26px 4px;font-size:14.5px;color:#6B6558;">Nothing waiting. You have settled everything I found.</div>
+        </sc-if>
+        <sc-for list="{{ allItems }}" as="a" hint-placeholder-count="3">
+          <button onClick="{{ a.open }}" style="width:100%;background:#FFFEFB;border:1px solid #E7E2D6;border-radius:12px;padding:15px 18px;display:flex;align-items:center;gap:16px;" style-hover="border-color:#D2E0D4;box-shadow:0 6px 18px -10px rgba(40,34,20,.2);">
+            <span style="flex:none;width:94px;">
+              <sc-if value="{{ a.fromYou }}" hint-placeholder-val="{{ false }}">
+                <span style="display:inline-block;white-space:nowrap;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#8A5A11;background:#F8EDD8;padding:3px 7px;border-radius:4px;">You asked</span>
+              </sc-if>
+              <sc-if value="{{ a.fromDystil }}" hint-placeholder-val="{{ true }}">
+                <span style="display:inline-block;white-space:nowrap;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#4C6B58;background:#E4EDE5;padding:3px 7px;border-radius:4px;">I noticed</span>
+              </sc-if>
+            </span>
+            <span style="flex:1;min-width:0;font-size:14.5px;line-height:1.4;">{{ a.short }}</span>
+            <span style="flex:none;font-size:12px;color:#6B6558;">{{ a.when }}</span>
+          </button>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ---------- HOME (nothing waiting) ---------- -->
+    <sc-if value="{{ isHome }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;display:flex;flex-direction:column;min-height:0;">
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center;max-width:600px;margin:0 auto;width:100%;padding:20px 40px 30px;">
+        <div style="font-size:11px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:#726C5E;margin-bottom:14px;">Last spoke up on Tuesday</div>
+
+        <h1 style="margin:0 0 9px;font-family:'Newsreader',serif;font-weight:400;font-size:36px;line-height:1.24;letter-spacing:-.018em;text-wrap:pretty;">Nothing new worth interrupting you about.</h1>
+        <p style="margin:0 0 28px;font-size:14.5px;line-height:1.55;color:#6B6558;max-width:44ch;">I'll knock when I find something. If something is dragging right now, tell me and we'll work it out together.</p>
+
+        <div style="display:flex;flex-direction:column;background:#FFFEFB;border:1px solid #DDD6C7;border-radius:14px;padding:18px 20px 12px;box-shadow:0 3px 14px -6px rgba(40,34,20,.16);margin-bottom:15px;min-height:138px;" style-hover="border-color:#B9CFBD;box-shadow:0 10px 28px -12px rgba(40,34,20,.26);">
+          <span style="flex:1;font-size:16.5px;line-height:1.5;color:#726C5E;">What's slowing you down?</span>
+          <div style="display:flex;align-items:center;gap:12px;padding-top:12px;border-top:1px solid #F1EDE4;">
+            <span style="flex:1;font-size:12.5px;color:#6B6558;">Say it however it comes out — I'll ask a few questions after.</span>
+            <button onClick="{{ goAsk }}" style="flex:none;background:#0E4F3C;color:#FFFEFB;font-size:14px;font-weight:600;padding:11px 24px;border-radius:10px;" style-hover="background:#0A3B2C;">Ask</button>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:7px;">
+          <span style="font-size:12.5px;color:#6B6558;margin-right:2px;">Or start here —</span>
+          <sc-for list="{{ starters }}" as="s" hint-placeholder-count="3">
+            <button onClick="{{ goAsk }}" style="font-size:13px;color:#5E5A51;background:#EFEBE1;padding:7px 14px;border-radius:20px;" style-hover="background:#E4EDE5;color:#24503B;">{{ s }}</button>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="flex:none;border-top:1px solid #E4DFD4;padding:15px 40px 18px;">
+        <div style="max-width:600px;margin:0 auto;">
+          <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;">
+            <span style="font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#726C5E;">Your shortcuts</span>
+            <button onClick="{{ goToolkit }}" style="margin-left:auto;font-size:12px;font-weight:600;color:#5E5A51;" style-hover="color:#0E4F3C;">All 4 →</button>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:12px;">
+            <sc-for list="{{ toolkitMini }}" as="k" hint-placeholder-count="3">
+              <button style="flex:1;background:#FFFEFB;border:1px solid #E7E2D6;border-radius:10px;padding:10px 13px;" style-hover="border-color:#D2E0D4;background:#FBFAF6;">
+                <span style="display:block;font-size:13px;font-weight:500;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ k.title }}</span>
+                <span style="display:block;font-size:11px;color:#6B6558;">{{ k.used }}</span>
+              </button>
+            </sc-for>
+          </div>
+
+
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ---------- ASK ---------- -->
+    <sc-if value="{{ isAsk }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;display:flex;min-height:0;">
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;">
+        <div style="flex:1;overflow-y:auto;min-height:0;padding:22px 36px 20px;">
+          <div style="max-width:540px;">
+            <div style="display:flex;align-items:center;gap:11px;margin-bottom:26px;">
+              <span style="font-size:11.5px;color:#3A372F;"><span style="font-weight:600;">Working out your fix</span> · question 4</span>
+              <span style="display:flex;gap:3px;">
+                <sc-for list="{{ askTrack }}" as="t" hint-placeholder-count="5">
+                  <sc-if value="{{ t.settled }}" hint-placeholder-val="{{ true }}">
+                    <span style="width:15px;height:4px;border-radius:2px;background:#1B1A17;"></span>
+                  </sc-if>
+                  <sc-if value="{{ t.active }}" hint-placeholder-val="{{ false }}">
+                    <span style="width:15px;height:4px;border-radius:2px;background:#2F9E7B;"></span>
+                  </sc-if>
+                  <sc-if value="{{ t.stopped }}" hint-placeholder-val="{{ false }}">
+                    <span style="width:15px;height:4px;border-radius:2px;background:#C98A2B;"></span>
+                  </sc-if>
+                  <sc-if value="{{ t.waiting }}" hint-placeholder-val="{{ false }}">
+                    <span style="width:15px;height:4px;border-radius:2px;background:#DCD6C8;"></span>
+                  </sc-if>
+                </sc-for>
+              </span>
+              <div style="flex:1;"></div>
+              <button onClick="{{ goHome }}" style="font-size:11.5px;font-weight:600;color:#5E5A51;padding:5px 10px;border-radius:7px;white-space:nowrap;" style-hover="background:#EFEBE1;color:#1B1A17;">Start over</button>
+            </div>
+          </div>
+          <div style="max-width:540px;display:flex;flex-direction:column;gap:20px;">
+            <sc-for list="{{ turns }}" as="t" hint-placeholder-count="4">
+              <div>
+                <sc-if value="{{ t.isUser }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;gap:13px;padding-left:22px;">
+                    <span style="flex:none;width:2px;border-radius:2px;background:#DCD6C8;"></span>
+                    <p style="margin:0;font-size:14.5px;line-height:1.55;color:#6B6558;text-wrap:pretty;">{{ t.text }}</p>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ t.isPast }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;gap:13px;">
+                    <span style="flex:none;margin-top:6px;opacity:.4;">
+                      <svg width="9" height="12" viewBox="395 640 234 310" fill="none"><path d="M512 650 C578 733 620 782 620 840 C620 900 572 940 512 940 C452 940 404 900 404 840 C404 782 446 733 512 650 Z" fill="#2F9E7B"/></svg>
+                    </span>
+                    <p style="margin:0;font-family:'Newsreader',serif;font-size:17px;font-weight:400;line-height:1.4;color:#6F6A5E;text-wrap:pretty;">{{ t.text }}</p>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ t.isCurrent }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;gap:13px;">
+                    <span style="flex:none;margin-top:9px;">
+                      <svg width="11" height="14" viewBox="395 640 234 310" fill="none"><path d="M512 650 C578 733 620 782 620 840 C620 900 572 940 512 940 C452 940 404 900 404 840 C404 782 446 733 512 650 Z" fill="#2F9E7B"/></svg>
+                    </span>
+                    <div style="flex:1;min-width:0;">
+                      <p style="margin:0;font-family:'Newsreader',serif;font-size:25px;font-weight:400;line-height:1.32;letter-spacing:-.01em;text-wrap:pretty;">{{ t.text }}</p>
+                      <div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:16px;">
+                        <sc-for list="{{ t.chips }}" as="c" hint-placeholder-count="3">
+                          <button style="border:1px solid #E1DBCD;font-size:13.5px;padding:9px 15px;border-radius:9px;color:#3A372F;background:#FFFEFB;" style-hover="border-color:#4C6B58;background:#F1F6F1;color:#24503B;">{{ c }}</button>
+                        </sc-for>
+                      </div>
+                    </div>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="flex:none;padding:12px 36px 22px;">
+          <div style="max-width:540px;display:flex;align-items:center;gap:10px;background:#FFFEFB;border:1px solid #E1DBCD;border-radius:12px;padding:5px 5px 5px 16px;" style-hover="border-color:#D2E0D4;">
+            <span style="flex:1;font-size:14px;color:#726C5E;padding:9px 0;">Or say it in your own words…</span>
+            <button style="flex:none;background:#0E4F3C;color:#FFFEFB;font-size:13px;font-weight:600;padding:9px 17px;border-radius:9px;" style-hover="background:#0A3B2C;">Send</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="width:272px;flex:none;border-left:1px solid #E4DFD4;display:flex;flex-direction:column;">
+        <div style="padding:22px 20px 12px;font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#726C5E;">So far, in your words</div>
+        <div style="flex:1;padding:0 18px 18px;display:flex;flex-direction:column;gap:7px;">
+          <sc-for list="{{ established }}" as="e" hint-placeholder-count="3">
+            <div style="background:#FFFEFB;border:1px solid #E7E2D6;border-radius:10px;padding:11px 13px;" style-hover="border-color:#D2E0D4;">
+              <div style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#4C6B58;margin-bottom:4px;">{{ e.label }}</div>
+              <div style="font-size:13px;line-height:1.45;color:#3A372F;">{{ e.text }}</div>
+            </div>
+          </sc-for>
+          <div style="border:1px dashed #D8D2C4;border-radius:10px;padding:11px 13px;font-size:12.5px;color:#726C5E;">Still open — what good looks like</div>
+        </div>
+        <div style="flex:none;border-top:1px solid #E4DFD4;padding:14px 18px;font-size:12px;line-height:1.45;color:#4C6B58;">When we're done I'll put the answer in Worth fixing, beside the things I spotted myself.</div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ---------- TOOLKIT ---------- -->
+    <sc-if value="{{ isToolkit }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;overflow-y:auto;min-height:0;">
+      <div style="max-width:760px;margin:0 auto;padding:32px 40px 50px;">
+        <div style="display:flex;align-items:center;gap:11px;margin-bottom:26px;">
+          <span style="font-size:11.5px;color:#3A372F;"><span style="font-weight:600;">4 kept</span> · 3 I can run myself</span>
+          <div style="flex:1;"></div>
+          <button onClick="{{ goAsk }}" style="font-size:11.5px;font-weight:600;color:#5E5A51;padding:5px 10px;border-radius:7px;margin-right:-10px;white-space:nowrap;" style-hover="background:#EFEBE1;color:#1B1A17;">Ask for another</button>
+        </div>
+        <h1 style="margin:0 0 26px;font-family:'Newsreader',serif;font-weight:400;font-size:33px;line-height:1.26;letter-spacing:-.015em;max-width:30ch;text-wrap:pretty;">Four things you no longer do by hand.</h1>
+        <div style="display:flex;flex-direction:column;gap:9px;">
+          <sc-for list="{{ toolkit }}" as="k" hint-placeholder-count="4">
+            <div style="background:#FFFEFB;border:1px solid #E7E2D6;border-radius:12px;padding:15px 18px;display:flex;align-items:center;gap:18px;" style-hover="border-color:#D2E0D4;box-shadow:0 6px 18px -10px rgba(40,34,20,.2);">
+              <div style="flex:1;min-width:0;">
+                <div style="display:flex;align-items:center;gap:9px;margin-bottom:3px;">
+                  <span style="font-size:15px;font-weight:600;">{{ k.title }}</span>
+                  <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#6B6558;background:#F1EDE4;padding:2px 7px;border-radius:4px;">{{ k.kind }}</span>
+                </div>
+                <div style="font-size:12.5px;color:#6B6558;">{{ k.used }}</div>
+              </div>
+              <sc-if value="{{ k.runnable }}" hint-placeholder-val="{{ true }}">
+                <button style="flex:none;background:#0E4F3C;color:#FFFEFB;font-size:12.5px;font-weight:600;padding:8px 16px;border-radius:8px;" style-hover="background:#0A3B2C;">Run it</button>
+              </sc-if>
+              <button style="flex:none;font-size:12.5px;font-weight:500;color:#5E5A51;padding:8px 13px;border-radius:8px;" style-hover="background:#EFEBE1;color:#1B1A17;">Copy</button>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ---------- INVITE ---------- -->
+    <sc-if value="{{ isInvite }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;overflow-y:auto;min-height:0;">
+      <div style="max-width:700px;margin:0 auto;padding:34px 40px 60px;">
+        <div style="font-size:11px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:#726C5E;margin-bottom:13px;">Dystil for a team</div>
+        <h1 style="margin:0 0 10px;font-family:'Newsreader',serif;font-weight:400;font-size:34px;line-height:1.24;letter-spacing:-.018em;max-width:24ch;text-wrap:pretty;">Some waste only shows up across people.</h1>
+        <p style="margin:0 0 32px;font-size:15.5px;line-height:1.6;color:#5E5A51;max-width:54ch;text-wrap:pretty;">On your own, I can see what you repeat. Across a team, I can see what four of you rebuild separately every week — and that is usually the bigger number.</p>
+
+        <div style="font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#726C5E;margin-bottom:12px;">What changes</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:34px;">
+          <sc-for list="{{ teamChanges }}" as="c" hint-placeholder-count="3">
+            <div style="background:#FFFEFB;border:1px solid #E7E2D6;border-radius:12px;padding:16px 17px;">
+              <div style="font-size:14px;font-weight:600;line-height:1.35;margin-bottom:6px;">{{ c.t }}</div>
+              <div style="font-size:12.5px;line-height:1.5;color:#5E5A51;">{{ c.d }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="background:#FFFEFB;border:1px solid #D2E0D4;border-radius:14px;padding:22px 24px;margin-bottom:34px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <svg width="10" height="13" viewBox="395 640 234 310" fill="none"><path d="M512 650 C578 733 620 782 620 840 C620 900 572 940 512 940 C452 940 404 900 404 840 C404 782 446 733 512 650 Z" fill="#2F9E7B"/></svg>
+            <span style="font-size:10.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:#24503B;">Read this part carefully</span>
+          </div>
+          <h2 style="margin:0 0 6px;font-family:'Newsreader',serif;font-weight:400;font-size:23px;line-height:1.3;">Team patterns need something to leave each machine.</h2>
+          <p style="margin:0 0 18px;font-size:14px;line-height:1.55;color:#5E5A51;max-width:58ch;">Counting across people means counting somewhere. Here is exactly what that is, and what it never includes.</p>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+            <div>
+              <div style="font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#8A5A11;margin-bottom:9px;">Leaves — counts only</div>
+              <div style="display:flex;flex-direction:column;gap:7px;">
+                <sc-for list="{{ leaves }}" as="l" hint-placeholder-count="3">
+                  <div style="font-size:13.5px;line-height:1.45;color:#3A372F;">{{ l }}</div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="border-left:1px solid #F1EDE4;padding-left:20px;">
+              <div style="font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#24503B;margin-bottom:9px;">Never leaves</div>
+              <div style="display:flex;flex-direction:column;gap:7px;">
+                <sc-for list="{{ staysTeam }}" as="l" hint-placeholder-count="3">
+                  <div style="font-size:13.5px;line-height:1.45;color:#3A372F;">{{ l }}</div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+          <div style="margin-top:18px;padding-top:14px;border-top:1px solid #F1EDE4;font-size:13px;line-height:1.5;color:#4C6B58;">It is off for everyone until each person turns it on for themselves. You cannot turn it on for them.</div>
+        </div>
+
+        <div style="font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#726C5E;margin-bottom:12px;">What you need to do</div>
+        <div style="display:flex;flex-direction:column;gap:2px;margin-bottom:30px;">
+          <sc-for list="{{ teamSteps }}" as="s" hint-placeholder-count="4">
+            <div style="display:flex;gap:16px;background:#FFFEFB;border:1px solid #E7E2D6;border-radius:12px;padding:16px 18px;">
+              <span style="flex:none;font-family:'Newsreader',serif;font-size:21px;line-height:1;color:#8A5A11;width:22px;">{{ s.n }}</span>
+              <div style="flex:1;min-width:0;">
+                <div style="font-size:14.5px;font-weight:600;margin-bottom:3px;">{{ s.t }}</div>
+                <div style="font-size:13px;line-height:1.5;color:#5E5A51;">{{ s.d }}</div>
+              </div>
+              <span style="flex:none;font-size:11.5px;color:#726C5E;white-space:nowrap;">{{ s.who }}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="background:#E4EDE5;border:1px solid #D2E0D4;border-radius:14px;padding:22px 24px;">
+          <div style="font-size:14.5px;font-weight:600;color:#24503B;margin-bottom:14px;">Start with the people you actually overlap with</div>
+          <div style="display:flex;align-items:center;gap:10px;background:#FFFEFB;border-radius:11px;padding:6px 6px 6px 18px;margin-bottom:10px;">
+            <span style="flex:1;font-family:ui-monospace,Menlo,monospace;font-size:13.5px;color:#3A372F;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">dystil.app/team/kestrel-4b91</span>
+            <button style="flex:none;background:#0E4F3C;color:#FFFEFB;font-size:13.5px;font-weight:600;padding:11px 20px;border-radius:9px;" style-hover="background:#0A3B2C;">Copy invite</button>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button style="flex:1;background:#FFFEFB;font-size:13px;font-weight:500;padding:10px 14px;border-radius:9px;text-align:center;color:#3A372F;" style-hover="background:#F9F7F2;">Send by email</button>
+            <button style="flex:1;background:#FFFEFB;font-size:13px;font-weight:500;padding:10px 14px;border-radius:9px;text-align:center;color:#3A372F;" style-hover="background:#F9F7F2;">Send on Slack</button>
+          </div>
+          <div style="font-size:12.5px;line-height:1.5;color:#4C6B58;margin-top:14px;">Three people is enough to see a pattern. Below that I will not claim one.</div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ---------- PRIVACY ---------- -->
+    <sc-if value="{{ isPrivacy }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;overflow-y:auto;min-height:0;">
+      <div style="max-width:740px;margin:0 auto;padding:32px 40px 50px;">
+        <h1 style="margin:0 0 9px;font-family:'Newsreader',serif;font-weight:400;font-size:31px;letter-spacing:-.015em;">What stays on this computer</h1>
+        <p style="margin:0 0 24px;font-size:15px;line-height:1.55;color:#5E5A51;max-width:44ch;text-wrap:pretty;">Everything, in one folder, on this Mac. There is no copy anywhere to ask for.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-bottom:11px;">
+          <div style="background:#FFFEFB;border:1px solid #D2E0D4;border-radius:13px;padding:19px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;">
+              <svg width="9" height="12" viewBox="395 640 234 310" fill="none"><path d="M512 650 C578 733 620 782 620 840 C620 900 572 940 512 940 C452 940 404 900 404 840 C404 782 446 733 512 650 Z" fill="#2F9E7B"/></svg>
+              <span style="font-size:10.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#4C6B58;">Never leaves</span>
+            </div>
+            <p style="margin:0 0 13px;font-size:14.5px;line-height:1.5;color:#3A372F;">Everything I read, and everything I work out from it.</p>
+            <code style="display:inline-block;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;background:#F6F3EC;padding:5px 10px;border-radius:7px;color:#3A372F;margin-bottom:12px;">~/.dystil</code>
+            <div style="display:flex;gap:14px;">
+              <button style="font-size:12.5px;font-weight:600;color:#0E4F3C;" style-hover="text-decoration:underline;">Open folder</button>
+              <button style="font-size:12.5px;font-weight:600;color:#0E4F3C;" style-hover="text-decoration:underline;">Read the code</button>
+            </div>
+          </div>
+          <div style="background:#FFFEFB;border:1px solid #E7E2D6;border-radius:13px;padding:19px;">
+            <div style="font-size:10.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#726C5E;margin-bottom:9px;">Never read — no switch for it</div>
+            <p style="margin:0 0 13px;font-size:14.5px;line-height:1.5;color:#3A372F;">Skipped in the code, not in a setting.</p>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;">
+              <sc-for list="{{ neverRead }}" as="n" hint-placeholder-count="5">
+                <span style="font-size:12px;color:#5E5A51;background:#F6F3EC;padding:5px 11px;border-radius:20px;">{{ n }}</span>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+        <div style="background:#FFFEFB;border:1px solid #E7E2D6;border-radius:13px;padding:17px 19px;display:flex;align-items:center;gap:20px;">
+          <div style="flex:1;">
+            <div style="font-size:14.5px;font-weight:600;margin-bottom:3px;">Off unless you say otherwise</div>
+            <div style="font-size:13px;color:#6B6558;">You have turned 4 of these on.</div>
+          </div>
+          <button style="flex:none;font-size:12.5px;font-weight:600;color:#0E4F3C;border:1px solid #D2E0D4;padding:8px 14px;border-radius:8px;" style-hover="background:#E4EDE5;">Change</button>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+  </div>
+
+  <!-- bottom: ambient machine truth — watching, and what is running -->
+  <div style="position:relative;flex:none;height:34px;background:#EFEBE1;border-top:1px solid #E1DBCD;display:flex;align-items:center;padding:0 12px;gap:8px;">
+    <sc-if value="{{ jobRunning }}" hint-placeholder-val="{{ false }}">
+      <span style="position:absolute;top:-1px;left:0;right:0;height:2px;background:#E1DBCD;overflow:hidden;">
+        <span style="display:block;width:25%;height:100%;background:#2F9E7B;animation:crawl 2.2s linear infinite;"></span>
+      </span>
+    </sc-if>
+
+    <span style="display:flex;align-items:center;gap:8px;padding:4px 9px;">
+      <span style="position:relative;width:6px;height:6px;flex:none;">
+        <span style="position:absolute;inset:-4px;border-radius:50%;background:#4C6B58;animation:halo 4s ease-in-out infinite;"></span>
+        <span style="position:absolute;inset:0;border-radius:50%;background:#2F6B4A;"></span>
+      </span>
+      <span style="font-size:11.5px;font-weight:600;color:#3A372F;">Watching, locally</span>
+      <span style="font-size:11.5px;color:#6B6558;">nothing has left this Mac</span>
+    </span>
+
+    <button onClick="{{ goPrivacy }}" style="display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;color:#5E5A51;padding:4px 10px;border-radius:7px;border:1px solid #DCD6C8;" style-hover="background:#E7E2D6;color:#1B1A17;border-color:#CFC8B8;">
+      What stays on this computer
+      <span style="font-size:12px;">→</span>
+    </button>
+
+    <div style="flex:1;"></div>
+
+    <sc-if value="{{ jobRunning }}" hint-placeholder-val="{{ false }}">
+      <button onClick="{{ goRunning }}" style="display:flex;align-items:center;gap:8px;padding:4px 10px;border-radius:7px;" style-hover="background:#E4EDE5;">
+        <span style="width:6px;height:6px;border-radius:50%;background:#2F9E7B;animation:pulse 1.4s ease-in-out infinite;"></span>
+        <span style="font-size:11.5px;font-weight:600;color:#3A372F;">Running</span>
+        <span style="font-size:11.5px;color:#6B6558;">One review pass — step 2 of 3</span>
+      </button>
+      <button onClick="{{ stopRun }}" style="font-size:11.5px;font-weight:600;color:#8A5A11;padding:4px 10px;border-radius:7px;" style-hover="background:#F8EDD8;">Stop</button>
+    </sc-if>
+
+    <sc-if value="{{ jobFinished }}" hint-placeholder-val="{{ false }}">
+      <button onClick="{{ goDone }}" style="display:flex;align-items:center;gap:8px;padding:4px 10px;border-radius:7px;" style-hover="background:#E4EDE5;">
+        <span style="width:14px;height:14px;border-radius:50%;background:#2F6B4A;display:flex;align-items:center;justify-content:center;">
+          <svg width="8" height="6" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#FFFEFB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span style="font-size:11.5px;font-weight:600;color:#3A372F;">One review pass finished</span>
+        <span style="font-size:11.5px;color:#6B6558;">see what came back</span>
+      </button>
+    </sc-if>
+  </div>
+  </sc-if>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{}">
+class Component extends DCLogic {
+  state = { screen: 'stack', queue: [0, 1, 2], correcting: false, job: null };
+
+  go = (s) => () => this.setState({ screen: s, correcting: false });
+
+  // deferring sends the item to the back of the pile; settling removes it
+  defer = () => this.setState(st => ({ queue: [...st.queue.slice(1), st.queue[0]], correcting: false }));
+  settle = () => this.setState(st => {
+    const q = st.queue.slice(1);
+    return { queue: q, correcting: false, screen: q.length ? 'stack' : 'cleared' };
+  });
+  settleAndRun = () => this.setState(st => ({ queue: st.queue.slice(1), correcting: false, screen: 'running', job: 'running' }));
+  resetQueue = () => this.setState({ queue: [0, 1, 2], screen: 'stack', correcting: false });
+
+  stack = [
+    {
+      fromDystil: true, fromYou: false, when: 'yesterday',
+      short: 'Nine profiles, four different ways',
+      title: 'You went at the same nine profiles four different ways — about two hours.',
+      evidence: [
+        { n: '14', label: 'searches' }, { n: '31', label: 'posts read' },
+        { n: '9', label: 'reposts' }, { n: '9', label: 'profiles' }
+      ],
+      evidenceNote: 'Four separate passes, no shared notes between them.',
+      offer: 'Want a shortcut for next time?',
+      fixName: 'One review pass over all four',
+      steps: [
+        { n: '1', t: 'Gather the nine profiles and everything you read about them into one place.' },
+        { n: '2', t: 'List the claims each makes, and mark which are backed by something you saw.' },
+        { n: '3', t: 'Hand you the leftovers — the claims nothing supports.' }
+      ],
+      correctPrompt: 'Did I read that wrong?'
+    },
+    {
+      fromDystil: false, fromYou: true, when: 'Tuesday',
+      short: 'The synthesis problem you described',
+      title: 'Here is the thing you asked for — a way to stop synthesis eating your week.',
+      recap: [
+        { label: 'Problem', text: 'Research takes too long.' },
+        { label: 'Where', text: 'Pulling it together. Collecting is fine.' },
+        { label: 'Who reads it', text: 'Your team, sometimes a client.' }
+      ],
+      offer: 'This is what I would build for you.',
+      fixName: 'Friday digest from the week you already read',
+      steps: [
+        { n: '1', t: 'Collect what you read this week, grouped by the question you were chasing.' },
+        { n: '2', t: 'Draft one page per question, in the plain register your team reads in.' },
+        { n: '3', t: 'Flag anything you looked at once and never came back to.' }
+      ],
+      correctPrompt: 'Not what you meant?'
+    },
+    {
+      fromDystil: true, fromYou: false, when: 'this morning',
+      short: 'A login window repeating itself',
+      title: 'A login window re-announced itself forty-three times in fifteen minutes.',
+      evidence: [
+        { n: '43', label: 'signals' }, { n: '15m', label: 'window' },
+        { n: '1', label: 'app' }, { n: '0', label: 'real changes' }
+      ],
+      evidenceNote: 'Same interval each time, which is what makes me think it is noise.',
+      offer: 'Want me to find out why?',
+      fixName: 'Trace the repeating capture events',
+      steps: [
+        { n: '1', t: 'Replay the interval against a login screen with no real credentials.' },
+        { n: '2', t: 'Watch which app focus change triggers the repeat.' },
+        { n: '3', t: 'Tell you whether it is safe to ignore.' }
+      ],
+      correctPrompt: 'Did I read that wrong?'
+    }
+  ];
+
+  renderVals() {
+    const s = this.state.screen;
+    const queue = this.state.queue;
+    const total = this.stack.length;
+    const item = this.stack[queue[0]] || this.stack[0];
+    const tab = (id, label) => ({ label, on: s === id, off: s !== id, go: this.go(id) });
+    return {
+      tabs: [
+        tab('stack', 'Worth fixing'),
+        tab('cleared', 'Pile cleared'),
+        tab('running', 'Running'),
+        tab('done', 'What came back'),
+        tab('failed', 'Stopped partway'),
+        tab('all', 'Scan view'),
+        tab('home', 'Home, nothing waiting'),
+        tab('ask', 'Ask for a fix'),
+        tab('notif', 'Notification'),
+        tab('toolkit', 'Your shortcuts'),
+        tab('invite', 'Invite your team'),
+        tab('privacy', 'What stays here')
+      ],
+      isNotif: s === 'notif',
+      inWindow: s !== 'notif',
+      isRunning: s === 'running',
+      isFailed: s === 'failed',
+      isDone: s === 'done',
+      jobRunning: this.state.job === 'running',
+      jobFinished: this.state.job === 'done',
+      goRunning: this.go('running'),
+      goDone: () => this.setState({ screen: 'done', job: 'done', correcting: false }),
+      stopRun: () => this.setState({ screen: 'failed', job: null, correcting: false }),
+
+      runSteps: [
+        { done: true, t: 'Gathered the nine profiles and everything you read about them.', time: '18s' },
+        { active: true, hasNote: true, t: 'Listing the claims each one makes.', note: 'Six profiles done, three to go.', time: 'now' },
+        { pending: true, t: 'Setting aside the claims nothing supports.', time: '' }
+      ],
+
+      failSteps: [
+        { done: true, t: 'Gathered seven of the nine profiles.' },
+        { stopped: true, hasNote: true, t: 'Listing the claims each one makes.', note: 'Two profiles need a sign-in. I do not enter credentials, so I stopped here.' },
+        { pending: true, t: 'Setting aside the claims nothing supports.' }
+      ],
+
+      partial: [
+        { n: '7', label: 'of 9 profiles' },
+        { n: '24', label: 'claims listed' },
+        { n: '5', label: 'nothing supports them' }
+      ],
+
+      results: [
+        { n: '6', t: 'claims with nothing behind them in anything you read' },
+        { n: '11', t: 'claims backed by something you had already seen' },
+        { n: '2', t: 'places where two profiles contradict each other' }
+      ],
+      isStack: s === 'stack' && queue.length > 0,
+      showQueuePill: s !== 'stack' && queue.length > 0,
+      allEmpty: queue.length === 0,
+      isAll: s === 'all',
+      isHome: s === 'home',
+      isAsk: s === 'ask',
+      isToolkit: s === 'toolkit',
+      isPrivacy: s === 'privacy',
+      isInvite: s === 'invite',
+      goInvite: this.go('invite'),
+      notStack: s !== 'stack',
+      teamChanges: [
+        { t: 'Waste nobody can see alone', d: 'Four people rebuilding the same thing separately is invisible on any one machine.' },
+        { t: 'Shortcuts stop being rebuilt', d: 'A fix one person keeps becomes available to everyone, as text they can read before running.' },
+        { t: 'Time shown by work, not by person', d: 'Where the team loses hours, grouped by kind of job. Never a leaderboard of people.' }
+      ],
+
+      leaves: [
+        'The kind of job — "manual research write-up".',
+        'How often it happened, and roughly how long it took.',
+        'How many people it happened to.'
+      ],
+
+      staysTeam: [
+        'Everything read — documents, screens, messages, all of it.',
+        'Every finding of yours, and the record behind it.',
+        'Which person any single count came from.'
+      ],
+
+      teamSteps: [
+        { n: '1', t: 'Send the invite to people you work alongside', d: 'Three or more, otherwise there is no pattern to find.', who: 'You' },
+        { n: '2', t: 'Each of them installs their own copy', d: 'It watches their machine. Nothing connects to yours.', who: 'Them' },
+        { n: '3', t: 'Each of them turns on team counts', d: 'Off by default, and only they can switch it on. They see exactly what is counted first.', who: 'Them' },
+        { n: '4', t: 'Choose which kinds of work count', d: 'Client work in, personal admin out — whatever fits how you actually operate.', who: 'You' },
+        { n: '5', t: 'Wait about a week of overlap', d: 'The first team finding arrives when there is enough to be sure of. Not before.', who: 'Me' }
+      ],
+      goStack: this.go('stack'),
+      goAll: this.go('all'),
+      goHome: this.go('home'),
+      goAsk: this.go('ask'),
+      goToolkit: this.go('toolkit'),
+      goPrivacy: this.go('privacy'),
+
+      item,
+      remaining: queue.length,
+      leftWord: queue.length === 1 ? 'last one' : 'left to settle',
+      queueCount: queue.length,
+      track: Array.from({ length: total }, (_, n) => ({ settled: n < total - queue.length, waiting: n >= total - queue.length })),
+      // the segmented track is the app's one progress device — pile, run steps, questions
+      runTrack: [{ settled: true }, { active: true }, { waiting: true }],
+      failTrack: [{ settled: true }, { stopped: true }, { waiting: true }],
+      doneTrack: [{ settled: true }, { settled: true }, { settled: true }],
+      askTrack: [{ settled: true }, { settled: true }, { settled: true }, { active: true }, { waiting: true }],
+      isCleared: s === 'cleared' || (s === 'stack' && queue.length === 0),
+      defer: this.defer,
+      settle: this.settle,
+      startRun: this.settleAndRun,
+      resetQueue: this.resetQueue,
+      correcting: this.state.correcting,
+      notCorrecting: !this.state.correcting,
+      showEvidence: item.fromDystil && !this.state.correcting,
+      showRecap: item.fromYou && !this.state.correcting,
+      startCorrect: () => this.setState({ correcting: true }),
+      stopCorrect: () => this.setState({ correcting: false }),
+
+      allItems: queue.map(n => ({
+        ...this.stack[n],
+        open: () => this.setState(st => ({ screen: 'stack', correcting: false, queue: [n, ...st.queue.filter(q => q !== n)] }))
+      })),
+
+      corrections: [
+        { label: 'I meant to work that way', effect: 'Then it is not waste. I will stop calling this a problem.' },
+        { label: 'The numbers are off', effect: 'I will show you what I counted so you can tell me where I slipped.' },
+        { label: 'Right, but not worth fixing', effect: 'Noted. I will keep spotting it and keep quiet about it.' },
+        { label: 'Stop watching this kind of work', effect: 'It comes off the list, from now on.' }
+      ],
+
+      starters: ['Something takes me too long every week', 'I keep redoing the same thing', 'I want a shortcut for a specific job'],
+
+      turns: [
+        { isUser: true, text: 'I keep wasting time on research' },
+        { isPast: true, text: 'Which part of it drags?' },
+        { isUser: true, text: 'Pulling it together. I collect good material then take forever to organise it' },
+        { isPast: true, text: 'And who reads the result?' },
+        { isUser: true, text: 'Mostly my team, sometimes a client' },
+        { isCurrent: true, text: 'Last one — when it goes wrong, is it slow or is it messy?', chips: ['Slow, but it comes out fine', 'Fast, but I miss things', 'Both, honestly'] }
+      ],
+
+      established: [
+        { label: 'Problem', text: 'Research takes too long.' },
+        { label: 'Where', text: 'Pulling it together. Collecting is fine.' },
+        { label: 'Who reads it', text: 'Team, sometimes a client.' }
+      ],
+
+      toolkitMini: [
+        { title: 'Audit expert claims', used: 'Used 6×' },
+        { title: 'Weekly research digest', used: 'Used 2×' },
+        { title: 'Compare before buying', used: 'Used 11×' }
+      ],
+
+      toolkit: [
+        { title: 'Audit expert claims', kind: 'Prompt', used: 'Used 6× · kept 12 Aug', runnable: true },
+        { title: 'Weekly research digest', kind: 'Runbook', used: 'Used 2× · kept 4 Aug', runnable: true },
+        { title: 'Compare before buying', kind: 'Prompt', used: 'Used 11× · kept 28 Jul', runnable: true },
+        { title: 'Raycast snippet expander', kind: 'Tool you have', used: 'Kept 21 Jul', runnable: false }
+      ],
+
+      neverRead: ['Passwords', 'Banking', 'Health', 'Dating and faith apps', 'Private windows']
+    };
+  }
+}
+</script>
+</body>
+</html>
