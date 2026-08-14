@@ -441,8 +441,8 @@ fn create_dynamic_menu(
                 RecordingStatus::Recording | RecordingStatus::Starting
             )
         });
-    let mut menu = MenuBuilder::new(app)
-        .item(&MenuItemBuilder::with_id("open_app", "Open app").build(app)?);
+    let mut menu =
+        MenuBuilder::new(app).item(&MenuItemBuilder::with_id("open_app", "Open app").build(app)?);
     if capture_running {
         menu = menu
             .item(&MenuItemBuilder::with_id("pause_60", "Pause for 1 hour").build(app)?)
@@ -547,15 +547,6 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
             let _ = app_handle.run_on_main_thread(move || {
                 show_main_window(app.clone());
                 let _ = app.emit("tray-show-timeline", ());
-            });
-        }
-        "show_search" => {
-            // Show floating Search bar only (hide timeline, it reopens when user picks a result)
-            let app = app_handle.clone();
-            let _ = app_handle.run_on_main_thread(move || {
-                hide_main_window(app.clone());
-                let _ = ShowRewindWindow::Search { query: None }.show(&app);
-                let _ = app.emit("tray-show-search", ());
             });
         }
         "toggle_capture" => {

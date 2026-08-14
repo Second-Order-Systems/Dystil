@@ -1080,14 +1080,6 @@ async openReadyCapability(artifactId: string) : Promise<Result<ReadyArtifactUseR
     else return { status: "error", error: e  as any };
 }
 },
-async openSearchWindow(query: string | null) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("open_search_window", { query }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
 async openWindowsShellTarget(target: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("open_windows_shell_target", { target }) };
@@ -1246,17 +1238,6 @@ async resetOnboarding() : Promise<Result<null, string>> {
 async resetPermission(permission: OSPermission) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("reset_permission", { permission }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Resize the Search NSPanel. Regular Tauri setSize doesn't work on NSPanels.
- */
-async resizeSearchWindow(width: number, height: number) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("resize_search_window", { width, height }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2058,7 +2039,7 @@ uiTheme?: string;
  * minimize-to-taskbar behavior).
  */
 minimizeToTrayOnClose?: boolean }
-export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "PermissionRecovery"
+export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | "Onboarding" | "PermissionRecovery"
 export type SyncConsent = { segments: boolean; screenshots: boolean }
 /**
  * Current effective telemetry state, and whether the user may change it.

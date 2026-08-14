@@ -30,11 +30,15 @@ use tauri_nspanel::ManagerExt;
 #[cfg(target_os = "macos")]
 use tauri_nspanel::WebviewWindowExt;
 
+/// Default inner size for primary working surfaces. `screen_aware_size` clamps
+/// this to the display and `RewindWindowId::min_size()` floors it, so the
+/// window stays proportionate from a 1280x720 laptop up to a 16" MacBook Pro.
+const PRIMARY_DEFAULT_SIZE: (f64, f64) = (1180.0, 800.0);
+
 #[derive(PartialEq)]
 pub enum RewindWindowId {
     Main,
     Home,
-    Search,
     Onboarding,
     PermissionRecovery,
 }
@@ -46,7 +50,6 @@ impl FromStr for RewindWindowId {
         match s {
             "main" => Ok(RewindWindowId::Main),
             "home" | "settings" => Ok(RewindWindowId::Home),
-            "search" => Ok(RewindWindowId::Search),
             "onboarding" => Ok(RewindWindowId::Onboarding),
             "permission-recovery" => Ok(RewindWindowId::PermissionRecovery),
             _ => Ok(RewindWindowId::Main),
@@ -59,7 +62,6 @@ impl std::fmt::Display for RewindWindowId {
         match self {
             RewindWindowId::Main => write!(f, "main"),
             RewindWindowId::Home => write!(f, "home"),
-            RewindWindowId::Search => write!(f, "search"),
             RewindWindowId::Onboarding => write!(f, "onboarding"),
             RewindWindowId::PermissionRecovery => write!(f, "permission-recovery"),
         }
@@ -71,7 +73,6 @@ impl RewindWindowId {
         match self {
             RewindWindowId::Main => "main",
             RewindWindowId::Home => "home",
-            RewindWindowId::Search => "search",
             RewindWindowId::Onboarding => "onboarding",
             RewindWindowId::PermissionRecovery => "permission-recovery",
         }
@@ -81,7 +82,6 @@ impl RewindWindowId {
         match self {
             RewindWindowId::Main => "Dystil",
             RewindWindowId::Home => "Dystil",
-            RewindWindowId::Search => "search",
             RewindWindowId::Onboarding => "onboarding",
             RewindWindowId::PermissionRecovery => "fix permissions",
         }
@@ -91,7 +91,6 @@ impl RewindWindowId {
         Some(match self {
             RewindWindowId::Main => (800.0, 600.0),
             RewindWindowId::Home => (800.0, 600.0),
-            RewindWindowId::Search => (400.0, 56.0),
             RewindWindowId::Onboarding => (450.0, 500.0),
             RewindWindowId::PermissionRecovery => (500.0, 580.0),
         })
@@ -107,7 +106,6 @@ impl RewindWindowId {
 pub enum ShowRewindWindow {
     Main,
     Home { page: Option<String> },
-    Search { query: Option<String> },
     Onboarding,
     PermissionRecovery,
 }
@@ -161,7 +159,7 @@ impl ShowRewindWindow {
 
         // Set size clamped to screen, with minimum enforced
         if let Some(min) = id.min_size() {
-            let (w, h) = screen_aware_size(app, 1200.0, 850.0);
+            let (w, h) = screen_aware_size(app, PRIMARY_DEFAULT_SIZE.0, PRIMARY_DEFAULT_SIZE.1);
             builder = builder
                 .inner_size(w.max(min.0), h.max(min.1))
                 .min_inner_size(min.0, min.1);
@@ -197,21 +195,8 @@ impl ShowRewindWindow {
         match self {
             ShowRewindWindow::Main => RewindWindowId::Main,
             ShowRewindWindow::Home { page: _ } => RewindWindowId::Home,
-            ShowRewindWindow::Search { query: _ } => RewindWindowId::Search,
             ShowRewindWindow::Onboarding => RewindWindowId::Onboarding,
             ShowRewindWindow::PermissionRecovery => RewindWindowId::PermissionRecovery,
-        }
-    }
-
-    pub fn metadata(&self) -> Option<String> {
-        match self {
-            ShowRewindWindow::Main => None,
-            ShowRewindWindow::Home { page: _ } => None,
-            ShowRewindWindow::Search { query } => {
-                Some(query.clone().unwrap_or_default().to_string())
-            }
-            ShowRewindWindow::Onboarding => None,
-            ShowRewindWindow::PermissionRecovery => None,
         }
     }
 
@@ -452,62 +437,6 @@ impl ShowRewindWindow {
                 if onboarding_store.is_completed {
                     return ShowRewindWindow::Home { page: None }.show(app);
                 }
-            }
-
-            if id.label() == RewindWindowId::Search.label() {
-                // Navigate to /search to reset state (clear previous results)
-                let nav_url = if let Some(query) = self.metadata() {
-                    format!("/search/{}", query)
-                } else {
-                    "/search".to_string()
-                };
-                let _ = window
-                    .eval(&format!("window.location.replace(`{}`);", nav_url))
-                    .ok();
-
-                // Reposition to center of primary monitor
-                if let Ok(Some(monitor)) = app.primary_monitor() {
-                    let logical: LogicalSize<f64> =
-                        monitor.size().to_logical(monitor.scale_factor());
-                    let pos = monitor.position();
-                    let scale = monitor.scale_factor();
-                    let origin_x = pos.x as f64 / scale;
-                    let origin_y = pos.y as f64 / scale;
-                    let bar_w = 680.0_f64.min(logical.width - 40.0);
-                    let bar_h = 80.0;
-                    let x = origin_x + (logical.width - bar_w) / 2.0;
-                    let y = origin_y + logical.height * 0.22;
-                    window
-                        .set_size(Size::Logical(LogicalSize::new(bar_w, bar_h)))
-                        .ok();
-                    window
-                        .set_position(Position::Logical(LogicalPosition::new(x, y)))
-                        .ok();
-                }
-
-                // Bring to front with high level (already class-swizzled to NSPanel)
-                #[cfg(target_os = "macos")]
-                {
-                    let window_clone = window.clone();
-                    run_on_main_thread_safe(app, move || {
-                        use objc::{msg_send, sel, sel_impl};
-                        use tauri_nspanel::cocoa::base::id;
-                        if let Ok(ns_win) = window_clone.ns_window() {
-                            let ns_win = ns_win as id;
-                            unsafe {
-                                let _: () = msg_send![ns_win, setLevel: 1002_i64];
-                                let _: () = msg_send![ns_win, orderFrontRegardless];
-                                let _: () = msg_send![ns_win, makeKeyWindow];
-                            }
-                        }
-                    });
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    window.show().ok();
-                    window.set_focus().ok();
-                }
-                return Ok(window);
             }
 
             // Settings window: navigate to the requested section if specified
@@ -1202,7 +1131,7 @@ impl ShowRewindWindow {
                     None => "/home".to_string(),
                 };
 
-                let builder = self.window_builder(app, &url).focused(true);
+                let builder = self.window_builder(app, &url).center().focused(true);
                 #[cfg(target_os = "macos")]
                 let builder = {
                     use tauri::window::Color;
@@ -1230,106 +1159,6 @@ impl ShowRewindWindow {
                             );
                         }
                     }
-                }
-
-                window
-            }
-            ShowRewindWindow::Search { query } => {
-                let mut url = "/search".to_string();
-                info!("query: {:?}", query);
-                if let Some(q) = query {
-                    url.push_str(&format!("{}", q));
-                }
-
-                // Raycast-style floating search bar — compact, centered, no chrome
-                // Start thin (just the input row), JS will resize as results appear
-                let bar_w = 680.0_f64;
-                let bar_h = 80.0; // input row + footer
-                let (x, y) = if let Ok(Some(monitor)) = app.primary_monitor() {
-                    let logical: LogicalSize<f64> =
-                        monitor.size().to_logical(monitor.scale_factor());
-                    let pos = monitor.position();
-                    let scale = monitor.scale_factor();
-                    let origin_x = pos.x as f64 / scale;
-                    let origin_y = pos.y as f64 / scale;
-                    (
-                        origin_x + (logical.width - bar_w.min(logical.width - 40.0)) / 2.0,
-                        origin_y + logical.height * 0.22, // ~22% from top
-                    )
-                } else {
-                    (200.0, 140.0)
-                };
-                let bar_w = if let Ok(Some(monitor)) = app.primary_monitor() {
-                    let logical: LogicalSize<f64> =
-                        monitor.size().to_logical(monitor.scale_factor());
-                    bar_w.min(logical.width - 40.0)
-                } else {
-                    bar_w
-                };
-
-                let builder =
-                    WebviewWindow::builder(app, self.id().label(), WebviewUrl::App(url.into()))
-                        .title("")
-                        .visible(false) // show after panel conversion
-                        .accept_first_mouse(true)
-                        .shadow(true)
-                        .decorations(false)
-                        .transparent(true)
-                        .always_on_top(true)
-                        .visible_on_all_workspaces(true)
-                        .inner_size(bar_w, bar_h)
-                        .min_inner_size(400.0, 56.0)
-                        .position(x, y)
-                        .focused(true)
-                        .resizable(true);
-
-                let window = super::finalize_webview_window(builder.build()?);
-
-                // Skip NSPanel conversion for search — it causes SIGSEGV crashes
-                // in objc_autoreleasePoolPop on macOS 26. Use raw NSWindow level
-                // instead to float above fullscreen apps without NSPanel.
-                #[cfg(target_os = "macos")]
-                {
-                    let window_clone = window.clone();
-                    run_on_main_thread_safe(app, move || {
-                        use objc::{msg_send, sel, sel_impl};
-                        use tauri_nspanel::cocoa::base::id;
-                        use tauri_nspanel::objc_foundation::INSObject;
-                        use tauri_nspanel::raw_nspanel::object_setClass;
-                        if let Ok(ns_win) = window_clone.ns_window() {
-                            let ns_win = ns_win as id;
-                            unsafe {
-                                // Swizzle NSWindow → NSPanel class for non-activating behavior
-                                // Do NOT use to_panel() — its Id::from_retained_ptr causes
-                                // use-after-free on window.close() → SIGSEGV
-                                let nspanel_class: id = msg_send![
-                                    tauri_nspanel::raw_nspanel::RawNSPanel::class(),
-                                    class
-                                ];
-                                object_setClass(ns_win, nspanel_class);
-
-                                // Level 1002 — above fullscreen (CGShieldingWindowLevel+2)
-                                let _: () = msg_send![ns_win, setLevel: 1002_i64];
-
-                                // NSNonactivatingPanelMask (128) — appear over fullscreen
-                                // without triggering Space switch
-                                let current: i32 = msg_send![ns_win, styleMask];
-                                let _: () = msg_send![ns_win, setStyleMask: current | 128];
-
-                                // CanJoinAllSpaces (1) + FullScreenAuxiliary (256)
-                                let _: () = msg_send![ns_win, setCollectionBehavior: 257_u64];
-
-                                let _: () = msg_send![ns_win, setHidesOnDeactivate: false];
-                                let _: () = msg_send![ns_win, orderFrontRegardless];
-                                let _: () = msg_send![ns_win, makeKeyWindow];
-                            }
-                        }
-                    });
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    let _ = window.show();
-                    window.set_focus().ok();
                 }
 
                 window

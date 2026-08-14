@@ -51,8 +51,7 @@ pub struct AiPiiRedactionSettingsView {
 
 fn ai_pii_redaction_settings(settings: &SettingsStore) -> AiPiiRedactionSettingsView {
     #[cfg(feature = "onnx-cpu")]
-    let model_downloaded =
-        dystil_redact::onnx::OnnxConfig::default().model_files_present();
+    let model_downloaded = dystil_redact::onnx::OnnxConfig::default().model_files_present();
     #[cfg(not(feature = "onnx-cpu"))]
     let model_downloaded = false;
 
@@ -129,11 +128,13 @@ pub async fn set_ai_pii_redaction_enabled(
     updated.save(&app_handle)?;
 
     if was_recording {
-        if let Err(error) = crate::recording::stop_capture(state.clone(), app_handle.clone()).await {
+        if let Err(error) = crate::recording::stop_capture(state.clone(), app_handle.clone()).await
+        {
             let _ = previous.save(&app_handle);
             return Err(error);
         }
-        if let Err(error) = crate::recording::start_capture(state.clone(), app_handle.clone()).await {
+        if let Err(error) = crate::recording::start_capture(state.clone(), app_handle.clone()).await
+        {
             let rollback_save_error = previous.save(&app_handle).err();
             let rollback_start_error = crate::recording::start_capture(state, app_handle.clone())
                 .await
@@ -593,10 +594,6 @@ fn present_existing_window(app_handle: &tauri::AppHandle, label: &str) -> bool {
             let _ = ShowRewindWindow::Home { page: None }.show(app_handle);
             true
         }
-        "search" => {
-            let _ = ShowRewindWindow::Search { query: None }.show(app_handle);
-            true
-        }
         "onboarding" => {
             let _ = ShowRewindWindow::Onboarding.show(app_handle);
             true
@@ -629,7 +626,6 @@ pub fn focus_existing_window(app_handle: tauri::AppHandle) {
         "main",
         "main-window",
         "home",
-        "search",
         "onboarding",
         "permission-recovery",
         "google-calendar-auth",
@@ -879,20 +875,15 @@ pub async fn show_window(
     app_handle: tauri::AppHandle,
     window: ShowRewindWindow,
 ) -> Result<(), String> {
-    // Close Main window when opening other windows, EXCEPT for Search
+    // Close Main window when opening other windows
     let window_id = window.id();
-    if !matches!(window_id, RewindWindowId::Main | RewindWindowId::Search) {
+    if !matches!(window_id, RewindWindowId::Main) {
         // Hide Main without restoring the previous frontmost app — we're
         // transitioning to another dystil window so focus should stay
         // with us, not bounce to the previous app.
         ShowRewindWindow::Main
             .hide_without_restore(&app_handle)
             .map_err(|e| e.to_string())?;
-    }
-
-    // Hide Main timeline when opening Search (search is standalone, timeline shows on result pick)
-    if matches!(window_id, RewindWindowId::Search) {
-        hide_main_window(app_handle.clone());
     }
 
     window.show(&app_handle).map_err(|e| e.to_string())?;
@@ -1010,64 +1001,6 @@ pub async fn ensure_webview_focus(_app_handle: tauri::AppHandle) -> Result<(), S
             }
         });
     }
-    Ok(())
-}
-
-/// Resize the Search NSPanel. Regular Tauri setSize doesn't work on NSPanels.
-#[tauri::command]
-#[specta::specta]
-pub async fn resize_search_window(
-    app_handle: tauri::AppHandle,
-    width: f64,
-    height: f64,
-) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        use crate::window::run_on_main_thread_safe;
-        use tauri_nspanel::ManagerExt;
-
-        let app = app_handle.clone();
-        run_on_main_thread_safe(&app_handle, move || {
-            let label = RewindWindowId::Search.label();
-            // Check window still exists before touching the panel
-            if app.get_webview_window(&label).is_none() {
-                return;
-            }
-            if let Ok(panel) = app.get_webview_panel(&label) {
-                unsafe {
-                    use objc::{msg_send, sel, sel_impl};
-                    use tauri_nspanel::cocoa::foundation::{NSPoint, NSRect, NSSize};
-
-                    // Get current frame to preserve position (x, y)
-                    let frame: NSRect = msg_send![&*panel, frame];
-                    // New frame: keep x, adjust y so top edge stays fixed
-                    let new_h = height;
-                    let new_y = frame.origin.y + frame.size.height - new_h;
-                    let new_frame = NSRect::new(
-                        NSPoint::new(frame.origin.x, new_y),
-                        NSSize::new(width, new_h),
-                    );
-                    // animate: false (NO) to avoid use-after-free if panel closes mid-animation
-                    let _: () =
-                        msg_send![&*panel, setFrame: new_frame display: true animate: false];
-                }
-            } else {
-                // Fallback: try as regular window
-                if let Some(window) = app.get_webview_window(&label) {
-                    let _ = window.set_size(tauri::LogicalSize::new(width, height));
-                }
-            }
-        });
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let label = RewindWindowId::Search.label();
-        if let Some(window) = app_handle.get_webview_window(&label) {
-            let _ = window.set_size(tauri::LogicalSize::new(width, height));
-        }
-    }
-
     Ok(())
 }
 
@@ -1846,21 +1779,6 @@ pub async fn set_window_size(
 ) -> Result<(), String> {
     window
         .set_size(&app_handle, width, height)
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn open_search_window(
-    app_handle: tauri::AppHandle,
-    query: Option<String>,
-) -> Result<(), String> {
-    ShowRewindWindow::Main
-        .close(&app_handle)
-        .map_err(|e| e.to_string())?;
-    ShowRewindWindow::Search { query }
-        .show(&app_handle)
         .map_err(|e| e.to_string())?;
     Ok(())
 }

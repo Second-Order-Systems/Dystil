@@ -122,11 +122,11 @@ pub(crate) fn restore_frontmost_app_if_external_with_app(app: Option<&AppHandle>
         return;
     }
 
-    // Check if Settings, Chat, or Search windows exist in Tauri's registry.
+    // Check if Settings or Chat windows exist in Tauri's registry.
     // These are regular windows (not panels) that may be on another Space —
     // we don't want to activate a previous app and bury them.
     if let Some(app) = app {
-        let non_panel_labels = ["home", "chat", "search"];
+        let non_panel_labels = ["home", "chat"];
         for label in &non_panel_labels {
             if app.get_webview_window(label).is_some() {
                 info!(
