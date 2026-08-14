@@ -306,6 +306,11 @@ Only Phase 2 crosses the Rust boundary. Run the app with `bunx tauri dev` from `
 `cargo run`, which skips `beforeDevCommand` so Next never starts. `DYSTIL_CLOUD_BASE_URL` must be
 unset in a community build or `build.rs` panics by design.
 
+> **Do not run `bun run build` while `bunx tauri dev` is running.** They share `.next/`, so the export
+> build overwrites what the dev server is serving. The running app then 404s on every stylesheet and
+> chunk and renders as a blank grey window — which looks exactly like a catastrophic CSS failure and
+> is not one. Recover by stopping the dev server, `rm -rf .next`, and restarting it.
+
 Visual acceptance: with mocks on, walk A → correction → settle → C and confirm the queue-pill and
 empty-queue guards. The window opens at 1180×800 centred
 (`src-tauri/src/window/show.rs :: PRIMARY_DEFAULT_SIZE`); confirm the sticky decision row stays visible
