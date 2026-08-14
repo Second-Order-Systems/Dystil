@@ -110,10 +110,10 @@ export const CORRECTION_OPTIONS: CorrectionOption[] = [
 ];
 
 export const FIXTURE_SHORTCUTS: Shortcut[] = [
-  { id: "sc-1", title: "One review pass over all four", meta: "Used 6x" },
-  { id: "sc-2", title: "Friday digest from the week you already read", meta: "Used 3x" },
-  { id: "sc-3", title: "Turn website notes into a decision brief", meta: "Used 2x" },
-  { id: "sc-4", title: "Trace the repeating capture events", meta: "Used 1x" },
+  { id: "sc-1", title: "One review pass over all four", meta: "Used 6 times", kind: "Runbook", runnable: true },
+  { id: "sc-2", title: "Friday digest from the week you already read", meta: "Used 3 times", kind: "Prompt", runnable: true },
+  { id: "sc-3", title: "Turn website notes into a decision brief", meta: "Used twice", kind: "Prompt", runnable: false },
+  { id: "sc-4", title: "Trace the repeating capture events", meta: "Used once", kind: "Runbook", runnable: true },
 ];
 
 /** State B's meta line. */

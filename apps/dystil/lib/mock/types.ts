@@ -100,6 +100,10 @@ export type Shortcut = {
   title: string;
   /** e.g. "Used 6x". */
   meta: string;
+  /** Displayed as a badge: "Prompt", "Runbook", "Tool you have". */
+  kind: string;
+  /** Drives whether "Run it" is offered alongside "Copy". */
+  runnable: boolean;
 };
 
 /**

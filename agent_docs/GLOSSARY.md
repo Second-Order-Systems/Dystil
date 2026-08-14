@@ -21,7 +21,9 @@ as a struct.**
 | **Work log / work trail** | *nothing* | Same as above — candidate outward-facing names for the same concept. |
 | **Surface visit** | `dystil-work-index` | The real unit. "Deterministic construction of compact surface visits from captured frames." ~18 references. |
 | **Worth fixing** | `dystil-insights`, `components/dystil/pages/worth-fixing.tsx` | Real, both backend and UI. Findings with evidence. |
-| **Ready to use** | `components/dystil/pages/ready-to-use.tsx`, `dystil-insights` via `ready_to_use_commands.rs` | Real. Kept, reusable artifacts. **Not** `dystil-automation` — that crate backs `automation_commands.rs`, a separate subsystem the UI never calls. |
+| **Your shortcuts** | `components/dystil/home/your-shortcuts.tsx`, `dystil-insights` via `ready_to_use_commands.rs` | Real. Kept, reusable artifacts. Called **"Ready to use"** before the v2 design; the route is still `/home/ready`. **Not** `dystil-automation` — that crate backs `automation_commands.rs`, a separate subsystem the UI never calls. |
+| **The pile** | `components/dystil/home/the-pile.tsx` | The Home route's default state: unsettled findings, one at a time. Deliberately not a list. |
+| **Settle** | `HomeActions.settle` in `lib/mock/types.ts` | To decide a finding, in either direction, and remove it from the queue. Distinct from **defer**, which rotates it to the back and is not progress. |
 | **Ask for fix** | `components/dystil/pages/ask-for-fix.tsx` | Real UI surface. |
 | **Evidence** | `dystil-retrieval` | Real. Addressed by stable `evidence_id`. |
 | **Memory** | *no single type* | Loose umbrella for capture + work index + retrieval. Not a module. |

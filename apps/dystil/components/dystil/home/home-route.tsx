@@ -66,7 +66,7 @@ export function HomeRoute() {
       item={item}
       remaining={queue.length}
       originalTotal={originalTotal}
-      onSeeAll={() => router.push("/home/ready")}
+      onSeeAll={() => router.push("/home/all")}
       onRun={() => {
         if (queue.length === 1) setJustCleared(true);
         settleAndRun(currentId);
