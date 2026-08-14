@@ -12,6 +12,11 @@ import type {
   AskUnderstanding,
 } from "@/lib/utils/tauri";
 import { useAskForFix } from "@/components/dystil/ask-for-fix/use-ask-for-fix";
+import { Droplet } from "@/components/dystil/primitives/droplet";
+import {
+  SegmentedTrack,
+  type SegmentState,
+} from "@/components/dystil/primitives/segmented-track";
 
 const examples = [
   "Every Friday I rebuild the same client report from scattered files.",
@@ -21,46 +26,63 @@ const examples = [
 
 const phaseNames = ["Understand", "Follow up", "Consolidate", "Present"] as const;
 
-function DystilAvatar() {
+/**
+ * Dystil's turns are marked with the droplet rather than an avatar bubble —
+ * the design uses the motif, not a chat-app convention. The current turn gets
+ * a slightly larger mark so the eye lands on it.
+ */
+function TurnMark({ current = false }: { current?: boolean }) {
   return (
-    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-[11px] bg-[#1d2420] text-[13px] font-semibold text-white shadow-[0_7px_18px_rgba(26,38,30,0.16)]" aria-hidden="true">
-      D
-    </div>
+    <span className="flex shrink-0 justify-center pt-[6px]">
+      <Droplet
+        width={current ? 11 : 9}
+        height={current ? 14 : 12}
+        className="text-green-mark"
+      />
+    </span>
   );
 }
 
+/**
+ * The four-phase machine is kept; only its presentation changes. The phases
+ * map onto the segmented track, the app's one device for "progress through a
+ * finite thing".
+ */
 function PhaseRail({ session }: { session: AskSessionView | null }) {
-  const current = session ? phaseNames.findIndex((name) => name.toLowerCase().replace(" ", "_") === session.phase) : 0;
+  const current = session
+    ? phaseNames.findIndex((name) => name.toLowerCase().replace(" ", "_") === session.phase)
+    : 0;
+  const segments: SegmentState[] = phaseNames.map((_, index) =>
+    index < current ? "settled" : index === current ? "active" : "waiting",
+  );
   return (
-    <ol className="flex items-center gap-2" aria-label="Conversation progress">
-      {phaseNames.map((name, index) => (
-        <li key={name} className="flex items-center gap-2">
-          <span className={`h-1.5 w-8 rounded-full transition-colors ${index <= current ? "bg-[#16805c]" : "bg-[#d9ded9]"}`} />
-          <span className="sr-only">{name}{index === current ? ", current phase" : ""}</span>
-        </li>
-      ))}
-    </ol>
+    <SegmentedTrack
+      segments={segments}
+      label={`Phase ${current + 1} of ${phaseNames.length}: ${phaseNames[current] ?? phaseNames[0]}`}
+    />
   );
 }
 
 function ConversationMessages({ session }: { session: AskSessionView }) {
+  const lastAssistant = [...session.messages].reverse().find((m) => m.role !== "user");
   return (
-    <div className="space-y-7">
-      {session.messages.map((message) => message.role === "user" ? (
-        <div key={message.messageId} className="flex justify-end">
-          <div className="max-w-[min(78%,620px)] whitespace-pre-wrap break-words rounded-[16px_16px_4px_16px] bg-[#252b27] px-4 py-3 text-[15px] leading-6 text-[#f5f7f5] shadow-[0_8px_22px_rgba(24,31,27,0.12)]">
-            {message.text}
+    <div className="space-y-6">
+      {session.messages.map((message) =>
+        message.role === "user" ? (
+          <div key={message.messageId} className="flex justify-end">
+            <div className="max-w-[min(78%,620px)] whitespace-pre-wrap break-words rounded-card bg-chrome px-4 py-3 text-body-lg leading-[1.55] text-ink-2">
+              {message.text}
+            </div>
           </div>
-        </div>
-      ) : (
-        <div key={message.messageId} className="grid grid-cols-[36px_minmax(0,1fr)] gap-3.5">
-          <DystilAvatar />
-          <div className="min-w-0 pt-1">
-            <p className="mb-1.5 text-[12px] font-medium text-[#78817b]">Dystil</p>
-            <div className="max-w-[70ch] whitespace-pre-wrap break-words text-[16px] leading-[1.65] text-[#252b27]">{message.text}</div>
+        ) : (
+          <div key={message.messageId} className="flex gap-3">
+            <TurnMark current={message.messageId === lastAssistant?.messageId} />
+            <div className="min-w-0 max-w-[70ch] whitespace-pre-wrap break-words text-pretty text-hero leading-[1.6] text-ink-2">
+              {message.text}
+            </div>
           </div>
-        </div>
-      ))}
+        ),
+      )}
     </div>
   );
 }
@@ -255,15 +277,15 @@ export function AskForFix() {
     <div className="mx-auto flex min-h-[calc(100vh-112px)] max-w-[900px] flex-col pb-8">
       <header className="flex flex-wrap items-start justify-between gap-5 border-b border-[#dde1dd] pb-5">
         <div><h1 className="text-balance text-[30px] font-medium leading-tight tracking-[-0.03em] text-[#171d19]">Ask for a fix</h1><p className="mt-2 max-w-[62ch] text-[14px] leading-6 text-[#69716b]">Bring any problem that annoys you. Dystil will understand it before proposing an answer.</p></div>
-        <div className="flex flex-col items-end gap-3"><PhaseRail session={session} />{session && <button type="button" disabled={busy} onClick={() => void startNew()} className="inline-flex items-center gap-1.5 text-[12px] font-medium text-[#657069] hover:text-[#116849] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-[#16805c] disabled:opacity-50"><RotateCcw size={13} />New problem</button>}</div>
+        <div className="flex flex-col items-end gap-3"><PhaseRail session={session} />{session && <button type="button" disabled={busy} onClick={() => void startNew()} className="rounded-strip px-[10px] py-[5px] text-meta font-semibold text-ink-3 transition-colors hover:bg-chrome hover:text-ink disabled:opacity-50"><RotateCcw size={13} />Start over</button>}</div>
       </header>
 
       <div className="flex-1 py-7" aria-live="polite">
-        {loading ? <div className="grid grid-cols-[36px_1fr] gap-3.5"><div className="h-9 w-9 animate-pulse rounded-[11px] bg-[#dfe4e0]" /><div className="space-y-2 pt-1"><div className="h-4 w-24 animate-pulse rounded bg-[#dfe4e0]" /><div className="h-5 max-w-md animate-pulse rounded bg-[#e7eae7]" /></div></div> : session?.messages.length ? <ConversationMessages session={session} /> : <div className="grid grid-cols-[36px_minmax(0,1fr)] gap-3.5"><DystilAvatar /><div className="pt-1"><p className="mb-2 text-[12px] font-medium text-[#78817b]">Dystil</p><h2 className="max-w-[650px] text-balance text-[25px] font-medium leading-[1.35] tracking-[-0.03em] text-[#202722]">What problem keeps stealing your attention?</h2><p className="mt-2 max-w-[64ch] text-[14px] leading-6 text-[#68716a]">It can be repetitive work, a slow handoff, a confusing process, or something you cannot quite name yet. Start messy.</p></div></div>}
+        {loading ? <div className="flex gap-3"><TurnMark /><div className="space-y-2 pt-1"><div className="h-4 w-24 animate-pulse rounded bg-line-2" /><div className="h-5 max-w-md animate-pulse rounded bg-line-3" /></div></div> : session?.messages.length ? <ConversationMessages session={session} /> : <div className="flex gap-3"><TurnMark current /><div><h2 className="max-w-[650px] text-pretty font-display text-display-sm font-normal text-ink">What problem keeps stealing your attention?</h2><p className="mt-2 max-w-[64ch] text-body-lg text-muted-ink">It can be repetitive work, a slow handoff, a confusing process, or something you cannot quite name yet. Start messy.</p></div></div>}
 
         {optimisticText && <div className="mt-7 flex justify-end"><div className="max-w-[min(78%,620px)] rounded-[16px_16px_4px_16px] bg-[#252b27] px-4 py-3 text-[15px] leading-6 text-white">{optimisticText}</div></div>}
 
-        {busy && <div className="mt-7 grid grid-cols-[36px_minmax(0,1fr)] gap-3.5"><DystilAvatar /><div className="pt-1"><div className="inline-flex items-center gap-2 rounded-[10px] bg-[#edf1ee] px-3 py-2 text-[13px] text-[#5e6861]"><span className="dystil-thinking-dots" aria-hidden="true"><i /><i /><i /></span><span>{session?.phase === "present" || session?.locked ? "Building the answer" : "Looking through relevant work..."}</span></div><button type="button" onClick={() => void cancel()} className="ml-3 inline-flex items-center gap-1.5 text-[12px] font-medium text-[#717a74] hover:text-[#8b3f32] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8b3f32]"><Square size={10} fill="currentColor" />Stop</button></div></div>}
+        {busy && <div className="mt-7 flex gap-3"><TurnMark current /><div><div className="inline-flex items-center gap-2 rounded-tile bg-recessed px-3 py-2 text-ui text-muted-ink"><span className="dystil-thinking-dots" aria-hidden="true"><i /><i /><i /></span><span>{session?.phase === "present" || session?.locked ? "Building the answer" : "Looking through relevant work..."}</span></div><button type="button" onClick={() => void cancel()} className="ml-3 inline-flex items-center gap-1.5 text-ui-sm font-semibold text-marigold-text hover:underline"><Square size={10} fill="currentColor" />Stop</button></div></div>}
 
         {!busy && question && <QuestionCard question={question} questionId={session?.currentQuestionId ?? null} questionNumber={session?.questionCount ?? 1} maxQuestions={session?.maxQuestions ?? 12} disabled={busy} onCustom={() => setCustomAnswer(true)} onSubmit={(text, event) => void submit(text, event)} />}
         {!busy && isConsolidating && session && <UnderstandingCard understanding={session.understanding} busy={busy} onConfirm={() => void confirm()} onRefine={() => setCustomAnswer(true)} />}
