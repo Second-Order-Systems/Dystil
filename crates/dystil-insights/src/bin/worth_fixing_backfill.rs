@@ -10,16 +10,18 @@ use async_trait::async_trait;
 use chrono::{DateTime, Days, FixedOffset, NaiveDate, TimeZone, Utc};
 use clap::Parser;
 use dystil_ai::{
-    AiAnswerRequest, AiAutomationRequest, AiAutomationRun, AiModelTier, AiRuntime,
-    AiRuntimeDescriptor, AiRuntimeError, AiRuntimeErrorCode, AiRuntimeEvent, AiRuntimeKind,
-    AiStructuredRequest, AiStructuredRun, CliProvider, ProviderKind, TeammateAnswerRun,
+    AiAnswerRequest, AiAutomationRequest, AiAutomationRun, AiModelTier, AiReasoningEffort,
+    AiRuntime, AiRuntimeDescriptor, AiRuntimeError, AiRuntimeErrorCode, AiRuntimeEvent,
+    AiRuntimeKind, AiStructuredRequest, AiStructuredRun, CliProvider, ProviderKind,
+    TeammateAnswerRun,
 };
 use dystil_insights::{
     capture_cursor, commit_compaction_checkpoint, compact_activity_incremental,
-    load_compaction_state, open_insights_database, pending_observation_stats,
-    release_bulk_backfill_job_observations, resolve_capture_evidence,
-    run_explorer_batch_with_compaction, run_steward_replay_wake, run_steward_wake,
-    CaptureAdmissionRules, CompactionConfig, ExplorerRunResult, SourceActivity,
+    copy_observations_for_steward_replay, load_compaction_state, open_insights_database,
+    pending_observation_stats, release_bulk_backfill_job_observations, resolve_capture_evidence,
+    run_explorer_batch_with_compaction, run_steward_replay_wake,
+    run_steward_replay_wake_with_reasoning, run_steward_wake, CaptureAdmissionRules,
+    CompactionConfig, ExplorerRunResult, SourceActivity,
 };
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
@@ -37,8 +39,12 @@ const MERGED_BATCH_LIMIT: usize = 200;
 )]
 struct Args {
     /// Dystil capture database. It is always opened read-only.
-    #[arg(long)]
-    capture_db: PathBuf,
+    #[arg(
+        long,
+        required_unless_present = "steward_replay_source",
+        conflicts_with = "steward_replay_source"
+    )]
+    capture_db: Option<PathBuf>,
 
     /// Durable Worth Fixing output database. This is created or resumed.
     #[arg(long)]
@@ -78,9 +84,42 @@ struct Args {
     #[arg(long)]
     steward_only: bool,
 
+    /// Existing insights database containing accepted Explorer observations.
+    /// Evidence and observations are copied into the fresh destination, then
+    /// only Steward is run. The source is opened read-only.
+    #[arg(long, conflicts_with_all = ["capture_db", "steward_only", "all", "max_batches", "from_date", "through_date"])]
+    steward_replay_source: Option<PathBuf>,
+
     /// Maximum observations in each Steward-only reconciliation packet.
-    #[arg(long, default_value_t = 40, requires = "steward_only")]
+    #[arg(long, default_value_t = 40)]
     steward_observation_limit: u32,
+
+    /// Stop a Steward replay after this many reconciliation packets.
+    #[arg(long)]
+    steward_replay_batches: Option<usize>,
+
+    /// Frontier-tier model used by Steward during this developer backfill.
+    #[arg(long, default_value = "gpt-5.6-sol")]
+    steward_model: String,
+
+    /// Provider reasoning effort for Steward-only replay: low, medium, or high.
+    #[arg(long, default_value = "medium", value_parser = parse_reasoning_effort)]
+    steward_reasoning_effort: String,
+}
+
+fn parse_reasoning_effort(value: &str) -> Result<String, String> {
+    match value {
+        "low" | "medium" | "high" => Ok(value.to_owned()),
+        _ => Err("must be one of: low, medium, high".into()),
+    }
+}
+
+fn reasoning_effort(value: &str) -> AiReasoningEffort {
+    match value {
+        "low" => AiReasoningEffort::Low,
+        "high" => AiReasoningEffort::High,
+        _ => AiReasoningEffort::Medium,
+    }
 }
 
 #[derive(Clone)]
@@ -126,6 +165,7 @@ impl TimeBounds {
 struct CodexRuntime {
     descriptor: AiRuntimeDescriptor,
     provider: CliProvider,
+    steward_model: String,
 }
 
 #[async_trait]
@@ -137,7 +177,7 @@ impl AiRuntime for CodexRuntime {
     fn model_for_tier(&self, tier: AiModelTier) -> String {
         match tier {
             AiModelTier::Economy => "gpt-5.6-luna".into(),
-            AiModelTier::Frontier => "gpt-5.6-sol".into(),
+            AiModelTier::Frontier => self.steward_model.clone(),
         }
     }
 
@@ -284,33 +324,40 @@ async fn count(pool: &SqlitePool, table: &str) -> Result<i64, sqlx::Error> {
         .await
 }
 
-async fn usage_totals(pool: &SqlitePool) -> Result<(i64, i64, i64, i64, i64), sqlx::Error> {
+async fn usage_totals_by_stage(
+    pool: &SqlitePool,
+) -> Result<Vec<(String, String, String, i64, i64, i64, i64, i64)>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT
+        "SELECT stage,model,status,
            COALESCE(SUM(CAST(json_extract(usage_json, '$.input_tokens') AS INTEGER)), 0),
            COALESCE(SUM(CAST(json_extract(usage_json, '$.cached_input_tokens') AS INTEGER)), 0),
            COALESCE(SUM(CAST(json_extract(usage_json, '$.output_tokens') AS INTEGER)), 0),
            COALESCE(SUM(CAST(json_extract(usage_json, '$.reasoning_output_tokens') AS INTEGER)), 0),
            COALESCE(SUM(latency_ms), 0)
          FROM (
-           SELECT usage_json, latency_ms FROM explorer_attempts WHERE status='accepted'
+           SELECT 'explorer' AS stage,ej.model,ea.status,ea.usage_json,ea.latency_ms
+           FROM explorer_attempts ea JOIN explorer_jobs ej ON ej.job_id=ea.job_id
            UNION ALL
-           SELECT usage_json, latency_ms FROM job_attempts WHERE status='accepted'
-         )",
+           SELECT 'steward' AS stage,ij.model,ja.status,ja.usage_json,ja.latency_ms
+           FROM job_attempts ja JOIN inference_jobs ij ON ij.job_id=ja.job_id
+         )
+         GROUP BY stage,model,status ORDER BY stage,model,status",
     )
-    .fetch_one(pool)
+    .fetch_all(pool)
     .await
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    if !args.steward_only && !args.all && args.max_batches.is_none() {
+    if args.steward_replay_source.is_none()
+        && !args.steward_only
+        && !args.all
+        && args.max_batches.is_none()
+    {
         return Err("choose --all or a bounded --max-batches value".into());
     }
     let timezone = args.timezone.parse::<FixedOffset>()?;
-    let bounds = TimeBounds::from_args(&args, timezone)?;
-    let capture = open_capture_database(&args.capture_db).await?;
     let insights = open_insights_database(&args.insights_db).await?;
     let codex_executable = std::fs::canonicalize(&args.codex)?;
     let provider = CliProvider {
@@ -319,6 +366,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         runtime_version: None,
         environment: args
             .codex_home
+            .clone()
             .map(std::fs::canonicalize)
             .transpose()?
             .map(|path| vec![("CODEX_HOME".into(), path.to_string_lossy().into_owned())])
@@ -329,10 +377,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         descriptor: AiRuntimeDescriptor {
             kind: AiRuntimeKind::Codex,
             provider_label: "codex".into(),
-            model: "gpt-5.6-sol".into(),
+            model: args.steward_model.clone(),
         },
         provider,
+        steward_model: args.steward_model.clone(),
     };
+    if let Some(source_path) = &args.steward_replay_source {
+        let source = open_capture_database(source_path).await?;
+        let source_identity = std::fs::canonicalize(source_path)?
+            .to_string_lossy()
+            .into_owned();
+        let copied =
+            copy_observations_for_steward_replay(&source, &insights, &source_identity).await?;
+        eprintln!("steward replay source: copied {copied} observations");
+        let local_day = Utc::now().with_timezone(&timezone).date_naive().to_string();
+        let replay_nonce = format!("steward-replay:{source_identity}");
+        let mut completed = 0_usize;
+        loop {
+            if args
+                .steward_replay_batches
+                .is_some_and(|limit| completed >= limit)
+            {
+                break;
+            }
+            let pending = pending_observation_stats(&insights).await?;
+            if pending.count == 0 {
+                break;
+            }
+            let result = run_steward_replay_wake_with_reasoning(
+                &insights,
+                &runtime,
+                &local_day,
+                &args.timezone,
+                "steward_replay",
+                args.steward_observation_limit,
+                &replay_nonce,
+                reasoning_effort(&args.steward_reasoning_effort),
+            )
+            .await?;
+            completed += 1;
+            eprintln!(
+                "steward replay batch {completed}: pending_observations={} result={result:?}",
+                pending.count
+            );
+        }
+        println!(
+            "steward replay complete: batches={completed}, observations={}, occurrences={}, opportunities={}, findings={}",
+            count(&insights, "observations").await?,
+            count(&insights, "occurrences").await?,
+            count(&insights, "opportunities").await?,
+            count(&insights, "findings").await?,
+        );
+        for (stage, model, status, input, cached, output, reasoning, latency) in
+            usage_totals_by_stage(&insights).await?
+        {
+            println!(
+                "{stage} model={model} attempts status={status}: input_tokens={input}, cached_input_tokens={cached}, output_tokens={output}, reasoning_output_tokens={reasoning}, latency_ms={latency}"
+            );
+        }
+        return Ok(());
+    }
+    let capture_path = args
+        .capture_db
+        .as_ref()
+        .expect("capture_db is required outside Steward replay")
+        .clone();
+    let bounds = TimeBounds::from_args(&args, timezone)?;
+    let capture = open_capture_database(&capture_path).await?;
     if args.steward_only {
         let released = release_bulk_backfill_job_observations(&insights).await?;
         eprintln!("steward-only replay: released {released} observations from bulk backfill jobs");
@@ -469,8 +580,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("steward result: {result:?}");
     }
 
-    let (input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, latency_ms) =
-        usage_totals(&insights).await?;
     println!(
         "backfill complete: batches={completed}, explorer_batches={accepted}, skipped={skipped}, evidence={}, observations={}, occurrences={}, opportunities={}, findings={}",
         count(&insights, "evidence").await?,
@@ -479,8 +588,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         count(&insights, "opportunities").await?,
         count(&insights, "findings").await?,
     );
-    println!(
-        "accepted model usage in this insights database: input_tokens={input_tokens}, cached_input_tokens={cached_input_tokens}, output_tokens={output_tokens}, reasoning_output_tokens={reasoning_tokens}, latency_ms={latency_ms}"
-    );
+    for (stage, model, status, input, cached, output, reasoning, latency) in
+        usage_totals_by_stage(&insights).await?
+    {
+        println!(
+            "{stage} model={model} attempts status={status}: input_tokens={input}, cached_input_tokens={cached}, output_tokens={output}, reasoning_output_tokens={reasoning}, latency_ms={latency}"
+        );
+    }
     Ok(())
 }

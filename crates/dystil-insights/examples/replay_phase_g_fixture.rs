@@ -274,6 +274,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             schema_version: 1,
             considered_observation_ids: observation_ids,
             opportunities,
+            candidate_assessments: vec![],
         },
         ApplyOptions::default(),
     )

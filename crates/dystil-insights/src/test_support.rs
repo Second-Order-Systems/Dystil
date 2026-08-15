@@ -103,6 +103,7 @@ pub(crate) async fn seed_findings(pool: &SqlitePool, count: usize) -> Vec<String
                 },
                 automation_potential: false,
             }],
+            candidate_assessments: vec![],
         };
         apply_reconciliation(pool, &job_id, &output, ApplyOptions::default())
             .await

@@ -29,6 +29,7 @@ allowed to run ahead of the code — never implement from it.
 | `PRIVACY_AND_TELEMETRY.md` | What leaves the device, per edition |
 | `DESIGN_SYSTEM.md` | Design tokens and component specs |
 | `GLOSSARY.md` | Marketing term → real type. Read this before trusting a noun. |
+| `WORTH_FIXING_SEMANTIC_STEWARD_PLAN.md` | Approved semantic grouping, diagnostics, and Steward-only replay plan |
 | `TELEMETRY_FOUNDATION_PLAN.md` | Telemetry design and constraints |
 | `A11Y_CAPTURE_FOLLOWUPS.md` | Open accessibility-capture work |
 

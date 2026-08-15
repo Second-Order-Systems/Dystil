@@ -11,9 +11,10 @@ use thiserror::Error;
 
 use crate::{
     cadence_supported, derive_eligibility, handoff_preview, rank, select_top, user_label, Cadence,
-    Construct, DispositionKind, EligibilityContext, EvidenceRecord, FindingCandidate, FindingPage,
-    HandoffType, ObservationCertainty, ObservationRecord, OpportunityStatus, ReconciliationOutput,
-    WorthFixingCard, WorthFixingEvidenceLine, WorthFixingSummary,
+    CandidateDecision, Construct, DispositionKind, EligibilityContext, EvidenceRecord,
+    FindingCandidate, FindingPage, HandoffType, ObservationCertainty, ObservationRecord,
+    OpportunityStatus, ReconciliationOutput, WorthFixingCard, WorthFixingEvidenceLine,
+    WorthFixingSummary,
 };
 
 const SCHEMA_VERSION: i64 = 5;
@@ -38,6 +39,147 @@ pub type Result<T> = std::result::Result<T, InsightsError>;
 fn has_duplicates(values: &[String]) -> bool {
     let mut seen = HashSet::with_capacity(values.len());
     values.iter().any(|value| !seen.insert(value))
+}
+
+fn validate_candidate_assessments(
+    output: &ReconciliationOutput,
+    expected_observation_ids: &[String],
+) -> Result<()> {
+    if output.candidate_assessments.len() > 8 {
+        return Err(InsightsError::Invalid(
+            "reconciliation has too many candidate assessments".into(),
+        ));
+    }
+
+    let expected: HashSet<&str> = expected_observation_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let opportunity_ids: HashSet<&str> = output
+        .opportunities
+        .iter()
+        .map(|opportunity| opportunity.local_id.as_str())
+        .collect();
+    if output
+        .opportunities
+        .iter()
+        .any(|opportunity| opportunity.local_id.is_empty())
+    {
+        return Err(InsightsError::Invalid(
+            "opportunity local_id is empty".into(),
+        ));
+    }
+    if opportunity_ids.len() != output.opportunities.len() {
+        return Err(InsightsError::Invalid(
+            "reconciliation repeats an opportunity local_id".into(),
+        ));
+    }
+
+    let mut assessment_ids = HashSet::new();
+    let mut covered_observations = HashSet::new();
+    let mut linked_opportunities = HashSet::new();
+    if !expected_observation_ids.is_empty() && output.candidate_assessments.is_empty() {
+        return Err(InsightsError::Invalid(
+            "reconciliation has no candidate assessments".into(),
+        ));
+    }
+    for assessment in &output.candidate_assessments {
+        if assessment.local_id.is_empty() || !assessment_ids.insert(assessment.local_id.as_str()) {
+            return Err(InsightsError::Invalid(
+                "candidate assessment local_id is empty or repeated".into(),
+            ));
+        }
+        if assessment.observation_ids.is_empty() || has_duplicates(&assessment.observation_ids) {
+            return Err(InsightsError::Invalid(
+                "candidate assessment has empty or repeated observations".into(),
+            ));
+        }
+        for observation_id in &assessment.observation_ids {
+            if !expected.contains(observation_id.as_str()) {
+                return Err(InsightsError::Invalid(
+                    "candidate assessment uses an observation outside its job".into(),
+                ));
+            }
+            if !covered_observations.insert(observation_id.as_str()) {
+                return Err(InsightsError::Invalid(
+                    "candidate assessments overlap observations".into(),
+                ));
+            }
+        }
+
+        match assessment.decision {
+            CandidateDecision::Qualified => {
+                let Some(opportunity_local_id) = assessment.opportunity_local_id.as_deref() else {
+                    return Err(InsightsError::Invalid(
+                        "qualified assessment has no opportunity".into(),
+                    ));
+                };
+                let opportunity = output
+                    .opportunities
+                    .iter()
+                    .find(|opportunity| opportunity.local_id == opportunity_local_id)
+                    .ok_or_else(|| {
+                        InsightsError::Invalid(
+                            "candidate assessment references an unknown opportunity".into(),
+                        )
+                    })?;
+                if opportunity.finding.is_none() {
+                    return Err(InsightsError::Invalid(
+                        "qualified assessment opportunity has no finding".into(),
+                    ));
+                }
+                if !linked_opportunities.insert(opportunity_local_id) {
+                    return Err(InsightsError::Invalid(
+                        "opportunity is linked from multiple assessments".into(),
+                    ));
+                }
+            }
+            CandidateDecision::Watching => {
+                let Some(opportunity_local_id) = assessment.opportunity_local_id.as_deref() else {
+                    return Err(InsightsError::Invalid(
+                        "watching assessment has no opportunity".into(),
+                    ));
+                };
+                let opportunity = output
+                    .opportunities
+                    .iter()
+                    .find(|opportunity| opportunity.local_id == opportunity_local_id)
+                    .ok_or_else(|| {
+                        InsightsError::Invalid(
+                            "candidate assessment references an unknown opportunity".into(),
+                        )
+                    })?;
+                if opportunity.finding.is_some() || assessment.missing_to_qualify.is_empty() {
+                    return Err(InsightsError::Invalid(
+                        "watching assessment must explain missing qualification evidence".into(),
+                    ));
+                }
+                if !linked_opportunities.insert(opportunity_local_id) {
+                    return Err(InsightsError::Invalid(
+                        "opportunity is linked from multiple assessments".into(),
+                    ));
+                }
+            }
+            CandidateDecision::Discarded => {
+                if assessment.opportunity_local_id.is_some() {
+                    return Err(InsightsError::Invalid(
+                        "discarded assessment has an opportunity".into(),
+                    ));
+                }
+            }
+        }
+    }
+
+    if linked_opportunities.len() != opportunity_ids.len()
+        || opportunity_ids
+            .iter()
+            .any(|local_id| !linked_opportunities.contains(local_id))
+    {
+        return Err(InsightsError::Invalid(
+            "every opportunity must have exactly one candidate assessment".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn fingerprint<T: Serialize>(value: &T) -> Result<String> {
@@ -726,6 +868,118 @@ pub async fn admit_observation(pool: &SqlitePool, item: &ObservationRecord) -> R
     Ok(sequence)
 }
 
+/// Copy the accepted Explorer evidence and observations into a fresh insights
+/// database for a Steward-only replay. Jobs, cursors, opportunities, and
+/// findings are deliberately not copied.
+pub async fn copy_observations_for_steward_replay(
+    source: &SqlitePool,
+    destination: &SqlitePool,
+    source_identity: &str,
+) -> Result<u64> {
+    let recorded_identity: Option<String> = sqlx::query_scalar(
+        "SELECT value FROM insights_metadata WHERE key='steward_replay_source_identity'",
+    )
+    .fetch_optional(destination)
+    .await?;
+    if let Some(recorded_identity) = recorded_identity {
+        if recorded_identity != source_identity {
+            return Err(InsightsError::Invalid(
+                "Steward replay destination belongs to a different source".into(),
+            ));
+        }
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM observations")
+            .fetch_one(destination)
+            .await?;
+        return Ok(count as u64);
+    }
+
+    for table in [
+        "inference_jobs",
+        "opportunities",
+        "occurrences",
+        "findings",
+        "reconciliations",
+    ] {
+        let present: i64 = sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM {table})"))
+            .fetch_one(destination)
+            .await?;
+        if present != 0 {
+            return Err(InsightsError::Invalid(format!(
+                "Steward replay destination already contains {table}"
+            )));
+        }
+    }
+    let existing_rows: i64 = sqlx::query_scalar(
+        "SELECT (SELECT COUNT(*) FROM evidence) + (SELECT COUNT(*) FROM observations)",
+    )
+    .fetch_one(destination)
+    .await?;
+    if existing_rows != 0 {
+        return Err(InsightsError::Invalid(
+            "Steward replay destination already contains source data without a replay identity"
+                .into(),
+        ));
+    }
+
+    let observations = sqlx::query(
+        "SELECT observation_id,source_key,occurred_at,statement,certainty,evidence_ids_json
+         FROM observations ORDER BY sequence",
+    )
+    .fetch_all(source)
+    .await?;
+    let mut copied = 0;
+    for row in observations {
+        let evidence_ids = serde_json::from_str::<Vec<String>>(row.get("evidence_ids_json"))?;
+        for evidence_id in &evidence_ids {
+            let evidence = sqlx::query(
+                "SELECT evidence_id,source_namespace,source_id,occurred_at,app,window,excerpt,
+                        policy_allowed,redaction_ready,deleted,sensitive
+                 FROM evidence WHERE evidence_id=?1",
+            )
+            .bind(evidence_id)
+            .fetch_one(source)
+            .await?;
+            upsert_evidence(
+                destination,
+                &EvidenceRecord {
+                    evidence_id: evidence.get("evidence_id"),
+                    source_namespace: evidence.get("source_namespace"),
+                    source_id: evidence.get("source_id"),
+                    occurred_at: evidence.get("occurred_at"),
+                    app: evidence.get("app"),
+                    window: evidence.get("window"),
+                    excerpt: evidence.get("excerpt"),
+                    policy_allowed: evidence.get("policy_allowed"),
+                    redaction_ready: evidence.get("redaction_ready"),
+                    deleted: evidence.get("deleted"),
+                    sensitive: evidence.get("sensitive"),
+                },
+            )
+            .await?;
+        }
+        admit_observation(
+            destination,
+            &ObservationRecord {
+                observation_id: row.get("observation_id"),
+                source_key: row.get("source_key"),
+                occurred_at: row.get("occurred_at"),
+                statement: row.get("statement"),
+                certainty: parse_certainty(row.get::<String, _>("certainty").as_str())?,
+                evidence_ids,
+            },
+        )
+        .await?;
+        copied += 1;
+    }
+    sqlx::query(
+        "INSERT INTO insights_metadata(key,value) VALUES('steward_replay_source_identity',?1)",
+    )
+    .bind(source_identity)
+    .execute(destination)
+    .await?;
+    Ok(copied)
+}
+
 #[derive(Debug, Clone)]
 pub struct NewExplorerJob<'a> {
     pub batch_id: &'a str,
@@ -1148,6 +1402,110 @@ pub async fn steward_memory(
     Ok(serde_json::json!({"opportunities": result, "recent_user_feedback": feedback}))
 }
 
+/// Developer-facing, privacy-bounded diagnostics for accepted Steward output.
+/// It reads the durable reconciliation JSON and attempt receipts; it does not
+/// include captured evidence text or expose a product projection.
+#[cfg(test)]
+pub(crate) async fn steward_diagnostics(pool: &SqlitePool) -> Result<serde_json::Value> {
+    let reconciliations = sqlx::query(
+        "SELECT reconciliation_id,job_id,output_json,accepted_at
+         FROM reconciliations ORDER BY accepted_at,reconciliation_id",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut reconciliation_values = Vec::with_capacity(reconciliations.len());
+    for row in reconciliations {
+        let output: ReconciliationOutput = serde_json::from_str(row.get("output_json"))?;
+        let mut assessments = Vec::with_capacity(output.candidate_assessments.len());
+        for assessment in output.candidate_assessments {
+            let mut value = serde_json::to_value(&assessment)?;
+            if let Some(opportunity_local_id) = assessment.opportunity_local_id.as_deref() {
+                if let Some(opportunity) = output
+                    .opportunities
+                    .iter()
+                    .find(|opportunity| opportunity.local_id == opportunity_local_id)
+                {
+                    let opportunity_id =
+                        opportunity
+                            .existing_opportunity_id
+                            .clone()
+                            .unwrap_or(stable_id(
+                                "wfo",
+                                &(opportunity.construct.as_str(), &opportunity.signature),
+                            )?);
+                    let finding_id: Option<String> = sqlx::query_scalar(
+                        "SELECT finding_id FROM findings WHERE opportunity_id=?1
+                         ORDER BY created_at DESC LIMIT 1",
+                    )
+                    .bind(&opportunity_id)
+                    .fetch_optional(pool)
+                    .await?;
+                    let occurrence_count: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*) FROM occurrences WHERE opportunity_id=?1",
+                    )
+                    .bind(&opportunity_id)
+                    .fetch_one(pool)
+                    .await?;
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert(
+                            "durable_opportunity_id".into(),
+                            serde_json::json!(opportunity_id),
+                        );
+                        object.insert("finding_id".into(), serde_json::json!(finding_id));
+                        object.insert(
+                            "occurrence_count".into(),
+                            serde_json::json!(occurrence_count),
+                        );
+                        object.insert(
+                            "distinctness_basis".into(),
+                            serde_json::json!(opportunity
+                                .occurrences_to_add
+                                .iter()
+                                .flat_map(|occurrence| occurrence.distinctness_basis.clone())
+                                .collect::<Vec<_>>()),
+                        );
+                    }
+                }
+            }
+            assessments.push(value);
+        }
+        reconciliation_values.push(serde_json::json!({
+            "reconciliation_id": row.get::<String, _>("reconciliation_id"),
+            "job_id": row.get::<String, _>("job_id"),
+            "accepted_at": row.get::<String, _>("accepted_at"),
+            "candidate_assessments": assessments,
+        }));
+    }
+
+    let attempts = sqlx::query(
+        "SELECT ja.job_id,ij.model,ja.attempt,ja.status,ja.usage_json,ja.latency_ms,
+                ja.error_code,ja.created_at
+         FROM job_attempts ja JOIN inference_jobs ij ON ij.job_id=ja.job_id
+         ORDER BY ja.created_at,ja.job_id,ja.attempt",
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|row| {
+        serde_json::json!({
+            "job_id": row.get::<String, _>("job_id"),
+            "model": row.get::<Option<String>, _>("model"),
+            "attempt": row.get::<i64, _>("attempt"),
+            "status": row.get::<String, _>("status"),
+            "usage": serde_json::from_str::<serde_json::Value>(row.get("usage_json"))
+                .unwrap_or(serde_json::Value::Null),
+            "latency_ms": row.get::<i64, _>("latency_ms"),
+            "error_code": row.get::<Option<String>, _>("error_code"),
+            "created_at": row.get::<String, _>("created_at"),
+        })
+    })
+    .collect::<Vec<_>>();
+    Ok(serde_json::json!({
+        "reconciliations": reconciliation_values,
+        "steward_attempts": attempts,
+    }))
+}
+
 pub async fn claim_job(pool: &SqlitePool, job_id: &str) -> Result<bool> {
     let result = sqlx::query(
         "UPDATE inference_jobs SET status='running',attempts=attempts+1,updated_at=?2
@@ -1317,7 +1675,7 @@ async fn apply_reconciliation_inner(
             findings_created: 0,
         });
     }
-    if output.schema_version != 1 {
+    if !matches!(output.schema_version, 1 | 2 | 3) {
         return Err(InsightsError::Invalid(
             "wrong reconciliation schema version".into(),
         ));
@@ -1335,6 +1693,20 @@ async fn apply_reconciliation_inner(
             "reconciliation does not own the exact job observations".into(),
         ));
     }
+    if matches!(output.schema_version, 2 | 3) {
+        validate_candidate_assessments(output, &expected).map_err(|error| {
+            InsightsError::Invalid(format!("invalid candidate assessments: {error}"))
+        })?;
+    }
+    // Candidate assessments are a transient inference guardrail. Validate them
+    // before applying, then omit them from durable/product-facing reconciliation
+    // output. Existing stored versions remain readable through serde defaults.
+    let mut durable_output = output.clone();
+    if matches!(durable_output.schema_version, 2 | 3) {
+        durable_output.schema_version = 1;
+        durable_output.candidate_assessments.clear();
+    }
+    let output = &durable_output;
     let output_json = serde_json::to_string(output)?;
     let output_fingerprint = fingerprint(output)?;
     let reconciliation_id = stable_id("wfr", &(job_id, &output_fingerprint))?;
@@ -2603,7 +2975,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        EvidenceQuality, FindingDraft, Handoff, OccurrenceDelta, OpportunityDelta, RankSignals,
+        CandidateAssessment, CandidateReasonCode, EvidenceQuality, FindingDraft, Handoff,
+        OccurrenceDelta, OpportunityDelta, RankSignals,
     };
 
     async fn setup() -> (TempDir, SqlitePool) {
@@ -2612,6 +2985,169 @@ mod tests {
             .await
             .unwrap();
         (directory, pool)
+    }
+
+    fn assessment(
+        decision: CandidateDecision,
+        opportunity_local_id: Option<&str>,
+        missing_to_qualify: Vec<&str>,
+    ) -> CandidateAssessment {
+        CandidateAssessment {
+            local_id: "candidate_01".into(),
+            observation_ids: vec![format!("obl_{:024x}", 1)],
+            decision,
+            reason_code: if decision == CandidateDecision::Qualified {
+                CandidateReasonCode::MeaningfulRepeatedWork
+            } else {
+                CandidateReasonCode::MeaningfulButImmature
+            },
+            reason: "The supplied observation supports this candidate.".into(),
+            shared_goal: "Prepare a useful report".into(),
+            reducible_burden: "Repeated manual preparation".into(),
+            stable_steps: vec!["prepare report".into()],
+            variable_inputs: vec![],
+            distinct_episode_basis: vec![],
+            missing_to_qualify: missing_to_qualify.into_iter().map(str::to_owned).collect(),
+            opportunity_local_id: opportunity_local_id.map(str::to_owned),
+        }
+    }
+
+    async fn claimed_job(pool: &SqlitePool) -> String {
+        let item = observation(1);
+        upsert_evidence(pool, &evidence(1)).await.unwrap();
+        admit_observation(pool, &item).await.unwrap();
+        let observation_ids = [item.observation_id];
+        let job_id = create_job(
+            pool,
+            NewJob {
+                input_fingerprint: "candidate-assessment-test",
+                local_day: "2026-01-01",
+                reason: "test",
+                observation_ids: &observation_ids,
+                prompt_hash: "prompt",
+                schema_hash: "schema",
+                model: "mock",
+                input_json: "{}",
+            },
+        )
+        .await
+        .unwrap();
+        claim_job(pool, &job_id).await.unwrap();
+        job_id
+    }
+
+    #[tokio::test]
+    async fn candidate_assessments_are_validated_but_not_durable() {
+        let (_directory, pool) = setup().await;
+        let job_id = claimed_job(&pool).await;
+        let output = ReconciliationOutput {
+            schema_version: 2,
+            considered_observation_ids: vec![format!("obl_{:024x}", 1)],
+            opportunities: vec![delta(1, None, true)],
+            candidate_assessments: vec![assessment(
+                CandidateDecision::Qualified,
+                Some("opp_01"),
+                vec![],
+            )],
+        };
+        apply_reconciliation(&pool, &job_id, &output, ApplyOptions::default())
+            .await
+            .unwrap();
+        let stored: String = sqlx::query_scalar("SELECT output_json FROM reconciliations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let parsed: ReconciliationOutput = serde_json::from_str(&stored).unwrap();
+        assert_eq!(parsed.schema_version, 1);
+        assert!(parsed.candidate_assessments.is_empty());
+        assert!(!stored.contains("candidate_assessments"));
+        let diagnostics = steward_diagnostics(&pool).await.unwrap();
+        assert!(diagnostics["reconciliations"][0]["candidate_assessments"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert_eq!(diagnostics["steward_attempts"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn invalid_candidate_assessments_are_rejected_atomically() {
+        let (_directory, pool) = setup().await;
+        let job_id = claimed_job(&pool).await;
+        let output = ReconciliationOutput {
+            schema_version: 2,
+            considered_observation_ids: vec![format!("obl_{:024x}", 1)],
+            opportunities: vec![delta(1, None, true)],
+            candidate_assessments: vec![assessment(
+                CandidateDecision::Discarded,
+                Some("opp_01"),
+                vec![],
+            )],
+        };
+        assert!(
+            apply_reconciliation(&pool, &job_id, &output, ApplyOptions::default())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM opportunities")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reconciliations")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn steward_replay_copies_only_evidence_and_observations() {
+        let (source_dir, source) = setup().await;
+        upsert_evidence(&source, &evidence(1)).await.unwrap();
+        admit_observation(&source, &observation(1)).await.unwrap();
+        let destination_dir = tempfile::tempdir().unwrap();
+        let destination = open_insights_database(destination_dir.path().join("replay.sqlite"))
+            .await
+            .unwrap();
+        let copied =
+            copy_observations_for_steward_replay(&source, &destination, "source-fixture-1")
+                .await
+                .unwrap();
+        assert_eq!(copied, 1);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM observations")
+                .fetch_one(&destination)
+                .await
+                .unwrap(),
+            1
+        );
+        for table in [
+            "inference_jobs",
+            "opportunities",
+            "occurrences",
+            "findings",
+            "reconciliations",
+        ] {
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
+                    .fetch_one(&destination)
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM observations")
+                .fetch_one(&source)
+                .await
+                .unwrap(),
+            1
+        );
+        drop(source_dir);
     }
 
     fn evidence(index: usize) -> EvidenceRecord {
@@ -2751,6 +3287,7 @@ mod tests {
             schema_version: 1,
             considered_observation_ids: vec![format!("obl_{:024x}", 1)],
             opportunities: vec![delta(1, None, true)],
+            candidate_assessments: vec![],
         };
         let failed = apply_reconciliation(
             &pool,
@@ -2803,6 +3340,7 @@ mod tests {
                 schema_version: 1,
                 considered_observation_ids: vec![format!("obl_{index:024x}")],
                 opportunities: vec![delta(index, opportunity_id.clone(), index == 1)],
+                candidate_assessments: vec![],
             };
             apply_reconciliation(&pool, &job_id, &output, ApplyOptions::default())
                 .await
@@ -2901,6 +3439,7 @@ mod tests {
                 schema_version: 1,
                 considered_observation_ids: vec![format!("obl_{:024x}", 1)],
                 opportunities: vec![delta(1, None, true)],
+                candidate_assessments: vec![],
             },
             ApplyOptions::default(),
         )
@@ -2989,6 +3528,7 @@ mod tests {
             schema_version: 1,
             considered_observation_ids: vec![format!("obl_{:024x}", 1)],
             opportunities: vec![],
+            candidate_assessments: vec![],
         };
         assert!(
             apply_reconciliation(&pool, &job_id, &wrong, ApplyOptions::default())
@@ -2999,6 +3539,7 @@ mod tests {
             schema_version: 1,
             considered_observation_ids: observation_ids,
             opportunities: vec![],
+            candidate_assessments: vec![],
         };
         apply_reconciliation(&pool, &job_id, &correct, ApplyOptions::default())
             .await
@@ -3201,6 +3742,7 @@ mod tests {
                     schema_version: 1,
                     considered_observation_ids: vec![format!("obl_{index:024x}")],
                     opportunities: vec![proposal],
+                    candidate_assessments: vec![],
                 },
                 ApplyOptions::default(),
             )
@@ -3246,6 +3788,7 @@ mod tests {
                 schema_version: 1,
                 considered_observation_ids: vec![format!("obl_{:024x}", 4)],
                 opportunities: vec![withdrawal],
+                candidate_assessments: vec![],
             },
             ApplyOptions::default(),
         )
@@ -3274,6 +3817,7 @@ mod tests {
                 schema_version: 1,
                 considered_observation_ids: vec![format!("obl_{:024x}", 1)],
                 opportunities: vec![delta(1, None, true)],
+                candidate_assessments: vec![],
             },
             ApplyOptions::default(),
         )
