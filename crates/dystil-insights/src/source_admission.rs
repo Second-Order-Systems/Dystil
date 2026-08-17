@@ -76,6 +76,7 @@ pub async fn resolve_capture_evidence(
                 occurred_at: row.get("timestamp"),
                 app: app.clone(),
                 window: window.clone(),
+                url: url.clone(),
                 excerpt,
                 policy_allowed: rules.policy_allows(
                     app.as_deref(),
@@ -108,6 +109,7 @@ pub async fn resolve_capture_evidence(
                 occurred_at: row.get("timestamp"),
                 app: app.clone(),
                 window: window.clone(),
+                url: url.clone(),
                 excerpt: row.get("excerpt"),
                 policy_allowed: rules.policy_allows(
                     app.as_deref(),

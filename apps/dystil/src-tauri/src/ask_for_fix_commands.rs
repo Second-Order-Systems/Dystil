@@ -6,9 +6,10 @@ use dystil_ai::{AiRuntime, AiRuntimeError, AiRuntimeErrorCode};
 use dystil_insights::{
     cancel_ask_for_fix_turn as cancel_turn, create_ask_for_fix_session, get_ask_for_fix_session,
     keep_ask_for_fix_artifact, latest_ask_for_fix_session, lock_ask_for_fix,
-    recover_interrupted_ask_for_fix_turn, retry_ask_for_fix, run_locked_ask_for_fix,
-    run_staged_ask_for_fix, set_ask_for_fix_error, stage_ask_for_fix_turn, AskInputEvent,
-    AskSessionView, AskUserTurn,
+    recover_interrupted_ask_for_fix_turn, retry_ask_for_fix, review_ask_for_fix_watch,
+    run_locked_ask_for_fix, run_staged_ask_for_fix, set_ask_for_fix_error, stage_ask_for_fix_turn,
+    start_ask_for_fix_watch, stop_ask_for_fix_watch, update_ask_for_fix_watch_guidance,
+    AskInputEvent, AskSessionView, AskUserTurn,
 };
 use tauri::{AppHandle, State};
 use tokio::sync::{oneshot, Mutex};
@@ -242,6 +243,68 @@ pub async fn ask_for_fix_keep_artifact(
     session_id: String,
 ) -> Result<String, String> {
     keep_ask_for_fix_artifact(state.pool(&app).await?, &session_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn ask_for_fix_start_watching(
+    app: AppHandle,
+    state: State<'_, WorthFixingState>,
+    session_id: String,
+) -> Result<AskSessionView, String> {
+    start_ask_for_fix_watch(state.pool(&app).await?, &session_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn ask_for_fix_stop_watching(
+    app: AppHandle,
+    state: State<'_, WorthFixingState>,
+    session_id: String,
+) -> Result<AskSessionView, String> {
+    stop_ask_for_fix_watch(state.pool(&app).await?, &session_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn ask_for_fix_review_watch(
+    app: AppHandle,
+    ask_state: State<'_, AskForFixState>,
+    insights: State<'_, WorthFixingState>,
+    recording: State<'_, RecordingState>,
+    session_id: String,
+) -> Result<AskSessionView, String> {
+    let pool = insights.pool(&app).await?;
+    let session_for_run = session_id.clone();
+    run_cancellable(pool, &ask_state, &session_id, async move {
+        let runtime = match runtime(&app, &recording).await {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                return record_runtime_error(pool, &session_for_run, &error)
+                    .await
+                    .map_err(dystil_insights::AskForFixError::InvalidState);
+            }
+        };
+        review_ask_for_fix_watch(pool, runtime.as_ref(), &session_for_run).await
+    })
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn ask_for_fix_update_watch_guidance(
+    app: AppHandle,
+    state: State<'_, WorthFixingState>,
+    session_id: String,
+    guidance: String,
+) -> Result<AskSessionView, String> {
+    update_ask_for_fix_watch_guidance(state.pool(&app).await?, &session_id, &guidance)
         .await
         .map_err(|error| error.to_string())
 }

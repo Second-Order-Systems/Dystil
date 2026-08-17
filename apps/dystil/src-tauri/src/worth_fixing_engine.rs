@@ -5,14 +5,15 @@
 
 use chrono::{DateTime, FixedOffset, Timelike, Utc};
 use dystil_insights::{
-    capture_cursor, cleanup_diagnostics, commit_compaction_checkpoint,
-    compact_activity_incremental, enhanced_diagnostics_enabled, known_source_refs,
-    last_successful_steward_wake_at, load_compaction_state, mark_source_deleted,
-    pending_explorer_batch_id, pending_observation_stats, record_wake_start,
-    recoverable_explorer_job, recoverable_job, resolve_capture_evidence, run_explorer_batch,
-    run_explorer_batch_with_compaction, run_steward_wake, upsert_evidence, wake_reason_started,
-    CaptureAdmissionRules, CompactionConfig, DiagnosticRetention, EvidenceRecord, SourceActivity,
-    WakePolicy, WakeReason, WakeState,
+    active_ask_for_fix_watch_count, capture_cursor, cleanup_diagnostics,
+    collect_ask_for_fix_watches, commit_compaction_checkpoint, compact_activity_incremental,
+    enhanced_diagnostics_enabled, known_source_refs, last_successful_steward_wake_at,
+    load_compaction_state, mark_source_deleted, pending_explorer_batch_id,
+    pending_observation_stats, record_wake_start, recoverable_explorer_job, recoverable_job,
+    resolve_capture_evidence, run_explorer_batch, run_explorer_batch_with_compaction,
+    run_steward_wake, upsert_evidence, wake_reason_started, CaptureAdmissionRules,
+    CompactionConfig, DiagnosticRetention, EvidenceRecord, SourceActivity, WakePolicy, WakeReason,
+    WakeState,
 };
 use sqlx::{Row, SqlitePool};
 use tauri::{AppHandle, Manager};
@@ -198,7 +199,7 @@ async fn maybe_explore(
                     .with_timezone(&Utc),
                 app: record.app.clone(),
                 window: record.window.clone(),
-                url: None,
+                url: record.url.clone(),
                 text: record.excerpt.clone(),
                 content_hash: None,
             })
@@ -352,6 +353,33 @@ async fn maybe_steward(
     Ok(())
 }
 
+async fn maybe_collect_ask_watches(
+    app: &AppHandle,
+    insights: &SqlitePool,
+    capture: &SqlitePool,
+    timezone: &str,
+) -> Result<(), String> {
+    if active_ask_for_fix_watch_count(insights)
+        .await
+        .map_err(|error| error.to_string())?
+        == 0
+    {
+        return Ok(());
+    }
+    let runtime = crate::ai_runtime::resolve(
+        app,
+        &app.state::<crate::recording::RecordingState>(),
+        capture,
+        timezone,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    collect_ask_for_fix_watches(insights, runtime.as_ref())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 async fn tick(app: &AppHandle) -> Result<(), String> {
     let Some(capture) = capture_pool(app).await else {
         return Ok(());
@@ -383,6 +411,9 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
     let timezone = crate::ai::local_timezone_offset();
     if let Err(error) = maybe_explore(app, insights, &capture, &timezone).await {
         warn!(%error, "Worth Fixing Explorer postponed");
+    }
+    if let Err(error) = maybe_collect_ask_watches(app, insights, &capture, &timezone).await {
+        warn!(%error, "Ask-for-fix watch collection postponed");
     }
     maybe_steward(app, insights, &capture, &timezone).await?;
     info!("Worth Fixing background tick completed");

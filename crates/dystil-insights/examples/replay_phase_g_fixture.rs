@@ -39,6 +39,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 occurred_at: row.get("occurred_at"),
                 app: app.clone(),
                 window: row.get("window"),
+                url: None,
                 excerpt: format!(
                     "{} activity evidence",
                     app.unwrap_or_else(|| "Captured".into())
@@ -219,12 +220,16 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .into(),
+                preview_steps: vec!["Use the supplied handoff.".into()],
                 capability_id: None,
             }),
             finding: Some(FindingDraft {
                 claim: row.get("claim"),
                 why_worth_fixing: row.get("why_worth_fixing"),
+                evidence_note: "Imported historical finding.".into(),
                 evidence_ids: serde_json::from_str(row.get("evidence_ids_json"))?,
+                completion_state: CompletionState::Unclear,
+                workflow_stages: Vec::new(),
             }),
             rank_signals: RankSignals {
                 actionability: rank

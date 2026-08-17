@@ -12,7 +12,7 @@
  */
 
 import { useRouter } from "next/navigation";
-import { useHome } from "@/lib/mock/provider";
+import { useHome } from "@/lib/home/provider";
 import { SegmentedTrack, pileSegments } from "../primitives/segmented-track";
 
 export function ScanView() {
@@ -69,15 +69,9 @@ export function ScanView() {
                 deliberately carries no badge and lets the headline lead.
               */}
               <span className="w-[94px] shrink-0">
-                {item.origin === "user" ? (
-                  <span className="inline-block whitespace-nowrap rounded-[4px] bg-marigold-tint px-[7px] py-[3px] text-[10px] font-bold uppercase tracking-[0.08em] text-marigold-text">
-                    You asked
-                  </span>
-                ) : (
-                  <span className="inline-block whitespace-nowrap rounded-[4px] bg-sage-tint px-[7px] py-[3px] text-[10px] font-bold uppercase tracking-[0.08em] text-sage">
-                    I noticed
-                  </span>
-                )}
+              <span className="inline-block whitespace-nowrap rounded-[4px] bg-sage-tint px-[7px] py-[3px] text-[10px] font-bold uppercase tracking-[0.08em] text-sage">
+                I noticed
+              </span>
               </span>
               <span className="min-w-0 flex-1 text-body-lg leading-[1.4] text-ink">
                 {item.short}

@@ -50,6 +50,25 @@ pub fn derive_eligibility(
     if handoff.body.trim().is_empty() || handoff.body.chars().count() > 12_000 {
         errors.push("handoff body is not complete and bounded".into());
     }
+    if handoff.preview_steps.is_empty()
+        || handoff.preview_steps.len() > 6
+        || handoff
+            .preview_steps
+            .iter()
+            .any(|step| step.trim().is_empty() || step.chars().count() > 280)
+    {
+        errors.push("handoff preview steps are not complete and bounded".into());
+    }
+    let Some(finding) = proposal.finding.as_ref() else {
+        errors.push("an eligible finding requires a finding projection".into());
+        return Eligibility {
+            eligible: false,
+            errors,
+        };
+    };
+    if finding.evidence_note.trim().is_empty() || finding.evidence_note.chars().count() > 360 {
+        errors.push("finding evidence note is not complete and bounded".into());
+    }
     if handoff.kind == HandoffType::ExistingCapability && !context.capability_verified {
         errors.push("existing capability is not verified".into());
     }
@@ -261,7 +280,7 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
-    use crate::{FindingDraft, Handoff, OpportunityDelta, RankSignals};
+    use crate::{CompletionState, FindingDraft, Handoff, OpportunityDelta, RankSignals};
 
     fn proposal(construct: Construct, handoff_type: HandoffType) -> OpportunityDelta {
         OpportunityDelta {
@@ -282,12 +301,16 @@ mod tests {
                 kind: handoff_type,
                 title: "title".into(),
                 body: "A complete and directly usable handoff body.".into(),
+                preview_steps: vec!["Use the complete handoff.".into()],
                 capability_id: None,
             }),
             finding: Some(FindingDraft {
                 claim: "A useful claim".into(),
                 why_worth_fixing: "A useful reason".into(),
+                evidence_note: "An observed pattern supports this.".into(),
                 evidence_ids: vec!["frame:1".into()],
+                completion_state: CompletionState::Completed,
+                workflow_stages: vec!["input".into(), "transform".into(), "handoff".into()],
             }),
             rank_signals: RankSignals {
                 actionability: 3,

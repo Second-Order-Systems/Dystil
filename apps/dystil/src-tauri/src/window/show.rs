@@ -165,6 +165,12 @@ impl ShowRewindWindow {
                 .min_inner_size(min.0, min.1);
         }
 
+        // The Home window is Dystil's primary manual-launch surface. Start it
+        // maximized while retaining normal OS window controls.
+        if id == RewindWindowId::Home {
+            builder = builder.maximized(true);
+        }
+
         #[cfg(target_os = "macos")]
         {
             builder = builder

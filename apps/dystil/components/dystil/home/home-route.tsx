@@ -13,8 +13,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { useHome } from "@/lib/mock/provider";
-import type { CorrectionReason } from "@/lib/mock/types";
+import { useHome } from "@/lib/home/provider";
+import type { CorrectionReason } from "@/lib/home/types";
 import { NothingWaiting } from "./nothing-waiting";
 import { ThePile } from "./the-pile";
 
@@ -26,10 +26,12 @@ export function HomeRoute() {
     originalTotal,
     shortcuts,
     lastSpokeUp,
-    settle,
-    settleAndRun,
+    save,
+    dismiss,
     defer,
     restore,
+    loading,
+    error,
   } = useHome();
 
   // Distinguishes "nothing waiting" from "you just cleared it" — the second
@@ -39,6 +41,9 @@ export function HomeRoute() {
   const currentId = queue[0];
   const item = items.find((candidate) => candidate.id === currentId);
 
+  if (loading) return <div className="mx-auto max-w-[600px] px-10 pt-12 text-body-lg text-muted-ink">Looking at the work Dystil has processed…</div>;
+  if (error) return <div className="mx-auto max-w-[600px] px-10 pt-12 text-body-lg text-muted-ink">Worth fixing could not load. <button type="button" onClick={() => window.location.reload()} className="font-semibold underline">Try again</button></div>;
+
   if (!currentId || !item) {
     return (
       <NothingWaiting
@@ -46,7 +51,7 @@ export function HomeRoute() {
         lastSpokeUp={lastSpokeUp}
         settledCount={originalTotal}
         shortcuts={shortcuts}
-        onAsk={() => router.push("/home/ask")}
+        onAsk={(text) => router.push(`/home/ask?initial=${encodeURIComponent(text.trim())}`)}
         onAllShortcuts={() => router.push("/home/ready")}
         onRestore={() => {
           setJustCleared(false);
@@ -56,9 +61,9 @@ export function HomeRoute() {
     );
   }
 
-  const settleOne = (reason?: CorrectionReason) => {
+  const dismissOne = (reason: CorrectionReason) => {
     if (queue.length === 1) setJustCleared(true);
-    settle(currentId, reason);
+    void dismiss(currentId, reason);
   };
 
   return (
@@ -67,13 +72,12 @@ export function HomeRoute() {
       remaining={queue.length}
       originalTotal={originalTotal}
       onSeeAll={() => router.push("/home/all")}
-      onRun={() => {
+      onSave={() => {
         if (queue.length === 1) setJustCleared(true);
-        settleAndRun(currentId);
+        void save(currentId);
       }}
-      onTakePrompt={() => settleOne()}
       onDefer={() => defer(currentId)}
-      onCorrect={(reason) => settleOne(reason)}
+      onCorrect={dismissOne}
     />
   );
 }

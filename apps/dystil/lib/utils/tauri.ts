@@ -254,9 +254,41 @@ async askForFixRetry(sessionId: string) : Promise<Result<AskSessionView, string>
     else return { status: "error", error: e  as any };
 }
 },
+async askForFixReviewWatch(sessionId: string) : Promise<Result<AskSessionView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_review_watch", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async askForFixStartWatching(sessionId: string) : Promise<Result<AskSessionView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_start_watching", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async askForFixStopWatching(sessionId: string) : Promise<Result<AskSessionView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_stop_watching", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async askForFixSubmit(sessionId: string, turn: AskUserTurn) : Promise<Result<AskSessionView, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_submit", { sessionId, turn }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async askForFixUpdateWatchGuidance(sessionId: string, guidance: string) : Promise<Result<AskSessionView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_update_watch_guidance", { sessionId, guidance }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -763,6 +795,17 @@ async getEnv(name: string) : Promise<string> {
 },
 async getHardwareCapability() : Promise<HardwareCapability> {
     return await TAURI_INVOKE("get_hardware_capability");
+},
+/**
+ * The sole data source for the redesigned Home Worth fixing experience.
+ */
+async getHomeWorthFixingSummary() : Promise<Result<HomeWorthFixingSummary, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_home_worth_fixing_summary") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 /**
  * Returns the names of installed Chromium browsers that need Automation permission
@@ -1619,7 +1662,7 @@ export type AskPresentation = { route: AskPresentationRoute; headline: string; e
 export type AskPresentationRoute = "answer_now" | "something_now_more_later" | "cannot_see" | "needs_more_than_one_person"
 export type AskQuestion = { kind: AskQuestionKind; text: string; helper: string; options: AskOption[]; minSelections: number; maxSelections: number }
 export type AskQuestionKind = "free_text" | "single_select" | "multi_select" | "compare"
-export type AskSessionView = { sessionId: string; phase: AskPhase; status: string; questionCount: number; maxQuestions: number; messages: AskMessageView[]; understanding: AskUnderstanding; currentQuestionId: string | null; currentQuestion: AskQuestion | null; presentation: AskPresentation | null; locked: boolean; lastErrorCode: string | null; lastErrorDetail: string | null; provider: string | null; model: string | null; cachedInputTokens: number; artifactKeptId: string | null; createdAt: string; updatedAt: string }
+export type AskSessionView = { sessionId: string; phase: AskPhase; status: string; questionCount: number; maxQuestions: number; messages: AskMessageView[]; understanding: AskUnderstanding; currentQuestionId: string | null; currentQuestion: AskQuestion | null; presentation: AskPresentation | null; locked: boolean; lastErrorCode: string | null; lastErrorDetail: string | null; provider: string | null; model: string | null; cachedInputTokens: number; artifactKeptId: string | null; watch: AskWatchView | null; createdAt: string; updatedAt: string }
 export type AskUnderstanding = { synthesis: string; grounding: string[]; inferences: string[]; preservedBoundary: string; uncertainty: string[]; solutionTarget: string }
 export type AskUserTurn = {
 /**
@@ -1630,6 +1673,9 @@ text: string;
  * Exact UI event retained for replay and analytics.
  */
 event: AskInputEvent }
+export type AskWatchSpec = { goal: string; relevantSignals: string[]; missingEvidence: string[]; sufficiencyRule: string }
+export type AskWatchState = "active" | "review_ready" | "stopped" | "dismissed"
+export type AskWatchView = { watchId: string; state: AskWatchState; spec: AskWatchSpec; supportingEvidenceCount: number; weekCheckpointDue: boolean; createdAt: string; updatedAt: string }
 export type AuthMode = "individual" | "workspace"
 export type AutomationArtifactView = { id: string; runId: string; automationName: string; relativePath: string; sizeBytes: number; mediaType: string; liveView: boolean; outputKind: string; contentJson: string | null; createdAt: string }
 export type AutomationDraftView = { id: string; request: string; markdown: string; automation: AutomationView }
@@ -1682,6 +1728,17 @@ export type ExternalMcpSetupView = { client: string; detail: string }
 export type FindingPage = { items: WorthFixingCard[]; nextCursor: string | null }
 export type HandoffType = "prompt" | "saved_prompt" | "existing_capability" | "runbook"
 export type HardwareCapability = { hasGpu: boolean; cpuCores: number; totalMemoryGb: number; recommendedEngine: string; reason: string }
+/**
+ * A deterministic, auditable metric for the Home Worth fixing surface.
+ */
+export type HomeEvidenceStat = { value: string; label: string }
+/**
+ * The only current Home origin: findings raised from locally observed work.
+ * User-requested work will be added when Ask for a fix is redesigned.
+ */
+export type HomeFindingOrigin = "dystil"
+export type HomeWorthFixingItem = { findingId: string; origin: HomeFindingOrigin; occurredAt: string; title: string; evidence: HomeEvidenceStat[]; evidenceNote: string; offer: string; fixName: string; steps: string[]; saveAvailable: boolean }
+export type HomeWorthFixingSummary = { items: HomeWorthFixingItem[]; watchingCount: number; processing: boolean; providerReady: boolean; lastSuccessfulWakeAt: string | null }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeepFindingResult = { artifact: ReadyArtifactCard; summary: WorthFixingSummary; alreadyKept: boolean }
 export type KeychainStatus = { state: string }

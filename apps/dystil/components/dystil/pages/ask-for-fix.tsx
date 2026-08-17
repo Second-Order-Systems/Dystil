@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, Copy, RotateCcw, Square } from "lucide-react";
+import { ArrowUp, Check, Copy, Eye, RotateCcw, Square } from "lucide-react";
 
 import type {
   AskArtifact,
@@ -224,8 +224,22 @@ function ArtifactCard({ artifact, route, kept, busy, onKeep, onRevise }: { artif
   );
 }
 
-function PresentationCard({ presentation, session, busy, onKeep, onRevise }: { presentation: AskPresentation; session: AskSessionView; busy: boolean; onKeep: () => void; onRevise: () => void }) {
-  return <section className="mt-6 sm:ml-[50px]"><div className="rounded-[14px] bg-[#eef5f1] p-5 ring-1 ring-[#c9d9d0]"><p className="text-[11px] font-semibold text-[#116849]">Answer · based on the current understanding</p><h2 className="mt-2 text-balance text-[23px] font-medium leading-[1.35] tracking-[-0.025em] text-[#202722]">{presentation.headline}</h2><p className="mt-3 max-w-[70ch] whitespace-pre-wrap text-[14px] leading-6 text-[#505a53]">{presentation.explanation}</p>{presentation.limitations.length > 0 && <div className="mt-4 border-t border-[#d5e1da] pt-4"><p className="text-[11px] font-semibold text-[#657169]">What this does not assume</p><ul className="mt-2 space-y-1.5 text-[13px] leading-5 text-[#5c655f]">{presentation.limitations.map((item) => <li key={item}>• {item}</li>)}</ul></div>}</div>{presentation.artifact && <ArtifactCard artifact={presentation.artifact} route={presentation.route} kept={Boolean(session.artifactKeptId)} busy={busy} onKeep={onKeep} onRevise={onRevise} />}</section>;
+function WatchCard({ session, busy, onStart, onStop, onReview, onGuidance }: { session: AskSessionView; busy: boolean; onStart: () => void; onStop: () => void; onReview: () => void; onGuidance: (guidance: string) => void }) {
+  const watch = session.watch;
+  const [guidance, setGuidance] = useState("");
+  const [guidanceMode, setGuidanceMode] = useState(false);
+  const canOfferWatch = session.presentation?.route === "cannot_see" || session.presentation?.route === "something_now_more_later";
+  if (!watch && !canOfferWatch) return null;
+  if (watch?.state === "stopped" || watch?.state === "dismissed") return null;
+  return (
+    <aside className="mt-5 rounded-[14px] border border-[#e4d4ab] bg-[#fff9ed] p-5">
+      <div className="flex gap-3"><span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#f5e4b8] text-[#8c6615]"><Eye size={16} /></span><div className="min-w-0"><p className="text-[11px] font-semibold text-[#8c6615]">{watch?.state === "review_ready" ? "Evidence ready" : watch ? "Keep watching" : "Not enough evidence yet"}</p><h3 className="mt-1 text-[17px] font-semibold tracking-[-0.015em] text-[#3b3425]">{watch?.state === "review_ready" ? "Dystil found a credible example" : watch ? "Dystil is watching for this work" : "Let Dystil wait for a clearer example"}</h3><p className="mt-2 max-w-[66ch] text-[13px] leading-5 text-[#685f4e]">{watch?.state === "review_ready" ? "Dystil has enough local evidence to revisit the understanding with you. It will not make a fix until you review that reading." : watch ? `Watching for: ${watch.spec.goal} ${watch.supportingEvidenceCount ? `· ${watch.supportingEvidenceCount} supporting moment${watch.supportingEvidenceCount === 1 ? "" : "s"} found` : "· No supporting moments yet"}` : "The activity found so far is not enough to trust a fix. Keep watching stays local and brings this back when there is a credible end-to-end example."}</p>{watch && watch.state !== "review_ready" && <p className="mt-2 text-[12px] leading-5 text-[#837661]">Still needed: {watch.spec.missingEvidence.length ? watch.spec.missingEvidence.join(" · ") : "a credible end-to-end instance"}</p>}{watch?.weekCheckpointDue && <div className="mt-3 rounded-[9px] bg-[#f9edcf] p-3"><p className="text-[12px] leading-5 text-[#6f5928]">It has been a week without a reliable example. Add a cue to narrow the watch, keep waiting, or stop it.</p>{guidanceMode ? <div className="mt-2 flex flex-wrap gap-2"><input value={guidance} maxLength={500} onChange={(event) => setGuidance(event.target.value)} placeholder="For example: the final handoff happens in Linear" className="min-h-9 min-w-[230px] flex-1 rounded-[7px] border border-[#d7c99f] bg-white px-3 text-[13px] text-[#3b3425] outline-none focus:border-[#9b741b]" /><button type="button" disabled={busy || !guidance.trim()} onClick={() => { onGuidance(guidance); setGuidance(""); setGuidanceMode(false); }} className="min-h-9 rounded-[7px] bg-[#9b741b] px-3 text-[13px] font-semibold text-white disabled:opacity-50">Save guidance</button></div> : <button type="button" disabled={busy} onClick={() => setGuidanceMode(true)} className="mt-2 text-[12px] font-semibold text-[#72591f] underline underline-offset-2">Give more guidance</button>}</div>}<div className="mt-4 flex flex-wrap gap-2">{watch?.state === "review_ready" ? <><button type="button" disabled={busy} onClick={onReview} className="min-h-9 rounded-[9px] bg-[#9b741b] px-4 text-[13px] font-semibold text-white hover:bg-[#805d13] disabled:opacity-50">Review what Dystil found</button><button type="button" disabled={busy} onClick={onStop} className="min-h-9 rounded-[9px] border border-[#d7c99f] bg-white px-3.5 text-[13px] font-medium text-[#705b27] hover:bg-[#fffdf7] disabled:opacity-50">Stop watching</button></> : watch ? <button type="button" disabled={busy} onClick={onStop} className="min-h-9 rounded-[9px] border border-[#d7c99f] bg-white px-3.5 text-[13px] font-medium text-[#705b27] hover:bg-[#fffdf7] disabled:opacity-50">Stop watching</button> : <button type="button" disabled={busy} onClick={onStart} className="inline-flex min-h-9 items-center gap-2 rounded-[9px] bg-[#9b741b] px-4 text-[13px] font-semibold text-white hover:bg-[#805d13] disabled:opacity-50"><Eye size={14} />Keep watching</button>}</div></div></div>
+    </aside>
+  );
+}
+
+function PresentationCard({ presentation, session, busy, onKeep, onRevise, onStartWatching, onStopWatching, onReviewWatch, onWatchGuidance }: { presentation: AskPresentation; session: AskSessionView; busy: boolean; onKeep: () => void; onRevise: () => void; onStartWatching: () => void; onStopWatching: () => void; onReviewWatch: () => void; onWatchGuidance: (guidance: string) => void }) {
+  return <section className="mt-6 sm:ml-[50px]"><div className="rounded-[14px] bg-[#eef5f1] p-5 ring-1 ring-[#c9d9d0]"><p className="text-[11px] font-semibold text-[#116849]">Answer · based on the current understanding</p><h2 className="mt-2 text-balance text-[23px] font-medium leading-[1.35] tracking-[-0.025em] text-[#202722]">{presentation.headline}</h2><p className="mt-3 max-w-[70ch] whitespace-pre-wrap text-[14px] leading-6 text-[#505a53]">{presentation.explanation}</p>{presentation.limitations.length > 0 && <div className="mt-4 border-t border-[#d5e1da] pt-4"><p className="text-[11px] font-semibold text-[#657169]">What this does not assume</p><ul className="mt-2 space-y-1.5 text-[13px] leading-5 text-[#5c655f]">{presentation.limitations.map((item) => <li key={item}>• {item}</li>)}</ul></div>}</div><WatchCard session={session} busy={busy} onStart={onStartWatching} onStop={onStopWatching} onReview={onReviewWatch} onGuidance={onWatchGuidance} />{presentation.artifact && <ArtifactCard artifact={presentation.artifact} route={presentation.route} kept={Boolean(session.artifactKeptId)} busy={busy} onKeep={onKeep} onRevise={onRevise} />}</section>;
 }
 
 function Composer({ value, onChange, onSubmit, disabled, placeholder, autoFocus = false }: { value: string; onChange: (value: string) => void; onSubmit: () => void; disabled: boolean; placeholder: string; autoFocus?: boolean }) {
@@ -248,17 +262,23 @@ function Composer({ value, onChange, onSubmit, disabled, placeholder, autoFocus 
   );
 }
 
-export function AskForFix() {
-  const { session, loading, busy, error, optimisticText, submit, confirm, retry, cancel, keepArtifact, startNew } = useAskForFix();
+export function AskForFix({ initialText = "" }: { initialText?: string }) {
+  const { session, loading, busy, error, optimisticText, submit, confirm, retry, cancel, keepArtifact, startWatching, stopWatching, reviewWatch, updateWatchGuidance, startNew } = useAskForFix();
   const [draft, setDraft] = useState("");
   const [customAnswer, setCustomAnswer] = useState(false);
   const [revisionMode, setRevisionMode] = useState(false);
+  const initialApplied = useRef(false);
   const question = session?.currentQuestion ?? null;
   const isConsolidating = session?.phase === "consolidate" && !session.locked;
   const isAnswered = session?.status === "answered" && Boolean(session.presentation);
   const showComposer = revisionMode || (!isAnswered && (!isConsolidating || customAnswer) && (question?.kind === "free_text" || customAnswer || !question));
 
   useEffect(() => { setCustomAnswer(false); setRevisionMode(false); setDraft(""); }, [session?.sessionId, session?.currentQuestionId, session?.phase]);
+  useEffect(() => {
+    if (!initialText.trim() || initialApplied.current || loading || session?.messages.length) return;
+    initialApplied.current = true;
+    setDraft(initialText.trim().slice(0, 1600));
+  }, [initialText, loading, session?.messages.length]);
 
   const sendDraft = () => {
     if (!draft.trim()) return;
@@ -289,7 +309,7 @@ export function AskForFix() {
 
         {!busy && question && <QuestionCard question={question} questionId={session?.currentQuestionId ?? null} questionNumber={session?.questionCount ?? 1} maxQuestions={session?.maxQuestions ?? 12} disabled={busy} onCustom={() => setCustomAnswer(true)} onSubmit={(text, event) => void submit(text, event)} />}
         {!busy && isConsolidating && session && <UnderstandingCard understanding={session.understanding} busy={busy} onConfirm={() => void confirm()} onRefine={() => setCustomAnswer(true)} />}
-        {!busy && session?.presentation && <PresentationCard presentation={session.presentation} session={session} busy={busy} onKeep={() => void keepArtifact()} onRevise={() => setRevisionMode(true)} />}
+        {!busy && session?.presentation && <PresentationCard presentation={session.presentation} session={session} busy={busy} onKeep={() => void keepArtifact()} onRevise={() => setRevisionMode(true)} onStartWatching={() => void startWatching()} onStopWatching={() => void stopWatching()} onReviewWatch={() => void reviewWatch()} onWatchGuidance={(guidance) => void updateWatchGuidance(guidance)} />}
 
         {error && <div role="alert" className="mt-6 flex flex-wrap items-center gap-3 rounded-[12px] bg-[#f7eeeb] px-4 py-3 text-[13px] leading-5 text-[#753d33] ring-1 ring-[#e3c4bc]"><span className="min-w-0 flex-1">{error}</span>{session?.lastErrorCode && <button type="button" disabled={busy} onClick={() => void retry()} className="min-h-8 rounded-[8px] bg-white px-3 font-semibold text-[#753d33] ring-1 ring-[#d8b6ad] hover:bg-[#fffaf8] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8b3f32]">Try again</button>}</div>}
       </div>

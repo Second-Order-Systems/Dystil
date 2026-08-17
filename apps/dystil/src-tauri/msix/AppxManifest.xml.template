@@ -3,9 +3,10 @@
          xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
          xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
          xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+         xmlns:uap11="http://schemas.microsoft.com/appx/manifest/uap/windows10/11"
          xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
          xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-         IgnorableNamespaces="uap uap3 uap10 desktop rescap">
+         IgnorableNamespaces="uap uap3 uap10 uap11 desktop rescap">
   <Identity Name="SecondOrderSystems.Dystil"
             Publisher="CN=86E192E9-5762-4E46-9A90-6EDAD1EAB5D1"
             Version="__VERSION__"
@@ -37,7 +38,7 @@
             <uap:Logo>Assets\dystil.png</uap:Logo>
           </uap3:Protocol>
         </uap3:Extension>
-        <desktop:Extension Category="windows.startupTask" Executable="VFS\Local AppData\Dystil\dystil-app.exe" EntryPoint="Windows.FullTrustApplication">
+        <desktop:Extension Category="windows.startupTask" Executable="VFS\Local AppData\Dystil\dystil-app.exe" EntryPoint="Windows.FullTrustApplication" uap11:Parameters="--from-autostart">
           <desktop:StartupTask TaskId="DystilStartupTask" Enabled="true" DisplayName="Dystil" />
         </desktop:Extension>
       </Extensions>

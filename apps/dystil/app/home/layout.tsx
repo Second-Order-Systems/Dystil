@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { AppShell } from "@/components/dystil/shell/app-shell";
 import { ToastAction } from "@/components/ui/toast";
 import { toast } from "@/components/ui/use-toast";
-import { HomeProvider } from "@/lib/mock/provider";
+import { HomeProvider } from "@/lib/home/provider";
 
 type ManagedProvider = "codex" | "claude";
 type ProviderStatus = { state: string; authenticated?: boolean | null };

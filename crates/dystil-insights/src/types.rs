@@ -95,6 +95,7 @@ pub struct EvidenceRecord {
     pub occurred_at: String,
     pub app: Option<String>,
     pub window: Option<String>,
+    pub url: Option<String>,
     pub excerpt: String,
     pub policy_allowed: bool,
     pub redaction_ready: bool,
@@ -148,14 +149,39 @@ pub struct Handoff {
     pub title: String,
     /// Complete, bounded artifact content. A preview is derived by the kernel.
     pub body: String,
+    /// Short, user-visible steps for the Worth fixing decision surface. The
+    /// complete reusable artifact remains `body`.
+    pub preview_steps: Vec<String>,
     pub capability_id: Option<String>,
+}
+
+/// Steward's semantic reading of whether the observed work reached a usable
+/// outcome. The backend combines this with timestamps; it never trusts a raw
+/// event count as proof of recurrence.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionState {
+    Completed,
+    Partial,
+    Cancelled,
+    #[default]
+    Unclear,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FindingDraft {
     pub claim: String,
     pub why_worth_fixing: String,
+    /// A plain evidence-grounded note shown beside deterministic metrics.
+    pub evidence_note: String,
     pub evidence_ids: Vec<String>,
+    /// Required for new Steward output; defaults preserve historical records.
+    #[serde(default)]
+    pub completion_state: CompletionState,
+    /// Broad workflow stages actually supported by the cited evidence, such as
+    /// `input`, `transform`, `review`, or `handoff`.
+    #[serde(default)]
+    pub workflow_stages: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -247,6 +273,47 @@ pub struct WorthFixingEvidenceLine {
     pub app: Option<String>,
     pub description: String,
     pub available: bool,
+}
+
+/// A deterministic, auditable metric for the Home Worth fixing surface.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeEvidenceStat {
+    pub value: String,
+    pub label: String,
+}
+
+/// The only current Home origin: findings raised from locally observed work.
+/// User-requested work will be added when Ask for a fix is redesigned.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum HomeFindingOrigin {
+    Dystil,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeWorthFixingItem {
+    pub finding_id: String,
+    pub origin: HomeFindingOrigin,
+    pub occurred_at: String,
+    pub title: String,
+    pub evidence: Vec<HomeEvidenceStat>,
+    pub evidence_note: String,
+    pub offer: String,
+    pub fix_name: String,
+    pub steps: Vec<String>,
+    pub save_available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeWorthFixingSummary {
+    pub items: Vec<HomeWorthFixingItem>,
+    pub watching_count: u32,
+    pub processing: bool,
+    pub provider_ready: bool,
+    pub last_successful_wake_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]

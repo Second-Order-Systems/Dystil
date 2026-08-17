@@ -8,7 +8,12 @@
  * warm grey so it never competes with the primary action in the top bar.
  */
 
-import type { Job } from "@/lib/mock/types";
+type Job = {
+  fixName: string;
+  state: "running" | "done" | "failed";
+  currentStep: number;
+  totalSteps: number;
+};
 
 type StatusStripProps = {
   job: Job | null;

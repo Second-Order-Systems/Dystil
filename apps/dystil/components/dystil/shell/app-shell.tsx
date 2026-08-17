@@ -10,14 +10,14 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { usePlatform } from "@/lib/hooks/use-platform";
-import { useHome } from "@/lib/mock/provider";
+import { useHome } from "@/lib/home/provider";
 import { StatusStrip } from "./status-strip";
 import { TopBar } from "./top-bar";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { queue, shortcuts, job, stopJob } = useHome();
+  const { queue, shortcuts } = useHome();
   const { isMac } = usePlatform();
   const go = (path: string) => router.push(path);
 
@@ -55,9 +55,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
 
       <StatusStrip
-        job={job}
+        job={null}
         onPrivacy={() => go("/home/privacy")}
-        onStopJob={stopJob}
+        onStopJob={() => {}}
         onOpenResult={() => go("/home")}
       />
     </main>

@@ -148,6 +148,27 @@ export function useAskForFix() {
     }
   }, [busy, session]);
 
+  const startWatching = useCallback(async () => {
+    if (!session || busy) return;
+    await run(async () => unwrap(await commands.askForFixStartWatching(session.sessionId)));
+  }, [busy, run, session]);
+
+  const stopWatching = useCallback(async () => {
+    if (!session || busy) return;
+    await run(async () => unwrap(await commands.askForFixStopWatching(session.sessionId)));
+  }, [busy, run, session]);
+
+  const reviewWatch = useCallback(async () => {
+    if (!session || busy) return;
+    setOptimisticText("Review what Dystil found.");
+    await run(async () => unwrap(await commands.askForFixReviewWatch(session.sessionId)));
+  }, [busy, run, session]);
+
+  const updateWatchGuidance = useCallback(async (guidance: string) => {
+    if (!session || busy || !guidance.trim()) return;
+    await run(async () => unwrap(await commands.askForFixUpdateWatchGuidance(session.sessionId, guidance.trim())));
+  }, [busy, run, session]);
+
   const startNew = useCallback(async () => {
     if (busy) return;
     setBusy(true);
@@ -172,6 +193,10 @@ export function useAskForFix() {
     retry,
     cancel,
     keepArtifact,
+    startWatching,
+    stopWatching,
+    reviewWatch,
+    updateWatchGuidance,
     startNew,
   };
 }

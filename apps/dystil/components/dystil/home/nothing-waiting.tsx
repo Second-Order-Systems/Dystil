@@ -12,9 +12,14 @@
  */
 
 import { useState } from "react";
-import { FIXTURE_STARTERS } from "@/lib/mock";
-import type { Shortcut } from "@/lib/mock/types";
+import type { Shortcut } from "@/lib/home/types";
 import { SegmentedTrack } from "../primitives/segmented-track";
+
+const STARTERS = [
+  "Something takes me too long every week",
+  "I keep redoing the same thing",
+  "I want a shortcut for a specific job",
+];
 
 type NothingWaitingProps = {
   /** C is B plus a completion moment; they share almost all their markup. */
@@ -98,7 +103,7 @@ export function NothingWaiting({
 
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-ui-sm text-muted-ink">Or start here —</span>
-          {FIXTURE_STARTERS.map((starter) => (
+          {STARTERS.map((starter) => (
             <button
               key={starter}
               type="button"

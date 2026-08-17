@@ -1,6 +1,6 @@
 use std::{collections::HashSet, path::Path, str::FromStr, time::Duration};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::{
@@ -11,13 +11,17 @@ use thiserror::Error;
 
 use crate::{
     cadence_supported, derive_eligibility, handoff_preview, rank, select_top, user_label, Cadence,
-    Construct, DispositionKind, EligibilityContext, EvidenceRecord, FindingCandidate, FindingPage,
-    HandoffType, ObservationCertainty, ObservationRecord, OpportunityStatus, ReconciliationOutput,
-    WorthFixingCard, WorthFixingEvidenceLine, WorthFixingSummary,
+    CompletionState, Construct, DispositionKind, EligibilityContext, EvidenceRecord,
+    FindingCandidate, FindingPage, HandoffType, HomeEvidenceStat, HomeFindingOrigin,
+    HomeWorthFixingItem, HomeWorthFixingSummary, ObservationCertainty, ObservationRecord,
+    OpportunityStatus, ReconciliationOutput, WorthFixingCard, WorthFixingEvidenceLine,
+    WorthFixingSummary,
 };
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 8;
 const MANUAL_REFRESH_MIN_OBSERVATION_SPAN_HOURS: f64 = 3.0;
+const EPISODE_SEPARATION: ChronoDuration = ChronoDuration::minutes(30);
+const MIN_SINGLE_COMPLETED_EPISODE: ChronoDuration = ChronoDuration::minutes(5);
 
 #[derive(Debug, Error)]
 pub enum InsightsError {
@@ -141,7 +145,7 @@ async fn migrate(pool: &SqlitePool) -> Result<()> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS evidence(
           evidence_id TEXT PRIMARY KEY, source_namespace TEXT NOT NULL, source_id TEXT NOT NULL,
-          occurred_at TEXT NOT NULL, app TEXT, window TEXT, excerpt TEXT NOT NULL,
+          occurred_at TEXT NOT NULL, app TEXT, window TEXT, url TEXT, excerpt TEXT NOT NULL,
           immutable_fingerprint TEXT NOT NULL, policy_allowed INTEGER NOT NULL,
           redaction_ready INTEGER NOT NULL, deleted INTEGER NOT NULL, sensitive INTEGER NOT NULL,
           UNIQUE(source_namespace,source_id))",
@@ -495,6 +499,81 @@ async fn migrate(pool: &SqlitePool) -> Result<()> {
         .execute(&mut *tx)
         .await?;
     }
+    if current_version < 6 {
+        sqlx::query(
+            "CREATE TABLE ask_watches(
+              watch_id TEXT PRIMARY KEY,session_id TEXT NOT NULL UNIQUE REFERENCES ask_sessions(session_id),
+              state TEXT NOT NULL,watch_spec_json TEXT NOT NULL,
+              baseline_observation_sequence INTEGER NOT NULL,last_evaluated_sequence INTEGER NOT NULL,
+              historical_recheck_used INTEGER NOT NULL DEFAULT 0,week_checkpoint_seen INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL,updated_at TEXT NOT NULL,stopped_at TEXT)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE ask_watch_evidence(
+              watch_id TEXT NOT NULL REFERENCES ask_watches(watch_id),evidence_id TEXT NOT NULL,
+              observation_id TEXT,disposition TEXT NOT NULL,explanation TEXT NOT NULL,created_at TEXT NOT NULL,
+              PRIMARY KEY(watch_id,evidence_id))",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE ask_watch_evaluations(
+              evaluation_id TEXT PRIMARY KEY,watch_id TEXT NOT NULL REFERENCES ask_watches(watch_id),
+              input_fingerprint TEXT NOT NULL,from_sequence INTEGER NOT NULL,to_sequence INTEGER NOT NULL,
+              status TEXT NOT NULL,output_json TEXT,error_code TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
+              UNIQUE(watch_id,input_fingerprint))",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX ask_watches_active ON ask_watches(state,last_evaluated_sequence)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO insights_schema_migrations(version,applied_at) VALUES(6,?1)",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .execute(&mut *tx)
+        .await?;
+    }
+    if current_version < 7 {
+        let has_url = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM pragma_table_info('evidence') WHERE name='url'",
+        )
+        .fetch_one(&mut *tx)
+        .await?
+            > 0;
+        if !has_url {
+            sqlx::query("ALTER TABLE evidence ADD COLUMN url TEXT")
+                .execute(&mut *tx)
+                .await?;
+        }
+        sqlx::query(
+            "INSERT OR IGNORE INTO insights_schema_migrations(version,applied_at) VALUES(7,?1)",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .execute(&mut *tx)
+        .await?;
+    }
+    if current_version < 8 {
+        sqlx::query("ALTER TABLE findings ADD COLUMN evidence_note TEXT NOT NULL DEFAULT ''")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "ALTER TABLE findings ADD COLUMN handoff_steps_json TEXT NOT NULL DEFAULT '[]'",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO insights_schema_migrations(version,applied_at) VALUES(8,?1)",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .execute(&mut *tx)
+        .await?;
+    }
     sqlx::query(
         "INSERT INTO insights_metadata(key,value) VALUES('schema_version',?1)
          ON CONFLICT(key) DO UPDATE SET value=?1",
@@ -513,6 +592,7 @@ struct ImmutableEvidence<'a> {
     occurred_at: &'a str,
     app: &'a Option<String>,
     window: &'a Option<String>,
+    url: &'a Option<String>,
     excerpt: &'a str,
 }
 
@@ -523,6 +603,7 @@ pub async fn upsert_evidence(pool: &SqlitePool, item: &EvidenceRecord) -> Result
         occurred_at: &item.occurred_at,
         app: &item.app,
         window: &item.window,
+        url: &item.url,
         excerpt: &item.excerpt,
     })?;
     let mut tx = pool.begin().await?;
@@ -547,13 +628,14 @@ pub async fn upsert_evidence(pool: &SqlitePool, item: &EvidenceRecord) -> Result
         .execute(&mut *tx)
         .await?;
     } else {
-        sqlx::query("INSERT INTO evidence VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)")
+        sqlx::query("INSERT INTO evidence VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)")
             .bind(&item.evidence_id)
             .bind(&item.source_namespace)
             .bind(&item.source_id)
             .bind(&item.occurred_at)
             .bind(&item.app)
             .bind(&item.window)
+            .bind(&item.url)
             .bind(&item.excerpt)
             .bind(&immutable)
             .bind(item.policy_allowed)
@@ -635,7 +717,7 @@ pub async fn forget_capture_evidence(
         }
 
         let mut update = sqlx::QueryBuilder::new(
-            "UPDATE evidence SET excerpt='',app=NULL,window=NULL,deleted=1 WHERE source_namespace=",
+            "UPDATE evidence SET excerpt='',app=NULL,window=NULL,url=NULL,deleted=1 WHERE source_namespace=",
         );
         update
             .push_bind(source_namespace)
@@ -646,6 +728,55 @@ pub async fn forget_capture_evidence(
         }
         separated.push_unseparated(")");
         forgotten_evidence += update.build().execute(&mut *tx).await?.rows_affected();
+
+        let mut affected_watches = sqlx::QueryBuilder::new(
+            "SELECT DISTINCT awe.watch_id FROM ask_watch_evidence awe JOIN evidence e ON e.evidence_id=awe.evidence_id WHERE e.source_namespace=",
+        );
+        affected_watches
+            .push_bind(source_namespace)
+            .push(" AND e.source_id IN (");
+        let mut separated = affected_watches.separated(",");
+        for source_id in chunk {
+            separated.push_bind(source_id);
+        }
+        separated.push_unseparated(")");
+        let watch_ids = affected_watches
+            .build()
+            .fetch_all(&mut *tx)
+            .await?
+            .into_iter()
+            .map(|row| row.get::<String, _>("watch_id"))
+            .collect::<Vec<_>>();
+        if !watch_ids.is_empty() {
+            let mut delete_watch_evidence =
+                sqlx::QueryBuilder::new("DELETE FROM ask_watch_evidence WHERE watch_id IN (");
+            let mut separated = delete_watch_evidence.separated(",");
+            for watch_id in &watch_ids {
+                separated.push_bind(watch_id);
+            }
+            separated.push_unseparated(
+                ") AND evidence_id IN (SELECT evidence_id FROM evidence WHERE source_namespace=",
+            );
+            delete_watch_evidence
+                .push_bind(source_namespace)
+                .push(" AND source_id IN (");
+            let mut separated = delete_watch_evidence.separated(",");
+            for source_id in chunk {
+                separated.push_bind(source_id);
+            }
+            separated.push_unseparated("))");
+            delete_watch_evidence.build().execute(&mut *tx).await?;
+            let now = Utc::now().to_rfc3339();
+            for watch_id in watch_ids {
+                sqlx::query(
+                    "UPDATE ask_watches SET state=CASE WHEN state='review_ready' THEN 'active' ELSE state END,updated_at=?2 WHERE watch_id=?1",
+                )
+                .bind(watch_id)
+                .bind(&now)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
         tx.commit().await?;
     }
 
@@ -1179,10 +1310,22 @@ pub async fn job_observation_ids(pool: &SqlitePool, job_id: &str) -> Result<Vec<
     .await?)
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct ApplyOptions {
     /// Test-only crash injection. The surrounding transaction must roll back.
     pub fail_after_opportunity: Option<usize>,
+    /// Live Steward output must clear the episode policy. Historical imports
+    /// retain their established semantics while their contracts are migrated.
+    pub enforce_finding_credibility: bool,
+}
+
+impl Default for ApplyOptions {
+    fn default() -> Self {
+        Self {
+            fail_after_opportunity: None,
+            enforce_finding_credibility: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1275,6 +1418,69 @@ async fn opportunity_certainties_and_starts(
         }
     }
     Ok((certainties, starts))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EpisodeCredibility {
+    distinct_episodes: u32,
+    longest_duration: ChronoDuration,
+}
+
+async fn opportunity_episode_credibility(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    opportunity_id: &str,
+) -> Result<EpisodeCredibility> {
+    let rows = sqlx::query(
+        "SELECT started_at,ended_at FROM occurrences WHERE opportunity_id=?1 ORDER BY started_at,occurrence_id",
+    )
+    .bind(opportunity_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    let mut episodes: Vec<(DateTime<Utc>, DateTime<Utc>)> = Vec::new();
+    for row in rows {
+        let Ok(start) = DateTime::parse_from_rfc3339(&row.get::<String, _>("started_at")) else {
+            continue;
+        };
+        let Ok(end) = DateTime::parse_from_rfc3339(&row.get::<String, _>("ended_at")) else {
+            continue;
+        };
+        let start = start.with_timezone(&Utc);
+        let end = end.with_timezone(&Utc).max(start);
+        if let Some((_, episode_end)) = episodes.last_mut() {
+            if start <= *episode_end + EPISODE_SEPARATION {
+                *episode_end = (*episode_end).max(end);
+                continue;
+            }
+        }
+        episodes.push((start, end));
+    }
+    let longest_duration = episodes
+        .iter()
+        .map(|(start, end)| end.signed_duration_since(*start))
+        .max()
+        .unwrap_or_else(ChronoDuration::zero);
+    Ok(EpisodeCredibility {
+        distinct_episodes: episodes.len() as u32,
+        longest_duration,
+    })
+}
+
+fn finding_credibility_is_sufficient(
+    finding: &crate::FindingDraft,
+    episodes: EpisodeCredibility,
+) -> bool {
+    if finding.completion_state != CompletionState::Completed {
+        return false;
+    }
+    let stage_count = finding
+        .workflow_stages
+        .iter()
+        .filter(|stage| !stage.trim().is_empty())
+        .collect::<HashSet<_>>()
+        .len();
+    stage_count >= 3
+        && (episodes.distinct_episodes >= 2
+            || episodes.longest_duration >= MIN_SINGLE_COMPLETED_EPISODE)
 }
 
 pub async fn apply_reconciliation(
@@ -1505,6 +1711,7 @@ async fn apply_reconciliation_inner(
             opportunity_occurrence_sets(&mut tx, &opportunity_id).await?;
         let (certainties, starts) =
             opportunity_certainties_and_starts(&mut tx, &opportunity_id).await?;
+        let episode_credibility = opportunity_episode_credibility(&mut tx, &opportunity_id).await?;
         let capability_verified = if let Some(handoff) = &proposal.handoff {
             if handoff.kind == HandoffType::ExistingCapability {
                 if let Some(capability_id) = &handoff.capability_id {
@@ -1540,6 +1747,10 @@ async fn apply_reconciliation_inner(
                 eligibility.errors.join(", ")
             )));
         }
+        let finding_is_credible = !options.enforce_finding_credibility
+            || proposal.finding.as_ref().is_some_and(|finding| {
+                finding_credibility_is_sufficient(finding, episode_credibility)
+            });
         let status = if proposal.retire {
             OpportunityStatus::Retired
         } else if proposal.withdraw_current_finding || proposal.finding.is_none() {
@@ -1548,7 +1759,7 @@ async fn apply_reconciliation_inner(
             } else {
                 OpportunityStatus::Watching
             }
-        } else if eligibility.eligible {
+        } else if eligibility.eligible && finding_is_credible {
             OpportunityStatus::Eligible
         } else {
             OpportunityStatus::Watching
@@ -1578,50 +1789,56 @@ async fn apply_reconciliation_inner(
         .bind(&now)
         .execute(&mut *tx)
         .await?;
-        if proposal.withdraw_current_finding || proposal.retire || proposal.finding.is_none() {
+        if proposal.withdraw_current_finding
+            || proposal.retire
+            || proposal.finding.is_none()
+            || !finding_is_credible
+        {
             sqlx::query("UPDATE findings SET active=0 WHERE opportunity_id=?1")
                 .bind(&opportunity_id)
                 .execute(&mut *tx)
                 .await?;
         }
-        if let (Some(finding), Some(handoff)) = (&proposal.finding, &proposal.handoff) {
-            if finding.evidence_ids.is_empty()
-                || has_duplicates(&finding.evidence_ids)
-                || finding
-                    .evidence_ids
-                    .iter()
-                    .any(|id| !prior_evidence.contains(id))
-            {
-                return Err(InsightsError::Invalid(
-                    "finding evidence is outside opportunity history".into(),
-                ));
-            }
-            for evidence_id in &finding.evidence_ids {
-                let admissible: i64 = sqlx::query_scalar(
+        if finding_is_credible {
+            if let (Some(finding), Some(handoff)) = (&proposal.finding, &proposal.handoff) {
+                if finding.evidence_ids.is_empty()
+                    || has_duplicates(&finding.evidence_ids)
+                    || finding
+                        .evidence_ids
+                        .iter()
+                        .any(|id| !prior_evidence.contains(id))
+                {
+                    return Err(InsightsError::Invalid(
+                        "finding evidence is outside opportunity history".into(),
+                    ));
+                }
+                for evidence_id in &finding.evidence_ids {
+                    let admissible: i64 = sqlx::query_scalar(
                     "SELECT policy_allowed AND redaction_ready AND NOT deleted AND NOT sensitive
                      FROM evidence WHERE evidence_id=?1",
                 )
                 .bind(evidence_id)
                 .fetch_one(&mut *tx)
                 .await?;
-                if admissible != 1 {
-                    return Err(InsightsError::Invalid(
-                        "finding uses inadmissible evidence".into(),
-                    ));
+                    if admissible != 1 {
+                        return Err(InsightsError::Invalid(
+                            "finding uses inadmissible evidence".into(),
+                        ));
+                    }
                 }
-            }
-            let (rank_score, rank_vector) = rank(proposal, occurrence_count, &certainties);
-            sqlx::query("UPDATE findings SET active=0 WHERE opportunity_id=?1")
-                .bind(&opportunity_id)
-                .execute(&mut *tx)
-                .await?;
-            let finding_id = stable_id("wff", &(&opportunity_id, &version_id, finding, handoff))?;
-            sqlx::query(
+                let (rank_score, rank_vector) = rank(proposal, occurrence_count, &certainties);
+                sqlx::query("UPDATE findings SET active=0 WHERE opportunity_id=?1")
+                    .bind(&opportunity_id)
+                    .execute(&mut *tx)
+                    .await?;
+                let finding_id =
+                    stable_id("wff", &(&opportunity_id, &version_id, finding, handoff))?;
+                sqlx::query(
                 "INSERT INTO findings(
                    finding_id,opportunity_id,version_id,active,construct,label,claim,
-                   why_worth_fixing,handoff_type,handoff_title,handoff_preview,handoff_body,
+                   why_worth_fixing,evidence_note,handoff_type,handoff_title,handoff_preview,handoff_body,handoff_steps_json,
                    occurrence_count,cadence,rank_score,rank_vector_json,created_at)
-                 VALUES(?1,?2,?3,1,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+                 VALUES(?1,?2,?3,1,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
             )
             .bind(&finding_id)
             .bind(&opportunity_id)
@@ -1634,10 +1851,12 @@ async fn apply_reconciliation_inner(
             ))
             .bind(&finding.claim)
             .bind(&finding.why_worth_fixing)
+            .bind(&finding.evidence_note)
             .bind(handoff_str(handoff.kind))
             .bind(&handoff.title)
             .bind(handoff_preview(&handoff.body))
             .bind(&handoff.body)
+            .bind(serde_json::to_string(&handoff.preview_steps)?)
             .bind(occurrence_count as i64)
             .bind(cadence_str(proposal.cadence))
             .bind(rank_score)
@@ -1645,14 +1864,15 @@ async fn apply_reconciliation_inner(
             .bind(&now)
             .execute(&mut *tx)
             .await?;
-            for evidence_id in &finding.evidence_ids {
-                sqlx::query("INSERT INTO finding_evidence VALUES(?1,?2)")
-                    .bind(&finding_id)
-                    .bind(evidence_id)
-                    .execute(&mut *tx)
-                    .await?;
+                for evidence_id in &finding.evidence_ids {
+                    sqlx::query("INSERT INTO finding_evidence VALUES(?1,?2)")
+                        .bind(&finding_id)
+                        .bind(evidence_id)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+                finding_total += 1;
             }
-            finding_total += 1;
         }
         if options.fail_after_opportunity == Some(index + 1) {
             return Err(InsightsError::Invalid("injected apply failure".into()));
@@ -1987,6 +2207,137 @@ pub async fn worth_fixing_summary(
     })
 }
 
+fn fallback_offer(handoff_type: &str) -> String {
+    match handoff_type {
+        "existing_capability" => "Want to save how to use this?".into(),
+        "runbook" => "Want to save this runbook for next time?".into(),
+        _ => "Want to save this for next time?".into(),
+    }
+}
+
+fn fallback_preview_steps(body: &str, preview: &str) -> Vec<String> {
+    let steps = body
+        .lines()
+        .map(|line| {
+            line.trim().trim_start_matches(|ch: char| {
+                matches!(ch, '-' | '*' | '•' | '1'..='9' | '.' | ')' | ' ')
+            })
+        })
+        .filter(|line| !line.is_empty())
+        .map(|line| line.chars().take(280).collect::<String>())
+        .take(6)
+        .collect::<Vec<_>>();
+    if steps.is_empty() && !preview.trim().is_empty() {
+        vec![preview.chars().take(280).collect()]
+    } else {
+        steps
+    }
+}
+
+fn evidence_span(start: Option<String>, end: Option<String>) -> Option<String> {
+    let start = start.and_then(|value| DateTime::parse_from_rfc3339(&value).ok())?;
+    let end = end.and_then(|value| DateTime::parse_from_rfc3339(&value).ok())?;
+    let seconds = end.signed_duration_since(start).num_seconds().max(0);
+    if seconds < 60 {
+        None
+    } else if seconds < 3_600 {
+        Some(format!("{}m", seconds / 60))
+    } else if seconds < 86_400 {
+        Some(format!("{}h", seconds / 3_600))
+    } else {
+        Some(format!("{}d", seconds / 86_400))
+    }
+}
+
+/// Durable Home projection for the only Worth fixing experience. Semantic
+/// presentation comes from the accepted Steward output; counts and coverage
+/// are calculated from retained evidence so they remain auditable after a wake.
+pub async fn home_worth_fixing_summary(
+    pool: &SqlitePool,
+    provider_ready: bool,
+) -> Result<HomeWorthFixingSummary> {
+    let summary = worth_fixing_summary(pool, provider_ready).await?;
+    let rows = sqlx::query(
+        "SELECT f.finding_id,f.claim,f.why_worth_fixing,f.evidence_note,
+                f.handoff_type,f.handoff_title,f.handoff_preview,f.handoff_body,f.handoff_steps_json,f.occurrence_count,
+                COUNT(fe.evidence_id) evidence_count,COUNT(DISTINCT e.app) app_count,
+                MIN(e.occurred_at) first_observed_at,MAX(e.occurred_at) last_observed_at,
+                NOT EXISTS(SELECT 1 FROM finding_evidence current_fe JOIN evidence current_e
+                  ON current_e.evidence_id=current_fe.evidence_id
+                  WHERE current_fe.finding_id=f.finding_id AND
+                  (NOT current_e.policy_allowed OR NOT current_e.redaction_ready OR current_e.deleted OR current_e.sensitive)) save_available
+         FROM findings f JOIN finding_evidence fe ON fe.finding_id=f.finding_id
+         JOIN evidence e ON e.evidence_id=fe.evidence_id
+         WHERE f.active=1 GROUP BY f.finding_id ORDER BY f.rank_score DESC,f.created_at DESC,f.finding_id",
+    )
+    .fetch_all(pool)
+    .await?;
+    let items = rows
+        .into_iter()
+        .map(|row| {
+            let evidence_count = row.get::<i64, _>("evidence_count").max(0) as u32;
+            let app_count = row.get::<i64, _>("app_count").max(0) as u32;
+            let steps = serde_json::from_str::<Vec<String>>(row.get("handoff_steps_json"))
+                .unwrap_or_default();
+            let preview = row.get::<String, _>("handoff_preview");
+            let body = row.get::<String, _>("handoff_body");
+            let steps = if steps.is_empty() {
+                fallback_preview_steps(&body, &preview)
+            } else {
+                steps
+            };
+            let evidence_note = row.get::<String, _>("evidence_note");
+            let mut evidence = vec![
+                HomeEvidenceStat {
+                    value: row.get::<i64, _>("occurrence_count").max(0).to_string(),
+                    label: "instances".into(),
+                },
+                HomeEvidenceStat {
+                    value: evidence_count.to_string(),
+                    label: "evidence".into(),
+                },
+                HomeEvidenceStat {
+                    value: app_count.to_string(),
+                    label: "apps".into(),
+                },
+            ];
+            if let Some(span) =
+                evidence_span(row.get("first_observed_at"), row.get("last_observed_at"))
+            {
+                evidence.push(HomeEvidenceStat {
+                    value: span,
+                    label: "observed over".into(),
+                });
+            }
+            Ok(HomeWorthFixingItem {
+                finding_id: row.get("finding_id"),
+                origin: HomeFindingOrigin::Dystil,
+                occurred_at: row
+                    .get::<Option<String>, _>("last_observed_at")
+                    .unwrap_or_default(),
+                title: row.get("claim"),
+                evidence,
+                evidence_note: if evidence_note.trim().is_empty() {
+                    row.get("why_worth_fixing")
+                } else {
+                    evidence_note
+                },
+                offer: fallback_offer(row.get("handoff_type")),
+                fix_name: row.get("handoff_title"),
+                steps,
+                save_available: row.get("save_available"),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(HomeWorthFixingSummary {
+        items,
+        watching_count: summary.watching_count,
+        processing: summary.processing,
+        provider_ready: summary.provider_ready,
+        last_successful_wake_at: summary.last_successful_wake_at,
+    })
+}
+
 pub async fn normal_wakes_started(pool: &SqlitePool, local_day: &str) -> Result<u8> {
     Ok(sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM wake_starts WHERE local_day=?1 AND normal=1",
@@ -2135,6 +2486,9 @@ pub async fn delete_all_insights_data(pool: &SqlitePool) -> Result<()> {
         "ask_jobs",
         "ask_questions",
         "ask_messages",
+        "ask_watch_evaluations",
+        "ask_watch_evidence",
+        "ask_watches",
         "ask_sessions",
         "artifact_change_attempts",
         "artifact_versions",
@@ -2622,6 +2976,7 @@ mod tests {
             occurred_at: format!("2026-01-{:02}T09:00:00Z", index.min(28)),
             app: Some("Editor".into()),
             window: Some("Report".into()),
+            url: None,
             excerpt: format!("Evidence for occurrence {index}"),
             policy_allowed: true,
             redaction_ready: true,
@@ -2699,6 +3054,7 @@ mod tests {
                 kind: HandoffType::Prompt,
                 title: "Prepare the report".into(),
                 body: "Turn the supplied material into the expected report.".into(),
+                preview_steps: vec!["Prepare the expected report.".into()],
                 capability_id: None,
             }),
             automation_potential: false,
@@ -2712,7 +3068,10 @@ mod tests {
             finding: with_finding.then(|| FindingDraft {
                 claim: "A reusable prompt can prepare this report.".into(),
                 why_worth_fixing: "This avoids rebuilding the same instructions.".into(),
+                evidence_note: "The same report preparation was observed again.".into(),
                 evidence_ids: vec![format!("frame:{index}")],
+                completion_state: crate::CompletionState::Unclear,
+                workflow_stages: vec!["input".into(), "transform".into(), "handoff".into()],
             }),
         }
     }
@@ -2741,6 +3100,52 @@ mod tests {
         .unwrap()
     }
 
+    #[test]
+    fn finding_credibility_requires_completion_and_meaningful_episode_support() {
+        let finding = FindingDraft {
+            claim: "Prepare a recurring report".into(),
+            why_worth_fixing: "It repeats".into(),
+            evidence_note: "Observed evidence".into(),
+            evidence_ids: vec!["frame:1".into()],
+            completion_state: crate::CompletionState::Completed,
+            workflow_stages: vec!["input".into(), "transform".into(), "handoff".into()],
+        };
+
+        assert!(!finding_credibility_is_sufficient(
+            &finding,
+            EpisodeCredibility {
+                distinct_episodes: 1,
+                longest_duration: ChronoDuration::seconds(13),
+            },
+        ));
+        assert!(finding_credibility_is_sufficient(
+            &finding,
+            EpisodeCredibility {
+                distinct_episodes: 2,
+                longest_duration: ChronoDuration::seconds(13),
+            },
+        ));
+        assert!(finding_credibility_is_sufficient(
+            &finding,
+            EpisodeCredibility {
+                distinct_episodes: 1,
+                longest_duration: ChronoDuration::minutes(5),
+            },
+        ));
+
+        let cancelled = FindingDraft {
+            completion_state: crate::CompletionState::Cancelled,
+            ..finding
+        };
+        assert!(!finding_credibility_is_sufficient(
+            &cancelled,
+            EpisodeCredibility {
+                distinct_episodes: 3,
+                longest_duration: ChronoDuration::minutes(30),
+            },
+        ));
+    }
+
     #[tokio::test]
     async fn crash_rollback_and_committed_before_receipt_resume_are_safe() {
         let (_directory, pool) = setup().await;
@@ -2758,6 +3163,7 @@ mod tests {
             &output,
             ApplyOptions {
                 fail_after_opportunity: Some(1),
+                ..ApplyOptions::default()
             },
         )
         .await;
@@ -2842,6 +3248,42 @@ mod tests {
         assert!(!summary.manual_refresh_ready);
         assert!(!summary.processing);
         assert!(!summary.provider_ready);
+    }
+
+    #[tokio::test]
+    async fn home_projection_combines_persisted_copy_with_auditable_evidence_metrics() {
+        let (_directory, pool) = setup().await;
+        insert_source(&pool, 1).await;
+        let job_id = job(&pool, 1).await;
+        claim_job(&pool, &job_id).await.unwrap();
+        apply_reconciliation(
+            &pool,
+            &job_id,
+            &ReconciliationOutput {
+                schema_version: 1,
+                considered_observation_ids: vec![format!("obl_{:024x}", 1)],
+                opportunities: vec![delta(1, None, true)],
+            },
+            ApplyOptions::default(),
+        )
+        .await
+        .unwrap();
+
+        let home = home_worth_fixing_summary(&pool, true).await.unwrap();
+        assert_eq!(home.items.len(), 1);
+        let item = &home.items[0];
+        assert_eq!(item.title, "A reusable prompt can prepare this report.");
+        assert_eq!(
+            item.evidence_note,
+            "The same report preparation was observed again."
+        );
+        assert_eq!(item.offer, "Want to save this for next time?");
+        assert_eq!(item.steps, vec!["Prepare the expected report."]);
+        assert_eq!(item.evidence[0].value, "1");
+        assert_eq!(item.evidence[1].value, "1");
+        assert_eq!(item.evidence[2].value, "1");
+        assert_eq!(item.evidence.len(), 3);
+        assert!(item.save_available);
     }
 
     #[tokio::test]

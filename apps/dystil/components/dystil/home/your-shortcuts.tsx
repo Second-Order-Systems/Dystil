@@ -11,7 +11,7 @@
  */
 
 import { useRouter } from "next/navigation";
-import { useHome } from "@/lib/mock/provider";
+import { useHome } from "@/lib/home/provider";
 
 /** The headline counts in words, so it reads as a sentence rather than a stat. */
 const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
@@ -19,15 +19,13 @@ const countWord = (n: number) => WORDS[n] ?? String(n);
 
 export function YourShortcuts() {
   const router = useRouter();
-  const { shortcuts } = useHome();
-  const runnable = shortcuts.filter((shortcut) => shortcut.runnable).length;
+  const { shortcuts, copyShortcut } = useHome();
 
   return (
     <div className="mx-auto max-w-[760px] px-10 pb-[50px] pt-8">
       <div className="mb-[26px] flex items-center gap-[11px]">
         <span className="text-meta text-ink-2">
-          <span className="font-semibold">{shortcuts.length} kept</span> · {runnable} I can run
-          myself
+          <span className="font-semibold">{shortcuts.length} kept</span> · ready when you are
         </span>
         <div className="flex-1" />
         <button
@@ -65,20 +63,14 @@ export function YourShortcuts() {
               <div className="text-ui-sm text-muted-ink">{shortcut.meta}</div>
             </div>
 
-            {shortcut.runnable ? (
-              <button
-                type="button"
-                className="shrink-0 rounded-icon bg-green-deep px-4 py-2 text-ui-sm font-semibold text-paper transition-colors hover:bg-green-deep-hover"
-              >
-                Run it
-              </button>
-            ) : null}
             <button
               type="button"
+              onClick={() => void copyShortcut(shortcut.id)}
               className="shrink-0 rounded-icon px-[13px] py-2 text-ui-sm font-medium text-ink-3 transition-colors hover:bg-chrome hover:text-ink"
             >
               Copy
             </button>
+
           </div>
         ))}
       </div>

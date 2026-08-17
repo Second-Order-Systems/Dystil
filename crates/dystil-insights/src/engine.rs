@@ -21,7 +21,7 @@ use crate::{
 const EXPLORER_PROMPT_VERSION: &str = "worth-fixing-explorer-v1";
 const EXPLORER_PROMPT: &str = include_str!("../resources/explorer_prompt_v1.md");
 const EXPLORER_MODEL_TIER: AiModelTier = AiModelTier::Economy;
-const STEWARD_PROMPT_VERSION: &str = "worth-fixing-steward-v2";
+const STEWARD_PROMPT_VERSION: &str = "worth-fixing-steward-v4";
 const STEWARD_PROMPT: &str = include_str!("../resources/steward_prompt_v2.md");
 const STEWARD_MODEL_TIER: AiModelTier = AiModelTier::Frontier;
 const STEWARD_TIMEOUT: Duration = Duration::from_secs(300);
@@ -502,7 +502,10 @@ async fn run_steward_wake_inner<R: AiRuntime + ?Sized>(
                 pool,
                 &job_id,
                 &output,
-                ApplyOptions::default(),
+                ApplyOptions {
+                    enforce_finding_credibility: true,
+                    ..ApplyOptions::default()
+                },
                 AcceptedAttemptReceipt {
                     request_fingerprint: request_fingerprint.clone(),
                     output_fingerprint: output_fingerprint.clone(),
@@ -627,6 +630,7 @@ mod tests {
                 occurred_at: "2026-08-02T10:00:00Z".into(),
                 app: Some("Mail".into()),
                 window: None,
+                url: None,
                 excerpt: "Copied a value".into(),
                 policy_allowed: true,
                 redaction_ready: true,
@@ -711,6 +715,7 @@ mod tests {
             occurred_at: "2026-08-02T10:00:00Z".into(),
             app: Some("Editor".into()),
             window: None,
+            url: None,
             excerpt: "Prepared the same weekly update".into(),
             policy_allowed: true,
             redaction_ready: true,
@@ -724,6 +729,7 @@ mod tests {
             occurred_at: "2026-08-02T10:01:00Z".into(),
             app: Some("Browser".into()),
             window: None,
+            url: None,
             excerpt: "SECRET PRIVATE CONTENT".into(),
             policy_allowed: false,
             redaction_ready: true,
@@ -783,6 +789,7 @@ mod tests {
             occurred_at: "2026-08-02T10:00:00Z".into(),
             app: Some("Editor".into()),
             window: None,
+            url: None,
             excerpt: "Prepared the weekly update".into(),
             policy_allowed: true,
             redaction_ready: true,

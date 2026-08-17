@@ -9,8 +9,9 @@
  */
 
 import { useState } from "react";
-import { CORRECTION_OPTIONS } from "@/lib/mock";
-import type { CorrectionReason, HomeItem } from "@/lib/mock/types";
+import { CORRECTION_OPTIONS } from "@/lib/home/types";
+import type { CorrectionReason, HomeItem } from "@/lib/home/types";
+import { FindingEvidence } from "../worth-fixing/finding-evidence";
 import { Droplet } from "../primitives/droplet";
 import { SegmentedTrack, pileSegments } from "../primitives/segmented-track";
 
@@ -19,8 +20,7 @@ type PileProps = {
   remaining: number;
   originalTotal: number;
   onSeeAll: () => void;
-  onRun: () => void;
-  onTakePrompt: () => void;
+  onSave: () => void;
   onDefer: () => void;
   onCorrect: (reason: CorrectionReason) => void;
 };
@@ -30,12 +30,12 @@ export function ThePile({
   remaining,
   originalTotal,
   onSeeAll,
-  onRun,
-  onTakePrompt,
+  onSave,
   onDefer,
   onCorrect,
 }: PileProps) {
   const [correcting, setCorrecting] = useState(false);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
 
   return (
     <div className="mx-auto max-w-[650px] px-10 pt-[22px]">
@@ -45,17 +45,6 @@ export function ThePile({
         onSeeAll={onSeeAll}
       />
 
-      {/*
-        Only user-originated items carry a badge. A finding Dystil raised has
-        to justify interrupting you, so the headline leads and the timestamp
-        lives in the evidence header instead.
-      */}
-      {item.origin === "user" ? (
-        <span className="mb-3 inline-block rounded-pill bg-marigold-tint px-[10px] py-[4px] text-label-sm font-bold uppercase tracking-[0.11em] text-marigold-text">
-          You asked · {item.when}
-        </span>
-      ) : null}
-
       <h1 className="mb-5 text-pretty font-display text-display font-normal text-ink">
         {item.title}
       </h1>
@@ -64,13 +53,7 @@ export function ThePile({
         Collapsed while correcting: the user is disputing the claim, not
         re-reading it, and without collapsing the panel cannot fit the viewport.
       */}
-      {!correcting ? (
-        item.origin === "dystil" ? (
-          <EvidencePanel item={item} />
-        ) : (
-          <RecapPanel item={item} />
-        )
-      ) : null}
+      {!correcting ? <EvidencePanel item={item} open={evidenceOpen} onToggle={() => setEvidenceOpen((open) => !open)} /> : null}
 
       {correcting ? (
         <CorrectionPanel
@@ -87,9 +70,8 @@ export function ThePile({
           </h2>
           <FixPanel item={item} />
           <DecisionRow
-            runnable={item.runnable}
-            onRun={onRun}
-            onTakePrompt={onTakePrompt}
+            saveAvailable={item.saveAvailable}
+            onSave={onSave}
             onDispute={() => setCorrecting(true)}
             onDefer={onDefer}
           />
@@ -133,7 +115,7 @@ function ContextStrip({
  * to decide. Numbers, never prose — a count can be audited in two seconds; a
  * sentence has to be trusted.
  */
-function EvidencePanel({ item }: { item: HomeItem }) {
+function EvidencePanel({ item, open, onToggle }: { item: HomeItem; open: boolean; onToggle: () => void }) {
   return (
     <section className="mb-5 rounded-panel border border-line-2 bg-paper px-[18px] pb-[14px] pt-4">
       <div className="mb-3 flex items-center gap-[9px]">
@@ -143,8 +125,8 @@ function EvidencePanel({ item }: { item: HomeItem }) {
         <span className="h-[3px] w-[3px] rounded-full bg-chevron" />
         <span className="text-meta text-muted-ink">{item.when}</span>
         <div className="flex-1" />
-        <button type="button" className="text-ui-sm font-semibold text-ink-3 hover:underline">
-          Open the record →
+        <button type="button" aria-expanded={open} onClick={onToggle} className="text-ui-sm font-semibold text-ink-3 hover:underline">
+          {open ? "Hide the record" : "Open the record →"}
         </button>
       </div>
 
@@ -160,35 +142,7 @@ function EvidencePanel({ item }: { item: HomeItem }) {
       {item.evidenceNote ? (
         <p className="mt-3 text-meta text-muted-ink">{item.evidenceNote}</p>
       ) : null}
-    </section>
-  );
-}
-
-/**
- * A requested answer does not need to justify interrupting you — it needs to
- * prove it listened. Hence own-words playback instead of evidence.
- */
-function RecapPanel({ item }: { item: HomeItem }) {
-  return (
-    <section className="mb-5 rounded-panel border border-line-2 bg-paper px-[18px] pb-[14px] pt-4">
-      <div className="mb-3 text-label-sm font-bold uppercase tracking-[0.12em] text-muted-ink-2">
-        Built from what you told me
-      </div>
-
-      <dl className="space-y-2">
-        {item.recap?.map((row) => (
-          <div key={row.label} className="flex gap-3">
-            <dt className="w-24 shrink-0 whitespace-nowrap text-label-sm font-bold uppercase tracking-[0.08em] text-sage">
-              {row.label}
-            </dt>
-            <dd className="text-body text-ink-2">{row.text}</dd>
-          </div>
-        ))}
-      </dl>
-
-      <button type="button" className="mt-3 text-ui-sm font-semibold text-ink-3 hover:underline">
-        Something here is wrong →
-      </button>
+      {open ? <FindingEvidence findingId={item.id} /> : null}
     </section>
   );
 }
@@ -200,11 +154,6 @@ function FixPanel({ item }: { item: HomeItem }) {
     <section className="mb-4 rounded-panel border border-sage-border bg-paper px-[19px] py-[17px]">
       <div className="mb-3 flex flex-wrap items-center gap-[10px]">
         <h3 className="text-title font-semibold text-ink">{item.fixName}</h3>
-        {item.runnable ? (
-          <span className="rounded-badge bg-marigold-tint px-2 py-[3px] text-label-sm font-bold uppercase tracking-[0.09em] text-marigold-text">
-            Dystil can run this
-          </span>
-        ) : null}
       </div>
 
       <ol className="space-y-[9px]">
@@ -221,7 +170,7 @@ function FixPanel({ item }: { item: HomeItem }) {
       <div className="mt-3 flex items-center gap-2 border-t border-line-3 pt-3">
         <Droplet width={9} height={12} className="text-green-mark" />
         <span className="text-ui-sm text-sage">
-          Runs on this Mac, on material you already have. Nothing uploaded.
+          Built from material Dystil observed locally. Nothing uploaded.
         </span>
       </div>
     </section>
@@ -233,35 +182,25 @@ function FixPanel({ item }: { item: HomeItem }) {
  * behind it. The negative margins let its background span the column gutters.
  */
 function DecisionRow({
-  runnable,
-  onRun,
-  onTakePrompt,
+  saveAvailable,
+  onSave,
   onDispute,
   onDefer,
 }: {
-  runnable: boolean;
-  onRun: () => void;
-  onTakePrompt: () => void;
+  saveAvailable: boolean;
+  onSave: () => void;
   onDispute: () => void;
   onDefer: () => void;
 }) {
   return (
     <div className="sticky bottom-0 -mx-10 flex items-center gap-3 border-t border-line bg-ground px-10 pb-[17px] pt-[13px]">
-      {runnable ? (
-        <button
-          type="button"
-          onClick={onRun}
-          className="rounded-button bg-green-deep px-[22px] py-3 text-body font-semibold text-paper transition-colors hover:bg-green-deep-hover"
-        >
-          Yes, run it
-        </button>
-      ) : null}
       <button
         type="button"
-        onClick={onTakePrompt}
-        className="rounded-button border border-line-2b bg-paper px-[18px] py-3 text-body font-medium text-ink-2 transition-colors hover:bg-recessed"
+        disabled={!saveAvailable}
+        onClick={onSave}
+        className="rounded-button bg-green-deep px-[22px] py-3 text-body font-semibold text-paper transition-colors hover:bg-green-deep-hover disabled:cursor-not-allowed disabled:bg-line-2b"
       >
-        Just give me the prompt
+        Save to shortcuts
       </button>
 
       <div className="flex-1" />

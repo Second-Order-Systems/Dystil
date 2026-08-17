@@ -304,6 +304,10 @@ macro_rules! define_specta_builder {
     }};
 }
 
+fn launched_from_autostart(args: impl IntoIterator<Item = String>) -> bool {
+    args.into_iter().any(|arg| arg == "--from-autostart")
+}
+
 #[tokio::main]
 async fn main() {
     const AUTOSTART_ARG: &str = "--from-autostart";
@@ -325,7 +329,7 @@ async fn main() {
     // before any Tauri initialization. Used by the permission system to run
     // this binary via launchctl (detached from Terminal) so that macOS TCC
     // checks the binary's own identity instead of Terminal's.
-    let launched_from_autostart = std::env::args().any(|arg| arg == AUTOSTART_ARG);
+    let launched_from_autostart = launched_from_autostart(std::env::args());
 
     #[cfg(target_os = "macos")]
     {
@@ -1126,4 +1130,22 @@ async fn main() {
 #[cfg(test)]
 pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     define_specta_builder!()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::launched_from_autostart;
+
+    #[test]
+    fn detects_the_autostart_launch_marker() {
+        assert!(launched_from_autostart(vec![
+            "dystil-app".to_string(),
+            "--from-autostart".to_string(),
+        ]));
+    }
+
+    #[test]
+    fn manual_launch_has_no_autostart_marker() {
+        assert!(!launched_from_autostart(vec!["dystil-app".to_string()]));
+    }
 }

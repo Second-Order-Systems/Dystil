@@ -4,10 +4,11 @@
 //! SQLite remain native.
 
 use dystil_insights::{
-    cleanup_diagnostics, finding_evidence, keep_finding, open_insights_database, other_findings,
-    pending_observations, record_disposition, record_wake_start, run_steward_wake,
-    set_enhanced_diagnostics, worth_fixing_summary, DiagnosticRetention, DispositionKind,
-    FindingPage, KeepFindingResult, WakeResult, WorthFixingEvidenceLine, WorthFixingSummary,
+    cleanup_diagnostics, finding_evidence, home_worth_fixing_summary, keep_finding,
+    open_insights_database, other_findings, pending_observations, record_disposition,
+    record_wake_start, run_steward_wake, set_enhanced_diagnostics, worth_fixing_summary,
+    DiagnosticRetention, DispositionKind, FindingPage, KeepFindingResult, WakeResult,
+    WorthFixingEvidenceLine, WorthFixingSummary,
 };
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -82,6 +83,20 @@ pub async fn get_worth_fixing_summary(
 ) -> Result<WorthFixingSummary, String> {
     let pool = state.pool(&app).await?;
     worth_fixing_summary(pool, provider_ready(&recording).await)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// The sole data source for the redesigned Home Worth fixing experience.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_home_worth_fixing_summary(
+    app: AppHandle,
+    state: State<'_, WorthFixingState>,
+    recording: State<'_, crate::recording::RecordingState>,
+) -> Result<dystil_insights::HomeWorthFixingSummary, String> {
+    let pool = state.pool(&app).await?;
+    home_worth_fixing_summary(pool, provider_ready(&recording).await)
         .await
         .map_err(|error| error.to_string())
 }

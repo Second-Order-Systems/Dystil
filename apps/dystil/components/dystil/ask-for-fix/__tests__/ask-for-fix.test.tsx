@@ -12,6 +12,10 @@ const mockCommands = vi.hoisted(() => ({
   askForFixRetry: vi.fn(),
   askForFixCancel: vi.fn(),
   askForFixKeepArtifact: vi.fn(),
+  askForFixStartWatching: vi.fn(),
+  askForFixStopWatching: vi.fn(),
+  askForFixReviewWatch: vi.fn(),
+  askForFixUpdateWatchGuidance: vi.fn(),
 }));
 
 vi.mock("@/lib/utils/tauri", () => ({ commands: mockCommands }));
@@ -42,6 +46,7 @@ function session(overrides: Partial<AskSessionView> = {}): AskSessionView {
     model: null,
     cachedInputTokens: 0,
     artifactKeptId: null,
+    watch: null,
     createdAt: "2026-08-04T00:00:00Z",
     updatedAt: "2026-08-04T00:00:00Z",
     ...overrides,
@@ -282,5 +287,44 @@ describe("AskForFix", () => {
     expect(await screen.findByText(/Connect an AI model in Settings/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(mockCommands.askForFixRetry).toHaveBeenCalledWith("afs_test"));
+  });
+
+  it("offers keep watching for insufficient evidence and starts the persistent watch", async () => {
+    const insufficient = session({
+      phase: "present",
+      status: "answered",
+      presentation: {
+        route: "cannot_see",
+        headline: "There is not enough evidence yet",
+        explanation: "The observed work does not form a credible end-to-end example.",
+        limitations: ["The current matches may be unrelated."],
+        artifact: null,
+      },
+    });
+    const watching = session({
+      ...insufficient,
+      watch: {
+        watchId: "afw_test",
+        state: "active",
+        spec: {
+          goal: "Find a credible example",
+          relevantSignals: [],
+          missingEvidence: ["a complete instance"],
+          sufficiencyRule: "One credible example",
+        },
+        supportingEvidenceCount: 0,
+        weekCheckpointDue: false,
+        createdAt: "2026-08-04T00:00:00Z",
+        updatedAt: "2026-08-04T00:00:00Z",
+      },
+    });
+    mockCommands.askForFixLatest.mockResolvedValue({ status: "ok", data: insufficient });
+    mockCommands.askForFixStartWatching.mockResolvedValue({ status: "ok", data: watching });
+
+    render(<AskForFix />);
+    fireEvent.click(await screen.findByRole("button", { name: "Keep watching" }));
+
+    await waitFor(() => expect(mockCommands.askForFixStartWatching).toHaveBeenCalledWith("afs_test"));
+    expect(await screen.findByText("Dystil is watching for this work")).toBeInTheDocument();
   });
 });
