@@ -18,7 +18,7 @@ use crate::{
     WorthFixingSummary,
 };
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 11;
 const MANUAL_REFRESH_MIN_OBSERVATION_SPAN_HOURS: f64 = 3.0;
 const EPISODE_SEPARATION: ChronoDuration = ChronoDuration::minutes(30);
 const MIN_SINGLE_COMPLETED_EPISODE: ChronoDuration = ChronoDuration::minutes(5);
@@ -574,6 +574,80 @@ async fn migrate(pool: &SqlitePool) -> Result<()> {
         .execute(&mut *tx)
         .await?;
     }
+    if current_version < 9 {
+        sqlx::query(
+            "CREATE TABLE artifact_bundle_jobs(
+              job_id TEXT PRIMARY KEY,artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id),
+              artifact_version INTEGER NOT NULL,input_fingerprint TEXT NOT NULL,builder_version TEXT NOT NULL,
+              status TEXT NOT NULL,working_directory TEXT,provider TEXT,model TEXT,runtime_version TEXT,
+              elapsed_ms INTEGER,attempts INTEGER NOT NULL DEFAULT 0,error_code TEXT,error_message TEXT,
+              created_at TEXT NOT NULL,updated_at TEXT NOT NULL,started_at TEXT,finished_at TEXT)"
+        ).execute(&mut *tx).await?;
+        sqlx::query(
+            "CREATE UNIQUE INDEX one_active_artifact_bundle_job ON artifact_bundle_jobs(artifact_id)
+             WHERE status IN ('pending','running')"
+        ).execute(&mut *tx).await?;
+        sqlx::query(
+            "CREATE TABLE artifact_bundles(
+              bundle_id TEXT PRIMARY KEY,artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id),
+              artifact_version INTEGER NOT NULL,job_id TEXT NOT NULL REFERENCES artifact_bundle_jobs(job_id),
+              revision INTEGER NOT NULL,skill_name TEXT NOT NULL,directory TEXT NOT NULL,prompt_path TEXT NOT NULL,
+              skill_path TEXT NOT NULL,manifest_json TEXT NOT NULL,checksum TEXT NOT NULL,builder_version TEXT NOT NULL,
+              provider TEXT NOT NULL,model TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,
+              UNIQUE(artifact_id,revision),UNIQUE(job_id))"
+        ).execute(&mut *tx).await?;
+        sqlx::query(
+            "CREATE TABLE artifact_bundle_installs(
+              install_id TEXT PRIMARY KEY,bundle_id TEXT NOT NULL REFERENCES artifact_bundles(bundle_id),
+              target TEXT NOT NULL,destination TEXT NOT NULL,installed_checksum TEXT NOT NULL,status TEXT NOT NULL,
+              created_at TEXT NOT NULL,UNIQUE(bundle_id,target,destination))"
+        ).execute(&mut *tx).await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO insights_schema_migrations(version,applied_at) VALUES(9,?1)",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .execute(&mut *tx)
+        .await?;
+    }
+    if current_version < 10 {
+        sqlx::query(
+            "ALTER TABLE artifact_bundle_jobs ADD COLUMN stage TEXT NOT NULL DEFAULT 'preparing'",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO insights_schema_migrations(version,applied_at) VALUES(10,?1)",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .execute(&mut *tx)
+        .await?;
+    }
+    if current_version < 11 {
+        sqlx::query(
+            "CREATE TABLE artifact_workflow_reconstructions(
+              reconstruction_id TEXT PRIMARY KEY,
+              bundle_job_id TEXT NOT NULL UNIQUE REFERENCES artifact_bundle_jobs(job_id),
+              artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id),
+              artifact_version INTEGER NOT NULL,input_fingerprint TEXT NOT NULL,
+              body TEXT NOT NULL,evidence_ids_json TEXT NOT NULL,
+              reconstruction_version TEXT NOT NULL,provider TEXT NOT NULL,model TEXT NOT NULL,
+              runtime_version TEXT,elapsed_ms INTEGER NOT NULL,created_at TEXT NOT NULL)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX artifact_workflow_reconstructions_artifact
+             ON artifact_workflow_reconstructions(artifact_id,artifact_version,created_at DESC)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO insights_schema_migrations(version,applied_at) VALUES(11,?1)",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .execute(&mut *tx)
+        .await?;
+    }
     sqlx::query(
         "INSERT INTO insights_metadata(key,value) VALUES('schema_version',?1)
          ON CONFLICT(key) DO UPDATE SET value=?1",
@@ -628,22 +702,27 @@ pub async fn upsert_evidence(pool: &SqlitePool, item: &EvidenceRecord) -> Result
         .execute(&mut *tx)
         .await?;
     } else {
-        sqlx::query("INSERT INTO evidence VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)")
-            .bind(&item.evidence_id)
-            .bind(&item.source_namespace)
-            .bind(&item.source_id)
-            .bind(&item.occurred_at)
-            .bind(&item.app)
-            .bind(&item.window)
-            .bind(&item.url)
-            .bind(&item.excerpt)
-            .bind(&immutable)
-            .bind(item.policy_allowed)
-            .bind(item.redaction_ready)
-            .bind(item.deleted)
-            .bind(item.sensitive)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "INSERT INTO evidence(
+               evidence_id,source_namespace,source_id,occurred_at,app,window,url,excerpt,
+               immutable_fingerprint,policy_allowed,redaction_ready,deleted,sensitive)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+        )
+        .bind(&item.evidence_id)
+        .bind(&item.source_namespace)
+        .bind(&item.source_id)
+        .bind(&item.occurred_at)
+        .bind(&item.app)
+        .bind(&item.window)
+        .bind(&item.url)
+        .bind(&item.excerpt)
+        .bind(&immutable)
+        .bind(item.policy_allowed)
+        .bind(item.redaction_ready)
+        .bind(item.deleted)
+        .bind(item.sensitive)
+        .execute(&mut *tx)
+        .await?;
     }
     if !item.admissible() {
         sqlx::query(
@@ -2482,6 +2561,10 @@ pub async fn set_enhanced_diagnostics(pool: &SqlitePool, enabled: bool) -> Resul
 pub async fn delete_all_insights_data(pool: &SqlitePool) -> Result<()> {
     let mut tx = pool.begin().await?;
     for table in [
+        "artifact_bundle_installs",
+        "artifact_bundles",
+        "artifact_workflow_reconstructions",
+        "artifact_bundle_jobs",
         "ask_attempts",
         "ask_jobs",
         "ask_questions",
@@ -2530,6 +2613,16 @@ pub async fn delete_all_insights_data(pool: &SqlitePool) -> Result<()> {
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    Ok(())
+}
+
+/// Workflow reconstructions are derived from captured text. They must not
+/// survive a capture-forgetting operation, even when the corresponding kept
+/// artifact is retained for the user to edit independently.
+pub async fn invalidate_workflow_reconstructions(pool: &SqlitePool) -> Result<()> {
+    sqlx::query("DELETE FROM artifact_workflow_reconstructions")
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -3369,6 +3462,51 @@ mod tests {
             upsert_evidence(&pool, &changed).await,
             Err(InsightsError::IdentityCollision(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn evidence_upsert_preserves_url_and_excerpt_when_url_is_a_migrated_final_column() {
+        // Schema v7 added `url` with ALTER TABLE, so upgraded databases retain
+        // the old physical order and append URL after the original columns.
+        // This guards against ever reintroducing positional INSERT VALUES.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("migrated-evidence.sqlite");
+        let options = SqliteConnectOptions::from_str(path.to_string_lossy().as_ref())
+            .unwrap()
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE evidence(
+              evidence_id TEXT PRIMARY KEY,source_namespace TEXT NOT NULL,source_id TEXT NOT NULL,
+              occurred_at TEXT NOT NULL,app TEXT,window TEXT,excerpt TEXT NOT NULL,
+              immutable_fingerprint TEXT NOT NULL,policy_allowed INTEGER NOT NULL,
+              redaction_ready INTEGER NOT NULL,deleted INTEGER NOT NULL,sensitive INTEGER NOT NULL,
+              url TEXT,UNIQUE(source_namespace,source_id))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut record = evidence(1);
+        record.url = Some("https://portal.example.test/orders/42".into());
+        record.excerpt = "The purchase order is ready for review.".into();
+        upsert_evidence(&pool, &record).await.unwrap();
+        let row = sqlx::query("SELECT url,excerpt FROM evidence WHERE evidence_id=?1")
+            .bind(&record.evidence_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            row.get::<Option<String>, _>("url").as_deref(),
+            Some("https://portal.example.test/orders/42")
+        );
+        assert_eq!(
+            row.get::<String, _>("excerpt"),
+            "The purchase order is ready for review."
+        );
     }
 
     #[tokio::test]
