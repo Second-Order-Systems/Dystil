@@ -1,8 +1,8 @@
 ---
 status: verified
 authority: ground-truth
-verified_against: e84d34c
-verified_on: 2026-08-08
+verified_against: working-tree
+verified_on: 2026-08-18
 ---
 
 # agent_docs — index
@@ -31,6 +31,7 @@ allowed to run ahead of the code — never implement from it.
 | `GLOSSARY.md` | Marketing term → real type. Read this before trusting a noun. |
 | `TELEMETRY_FOUNDATION_PLAN.md` | Telemetry design and constraints |
 | `A11Y_CAPTURE_FOLLOWUPS.md` | Open accessibility-capture work |
+| `SKILL_BUNDLE_IMPLEMENTATION_PLAN.md` | How kept findings become portable prompt + Agent Skill bundles, including installation and Deepika backtesting |
 
 ## Keeping this folder honest
 

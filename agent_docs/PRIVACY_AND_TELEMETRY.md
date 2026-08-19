@@ -103,6 +103,14 @@ Every exported attribute is a bounded enum or a number. There is no free-text fi
 `schema.rs :: registry_has_no_known_sensitive_attribute_keys` fails the build if a
 sensitive key is introduced.
 
+The `dystil.product.events` counter records only three fixed action values:
+`worth_fixing_finding_shown`, `skill_build_requested`, and
+`skill_install_requested`. Its source is `schema.rs :: metric::PRODUCT_EVENTS`,
+the aggregate values are `aggregate.rs :: ProductEventKind`, and
+`telemetry_exporter.rs :: product_event_metric` exports only its bounded action
+and count. Finding titles, contents, IDs, prompts, skill names, and installation
+paths are not recorded.
+
 Resource attributes: service name and version, deployment environment, build
 channel, `dystil.edition` (`community` or `enterprise`), OS type, host arch, a
 random install id, and the schema version.

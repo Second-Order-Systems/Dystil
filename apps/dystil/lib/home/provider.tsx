@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
-import { commands, type DispositionKind, type HomeWorthFixingItem, type ReadyArtifactAction, type ReadyArtifactCard } from "@/lib/utils/tauri";
+import { commands, type DispositionKind, type HomeWorthFixingItem, type ReadyArtifactAction, type ReadyArtifactCard, type SkillBundleView } from "@/lib/utils/tauri";
 
 import type { CorrectionReason, HomeItem, HomeSource, Shortcut } from "./types";
 
@@ -41,6 +41,11 @@ function shortcutFrom(value: ReadyArtifactCard): Shortcut {
     meta: value.lastUsedAt ? `Used ${relativeWhen(value.lastUsedAt)}` : "Saved for later",
     kind: value.kind.replaceAll("_", " "),
   };
+}
+
+function withBundle(shortcut: Shortcut, bundle?: SkillBundleView): Shortcut {
+  if (!bundle) return shortcut;
+  return { ...shortcut, bundle: { bundleId: bundle.bundleId ?? undefined, skillName: bundle.skillName ?? undefined, status: bundle.status, stage: bundle.stage ?? undefined, error: bundle.errorMessage ?? undefined } };
 }
 
 function dispositionFor(reason: CorrectionReason): DispositionKind {
@@ -83,7 +88,21 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
         return [...retained, ...appended];
       });
       setOriginalTotal((current) => Math.max(current, nextItems.length));
-      setShortcuts(ready.data.items.map(shortcutFrom));
+      const mapped = await Promise.all(ready.data.items.map(async (artifact) => {
+        const bundle = await commands.getReadyArtifactSkillBundle(artifact.artifactId);
+        const shortcut = withBundle(shortcutFrom(artifact), bundle.status === "ok" ? bundle.data : undefined);
+        if (bundle.status !== "ok" || bundle.data.status !== "ready" || !bundle.data.bundleId) return shortcut;
+        const targets = await commands.getSkillBundleInstallTargets(bundle.data.bundleId);
+        if (targets.status !== "ok") return shortcut;
+        return {
+          ...shortcut,
+          bundle: {
+            ...shortcut.bundle!,
+            targets: targets.data,
+          },
+        };
+      }));
+      setShortcuts(mapped);
       setLastSpokeUp(home.data.lastSuccessfulWakeAt ? relativeWhen(home.data.lastSuccessfulWakeAt) : "recently");
       setError(null);
       loaded.current = true;
@@ -100,6 +119,12 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [reload]);
+
+  useEffect(() => {
+    if (!shortcuts.some((shortcut) => shortcut.bundle?.status === "pending" || shortcut.bundle?.status === "running")) return;
+    const timer = window.setInterval(() => void reload(), 3_000);
+    return () => window.clearInterval(timer);
+  }, [reload, shortcuts]);
 
   const remove = useCallback((id: string) => {
     setItems((current) => current.filter((item) => item.id !== id));
@@ -144,6 +169,16 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
 
   const copyShortcut = useCallback(async (id: string) => {
     try {
+      const shortcut = shortcuts.find((value) => value.id === id);
+      if (shortcut?.bundle?.status === "ready" && shortcut.bundle.bundleId) {
+        const prompt = await commands.getSkillBundlePrompt(shortcut.bundle.bundleId);
+        if (prompt.status === "error") {
+          setError(prompt.error);
+          return false;
+        }
+        await navigator.clipboard.writeText(prompt.data);
+        return true;
+      }
       const detail = await commands.getReadyArtifact(id);
       if (detail.status === "error") {
         setError(detail.error);
@@ -165,7 +200,55 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       setError(cause instanceof Error ? cause.message : "The shortcut could not be copied.");
       return false;
     }
+  }, [shortcuts]);
+
+  const buildShortcutSkill = useCallback(async (id: string) => {
+    setShortcuts((current) => current.map((shortcut) => shortcut.id === id
+      ? { ...shortcut, bundle: { status: "running", stage: "preparing" } }
+      : shortcut));
+    const result = await commands.buildReadyArtifactSkillBundle(id);
+    if (result.status === "error") {
+      setShortcuts((current) => current.map((shortcut) => shortcut.id === id
+        ? { ...shortcut, bundle: { status: "failed", error: result.error } }
+        : shortcut));
+      setError(result.error);
+      return false;
+    }
+    setShortcuts((current) => current.map((shortcut) => shortcut.id === id
+      // The command returns immediately so the provider process can continue
+      // after this screen unmounts. Keep the optimistic running state until
+      // the persisted job is visible on the next poll; otherwise a pending
+      // response briefly re-enables Build skill and permits a duplicate click.
+      ? result.data.status === "pending"
+        ? { ...shortcut, bundle: { status: "running" } }
+        : withBundle(shortcut, result.data)
+      : shortcut));
+    return true;
   }, []);
+
+  const installShortcutSkill = useCallback(async (id: string, target: "codex" | "claude" | "pi") => {
+    const bundleId = shortcuts.find((shortcut) => shortcut.id === id)?.bundle?.bundleId;
+    if (!bundleId) return false;
+    const receipt = await commands.installSkillBundle(bundleId, target);
+    if (receipt.status === "error") {
+      setError(receipt.error);
+      return false;
+    }
+    await reload();
+    return true;
+  }, [reload, shortcuts]);
+
+  const exportShortcutSkill = useCallback(async (id: string) => {
+    const bundleId = shortcuts.find((shortcut) => shortcut.id === id)?.bundle?.bundleId;
+    if (!bundleId) return false;
+    const receipt = await commands.exportSkillBundle(bundleId);
+    if (receipt.status === "error") {
+      setError(receipt.error);
+      return false;
+    }
+    await reload();
+    return receipt.data;
+  }, [reload, shortcuts]);
 
   const source: HomeSource = {
     items,
@@ -182,6 +265,9 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     restore,
     reload,
     copyShortcut,
+    buildShortcutSkill,
+    installShortcutSkill,
+    exportShortcutSkill,
   };
   return <HomeContext.Provider value={source}>{children}</HomeContext.Provider>;
 }

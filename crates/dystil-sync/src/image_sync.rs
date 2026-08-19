@@ -82,8 +82,8 @@ impl DystilSync {
             monitor_state_checkpoints,
             max_eligible_frame_id,
             candidates_scanned,
-        ) =
-            self.read_image_candidates(
+        ) = self
+            .read_image_candidates(
                 &pool,
                 cache.last_scanned_frame_id,
                 &cache.monitor_state,

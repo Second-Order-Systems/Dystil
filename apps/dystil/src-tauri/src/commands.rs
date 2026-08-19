@@ -9,13 +9,6 @@ use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
-pub struct CaptureCategoryView {
-    pub id: String,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
 pub struct CaptureSourceView {
     pub id: String,
     pub kind: String,
@@ -27,7 +20,6 @@ pub struct CaptureSourceView {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CaptureVisibilityView {
-    pub categories: Vec<CaptureCategoryView>,
     pub sources: Vec<CaptureSourceView>,
     pub sources_error: Option<String>,
 }
@@ -154,67 +146,6 @@ pub async fn set_ai_pii_redaction_enabled(
     let current = SettingsStore::get(&app_handle)?.unwrap_or(updated);
     Ok(ai_pii_redaction_settings(&current))
 }
-
-struct CaptureCategoryPolicy {
-    id: &'static str,
-    window_patterns: &'static [&'static str],
-    domains: &'static [&'static str],
-}
-
-const CAPTURE_CATEGORY_POLICIES: &[CaptureCategoryPolicy] = &[
-    CaptureCategoryPolicy {
-        id: "personalMessaging",
-        window_patterns: &[
-            "WhatsApp",
-            "Messages",
-            "iMessage",
-            "Telegram",
-            "Messenger",
-            "Discord",
-        ],
-        domains: &[
-            "whatsapp.com",
-            "telegram.org",
-            "t.me",
-            "messenger.com",
-            "m.me",
-            "discord.com",
-            "discord.gg",
-        ],
-    },
-    CaptureCategoryPolicy {
-        id: "personalEmail",
-        window_patterns: &["Mail"],
-        domains: &[
-            "mail.google.com",
-            "outlook.live.com",
-            "mail.yahoo.com",
-            "proton.me",
-            "mail.proton.me",
-        ],
-    },
-    CaptureCategoryPolicy {
-        id: "jobBoards",
-        window_patterns: &["Indeed", "Greenhouse", "Lever"],
-        domains: &[
-            "indeed.com",
-            "greenhouse.io",
-            "lever.co",
-            "workable.com",
-            "wellfound.com",
-        ],
-    },
-    CaptureCategoryPolicy {
-        id: "hrLegal",
-        window_patterns: &["Workday", "BambooHR", "DocuSign", "Deel"],
-        domains: &["workday.com", "bamboohr.com", "docusign.com", "deel.com"],
-    },
-    CaptureCategoryPolicy {
-        id: "payrollSalary",
-        window_patterns: &["ADP", "Paychex", "Gusto", "Rippling"],
-        domains: &["adp.com", "paychex.com", "gusto.com", "rippling.com"],
-    },
-];
 
 /// Log a `WebviewWindowBuilder::build()` failure with structured context.
 ///
@@ -1373,17 +1304,6 @@ fn normalized_domain(value: &str) -> Option<String> {
     })
 }
 
-fn capture_category_enabled(settings: &SettingsStore, policy: &CaptureCategoryPolicy) -> bool {
-    let ignored = dystil_capture::window_pattern::WindowPattern::parse_list(
-        &settings.recording.ignored_windows,
-    );
-    !policy.window_patterns.iter().any(|pattern| {
-        dystil_capture::window_pattern::matches_any(&ignored, &pattern.to_lowercase(), "")
-    }) && !policy.domains.iter().any(|domain| {
-        dystil_capture::a11y::url_filter::is_url_blocked(domain, &settings.recording.ignored_urls)
-    })
-}
-
 fn capture_source_enabled(settings: &SettingsStore, kind: &str, name: &str) -> bool {
     if kind == "site" {
         return !dystil_capture::a11y::url_filter::is_url_blocked(
@@ -1445,21 +1365,6 @@ mod capture_visibility_tests {
             "docs.example.com"
         ));
         assert!(capture_source_enabled(&settings, "app", "Terminal"));
-    }
-
-    #[test]
-    fn category_state_reflects_persisted_filters() {
-        let mut settings = SettingsStore::default();
-        let job_boards = CAPTURE_CATEGORY_POLICIES
-            .iter()
-            .find(|policy| policy.id == "jobBoards")
-            .unwrap();
-        assert!(capture_category_enabled(&settings, job_boards));
-        settings
-            .recording
-            .ignored_urls
-            .push("greenhouse.io".to_string());
-        assert!(!capture_category_enabled(&settings, job_boards));
     }
 
     #[test]
@@ -1531,9 +1436,8 @@ async fn save_capture_filter_change(
     Ok(())
 }
 
-/// Return the privacy categories and real apps/sites observed in local capture
-/// for the current calendar month. Durations are estimated from frame gaps and
-/// never leave the device.
+/// Return the real apps/sites observed in local capture for the current calendar
+/// month. Durations are estimated from frame gaps and never leave the device.
 #[tauri::command]
 #[specta::specta]
 pub async fn get_capture_visibility(
@@ -1541,19 +1445,10 @@ pub async fn get_capture_visibility(
     state: State<'_, RecordingState>,
 ) -> Result<CaptureVisibilityView, String> {
     let settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
-    let categories = CAPTURE_CATEGORY_POLICIES
-        .iter()
-        .map(|policy| CaptureCategoryView {
-            id: policy.id.to_string(),
-            enabled: capture_category_enabled(&settings, policy),
-        })
-        .collect();
-
     let pool = match crate::ai::capture_pool(&state).await {
         Ok(pool) => pool,
         Err(error) => {
             return Ok(CaptureVisibilityView {
-                categories,
                 sources: Vec::new(),
                 sources_error: Some(error),
             });
@@ -1571,7 +1466,6 @@ pub async fn get_capture_visibility(
         Ok(usage) => usage,
         Err(error) => {
             return Ok(CaptureVisibilityView {
-                categories,
                 sources: Vec::new(),
                 sources_error: Some(error.to_string()),
             });
@@ -1613,35 +1507,9 @@ pub async fn get_capture_visibility(
     });
 
     Ok(CaptureVisibilityView {
-        categories,
         sources,
         sources_error: None,
     })
-}
-
-/// Enable or block one sensitive category by updating the capture engine's
-/// real window and URL filters.
-#[tauri::command]
-#[specta::specta]
-pub async fn set_capture_category_enabled(
-    app_handle: tauri::AppHandle,
-    state: State<'_, RecordingState>,
-    category_id: String,
-    enabled: bool,
-) -> Result<(), String> {
-    let policy = CAPTURE_CATEGORY_POLICIES
-        .iter()
-        .find(|policy| policy.id == category_id)
-        .ok_or_else(|| "Unknown capture category".to_string())?;
-    let previous = SettingsStore::get(&app_handle)?.unwrap_or_default();
-    let mut updated = previous.clone();
-    for pattern in policy.window_patterns {
-        set_filter_value(&mut updated.recording.ignored_windows, pattern, !enabled);
-    }
-    for domain in policy.domains {
-        set_filter_value(&mut updated.recording.ignored_urls, domain, !enabled);
-    }
-    save_capture_filter_change(app_handle, state, previous, updated).await
 }
 
 /// Enable or block one observed application or website from future capture.
@@ -2459,6 +2327,9 @@ pub async fn resume_capture_now(app_handle: tauri::AppHandle) -> Result<(), Stri
 #[tauri::command]
 #[specta::specta]
 pub fn set_autostart(app_handle: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    if crate::capture_policy::enterprise_managed() {
+        return Err("Login startup is managed by your organization.".to_string());
+    }
     use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
     let manager = app_handle.autolaunch();
     let previous_os_state = manager.is_enabled().unwrap_or(!enabled);

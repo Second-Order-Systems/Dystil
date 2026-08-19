@@ -14,13 +14,6 @@ vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
 vi.mock("@tauri-apps/plugin-opener", () => ({ openPath: vi.fn(), openUrl: vi.fn() }));
 
 const visibility = {
-  categories: [
-    { id: "personalMessaging", enabled: true },
-    { id: "personalEmail", enabled: false },
-    { id: "jobBoards", enabled: true },
-    { id: "hrLegal", enabled: false },
-    { id: "payrollSalary", enabled: false },
-  ],
   sources: [
     ...Array.from({ length: 7 }, (_, index) => ({ id: `app:${index + 1}`, kind: "app", name: `Work app ${index + 1}`, activeMinutes: 100 - index, enabled: true })),
     ...Array.from({ length: 7 }, (_, index) => ({ id: `site:${index + 1}`, kind: "site", name: `blocked-${index + 1}.example`, activeMinutes: 50 - index, enabled: false })),
@@ -28,22 +21,18 @@ const visibility = {
   sourcesError: null,
 };
 
-describe("Privacy category state", () => {
+describe("Privacy capture state", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.invoke.mockResolvedValue(visibility);
   });
 
-  it("shows the persisted category states and links back to Settings", async () => {
+  it("does not show category-level controls", async () => {
     render(<Privacy onOpenSettings={mocks.onOpenSettings} />);
 
-    expect(await screen.findByText("Personal messaging, on")).toBeInTheDocument();
-    expect(screen.getByText("Job boards and CVs, on")).toBeInTheDocument();
-    expect(screen.getByText("You have turned 2 on.", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("Personal email")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Change in Settings" }));
-    expect(mocks.onOpenSettings).toHaveBeenCalledOnce();
+    await screen.findByText("Work app 1");
+    expect(screen.queryByText("Off unless you say otherwise")).not.toBeInTheDocument();
+    expect(screen.queryByText("Personal messaging")).not.toBeInTheDocument();
   });
 
   it("shows bounded real source groups and sends overflow to Settings", async () => {
@@ -87,7 +76,7 @@ describe("Privacy category state", () => {
     });
 
     render(<Privacy onOpenSettings={mocks.onOpenSettings} />);
-    await screen.findByText("Personal messaging, on");
+    await screen.findByText("Work app 1");
 
     fireEvent.click(screen.getByRole("button", { name: "Today so far" }));
     expect(await screen.findByText("About 1.3 hours of data")).toBeInTheDocument();
@@ -100,7 +89,7 @@ describe("Privacy category state", () => {
 
   it("requires an explicit typed confirmation before starting over", async () => {
     mocks.invoke.mockImplementation(async (command: string) => {
-      if (command === "get_capture_visibility") return { categories: [], sources: [], sourcesError: null };
+      if (command === "get_capture_visibility") return { sources: [], sourcesError: null };
       if (command === "preview_capture_deletion") return {
         frameCount: 1,
         eventCount: 0,

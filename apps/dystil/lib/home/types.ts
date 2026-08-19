@@ -31,7 +31,21 @@ export type Shortcut = {
   title: string;
   meta: string;
   kind: string;
+  bundle?: {
+    bundleId?: string;
+    skillName?: string;
+    status: "pending" | "running" | "ready" | "failed" | "interrupted";
+    stage?: "preparing" | "investigating" | "building" | "validating" | "ready" | "failed";
+    error?: string;
+    targets?: Array<{
+      target: "codex" | "claude" | "claude_upload" | "chatgpt" | "pi";
+      available: boolean;
+      installed: boolean;
+    }>;
+  };
 };
+
+import type { SkillInstallReceipt } from "@/lib/utils/tauri";
 
 export type HomeSource = {
   items: HomeItem[];
@@ -48,6 +62,9 @@ export type HomeSource = {
   restore: () => void;
   reload: () => Promise<void>;
   copyShortcut: (id: string) => Promise<boolean>;
+  buildShortcutSkill: (id: string) => Promise<boolean>;
+  installShortcutSkill: (id: string, target: "codex" | "claude" | "pi") => Promise<boolean>;
+  exportShortcutSkill: (id: string) => Promise<SkillInstallReceipt | false>;
 };
 
 export const CORRECTION_OPTIONS: CorrectionOption[] = [

@@ -340,7 +340,7 @@ async fn maybe_steward(
     )
     .await
     .map_err(|e| e.to_string())?;
-    run_steward_wake(
+    let wake = run_steward_wake(
         insights,
         runtime.as_ref(),
         &local_day.to_string(),
@@ -350,6 +350,14 @@ async fn maybe_steward(
     )
     .await
     .map_err(|e| e.to_string())?;
+    if let dystil_insights::WakeResult::Accepted { apply, .. } = wake {
+        let recording = app.state::<crate::recording::RecordingState>();
+        crate::worth_fixing_commands::record_worth_fixing_findings_shown(
+            &recording,
+            apply.findings_created,
+        )
+        .await;
+    }
     Ok(())
 }
 

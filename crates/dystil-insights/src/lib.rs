@@ -12,6 +12,7 @@ mod engine;
 mod kernel;
 mod retention;
 mod scheduler;
+mod skill_bundle;
 mod source_admission;
 mod store;
 #[cfg(test)]
@@ -26,6 +27,7 @@ pub use engine::*;
 pub use kernel::*;
 pub use retention::*;
 pub use scheduler::*;
+pub use skill_bundle::*;
 pub use source_admission::*;
 pub use store::*;
 pub use types::*;

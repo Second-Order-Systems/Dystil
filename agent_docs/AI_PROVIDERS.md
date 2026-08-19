@@ -1,8 +1,8 @@
 ---
 status: verified
 authority: ground-truth
-verified_against: e84d34c
-verified_on: 2026-08-08
+verified_against: working-tree
+verified_on: 2026-08-18
 ---
 
 > **Verified** against `e84d34c`. Claims cite a path plus a symbol name or verbatim
@@ -25,6 +25,33 @@ Configured through `ai_presets` (table) and `apps/dystil/src-tauri/src/ai_preset
 | `anthropic` | Hosted API. |
 | `openai` | Hosted API. |
 | `custom` | Any OpenAI-compatible endpoint. |
+
+## Headless skill-bundle builds
+
+An explicit **Build skill** action uses the existing provider-neutral automation
+surface rather than a provider-native skill command. `crates/dystil-ai/src/lib.rs
+:: AiRuntime::run_automation()` receives an isolated build workspace.
+`crates/dystil-insights/src/skill_bundle.rs :: run_skill_bundle_build()` makes
+two distinct calls: the Workflow Reconstruction Agent writes and validates
+`input/WORKFLOW.md`, then the Skill Builder consumes it to create the prompt and
+portable Agent Skill. The reconstruction may use Dystil's textual retrieval
+tools to investigate related occurrences; the builder is limited to targeted
+follow-up retrieval.
+
+Managed Codex and Claude automation are implemented by
+`crates/dystil-ai/src/lib.rs :: CliProvider::run_automation_with_model()`.
+The Claude branch writes and supplies its Dystil MCP configuration while retaining
+its established broad automation permissions. Pi goes through
+`apps/dystil/src-tauri/src/ai_presets.rs :: pi_automation()`, whose normal
+automation tool set includes the Dystil retrieval tools. None of these paths
+opens a provider UI as part of a skill build.
+
+The two production prompts are embedded resources:
+`crates/dystil-insights/resources/workflow_reconstruction_prompt.md` and
+`crates/dystil-insights/resources/skill_bundle_builder_prompt.md`. The first
+explicitly prohibits screenshots, external application launches, and business
+workflow execution; the second requires a generated skill to prefer available
+connectors/MCP, then local tools, then browser/computer control at runtime.
 
 ## Ollama — the local path
 

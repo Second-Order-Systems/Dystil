@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   openUrl: vi.fn(),
   onLogout: vi.fn(),
+  getBuildCapabilities: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
@@ -14,6 +15,7 @@ vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openPath: vi.fn(), openUrl: (...args: unknown[]) => mocks.openUrl(...args) }));
+vi.mock("@/lib/build-capabilities", () => ({ getBuildCapabilities: () => mocks.getBuildCapabilities() }));
 
 const renderAbout = () => render(<AboutSettings userName="Jay" userEmail="jay@example.com" onLogout={mocks.onLogout} loggingOut={false} version="0.0.4" />);
 
@@ -21,6 +23,19 @@ describe("About settings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.openUrl.mockResolvedValue(undefined);
+    mocks.getBuildCapabilities.mockResolvedValue({ enterpriseManaged: false });
+  });
+
+  it("removes managed-build update and telemetry controls", async () => {
+    mocks.getBuildCapabilities.mockResolvedValue({ enterpriseManaged: true });
+    renderAbout();
+
+    await waitFor(() => expect(mocks.getBuildCapabilities).toHaveBeenCalled());
+    expect(screen.queryByText("Update automatically")).not.toBeInTheDocument();
+    expect(screen.queryByText("Updates")).not.toBeInTheDocument();
+    expect(screen.queryByText("Send anonymous usage counts")).not.toBeInTheDocument();
+    expect(mocks.invoke).not.toHaveBeenCalledWith("get_app_update_settings");
+    expect(mocks.invoke).not.toHaveBeenCalledWith("get_telemetry_settings");
   });
 
   it("hides the redundant manual check while automatic updates are on", async () => {

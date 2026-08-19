@@ -499,6 +499,18 @@ pub async fn delete_capture_data(
             dystil_insights::delete_all_insights_data(&insights_pool)
                 .await
                 .map_err(|error| error.to_string())?;
+            // Bundle directories are immutable content stores indexed by the
+            // insights database. A full Dystil deletion must remove both,
+            // while scoped capture deletion deliberately preserves kept work.
+            for directory in [
+                crate::dystil_paths::data_dir().join("skill-bundles"),
+                crate::dystil_paths::data_dir().join("skill-bundle-builds"),
+                crate::dystil_paths::data_dir().join("skill-bundle-exports"),
+            ] {
+                if directory.exists() {
+                    std::fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
+                }
+            }
             (0, 0)
         } else {
             dystil_insights::forget_capture_evidence(
@@ -510,6 +522,9 @@ pub async fn delete_capture_data(
             .map_err(|error| error.to_string())?
         };
         dystil_insights::invalidate_ask_for_fix_retrieval_memos(&insights_pool)
+            .await
+            .map_err(|error| error.to_string())?;
+        dystil_insights::invalidate_workflow_reconstructions(&insights_pool)
             .await
             .map_err(|error| error.to_string())?;
 

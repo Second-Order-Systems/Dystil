@@ -281,8 +281,9 @@ export function LoginScreen() {
   );
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-[radial-gradient(900px_500px_at_85%_-10%,#ebf4ef_0%,transparent_60%),#f7f8f6] px-6 py-10">
-      <div className="relative w-full max-w-6xl">
+    <div className="h-dvh overflow-y-auto overscroll-contain bg-[radial-gradient(900px_500px_at_85%_-10%,#ebf4ef_0%,transparent_60%),#f7f8f6]">
+      <div className="relative flex min-h-full w-full items-center justify-center px-6 py-10">
+        <div className="relative w-full max-w-6xl">
         <div className="mx-auto flex w-full max-w-md flex-col items-center space-y-4">
           <div className="flex flex-col items-center text-center">
             <div className="flex items-center gap-[0.15em] text-4xl font-semibold tracking-[0.2em] text-foreground uppercase">
@@ -364,6 +365,7 @@ export function LoginScreen() {
             <div className="pointer-events-none absolute bottom-0 right-0 h-20 w-28 rounded-br-2xl rounded-tl-[100%] bg-[radial-gradient(ellipse_at_bottom_right,rgba(96,150,111,0.16),transparent_68%)]" />
           </aside>
         ) : null}
+        </div>
       </div>
     </div>
   );
