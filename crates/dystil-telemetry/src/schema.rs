@@ -1,6 +1,6 @@
 //! Versioned names and bounded values accepted by the telemetry pipeline.
 
-pub const TELEMETRY_SCHEMA_VERSION: u16 = 1;
+pub const TELEMETRY_SCHEMA_VERSION: u16 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstrumentKind {
@@ -89,6 +89,7 @@ pub mod metric {
     pub const CAPTURE_TRIGGERS: &str = "dystil.capture.triggers";
     pub const CAPTURE_IMAGES: &str = "dystil.capture.images";
     pub const AI_OPERATIONS: &str = "dystil.ai.operations";
+    pub const PRODUCT_EVENTS: &str = "dystil.product.events";
     pub const CAPTURE_RECORDS: &str = "dystil.capture.records";
     pub const CAPTURE_BATCH_DURATION: &str = "dystil.capture.batch.duration";
     pub const HEALTH_TRANSITIONS: &str = "dystil.health.transitions";
@@ -212,6 +213,12 @@ pub const METRICS: &[MetricSpec] = &[
         attributes: IMAGE_ATTRIBUTES,
     },
     MetricSpec {
+        name: metric::PRODUCT_EVENTS,
+        kind: InstrumentKind::Counter,
+        unit: "{event}",
+        attributes: &[attribute::ACTION],
+    },
+    MetricSpec {
         name: metric::CAPTURE_RECORDS,
         kind: InstrumentKind::Counter,
         unit: "{record}",
@@ -305,16 +312,66 @@ pub const METRICS: &[MetricSpec] = &[
         unit: "By",
         attributes: NO_ATTRIBUTES,
     },
-    MetricSpec { name: metric::PROCESS_CPU_SYNC_AVERAGE, kind: InstrumentKind::Gauge, unit: "1", attributes: NO_ATTRIBUTES },
-    MetricSpec { name: metric::PROCESS_CPU_SYNC_MAX, kind: InstrumentKind::Gauge, unit: "1", attributes: NO_ATTRIBUTES },
-    MetricSpec { name: metric::PROCESS_MEMORY_SYNC_MAX, kind: InstrumentKind::Gauge, unit: "By", attributes: NO_ATTRIBUTES },
-    MetricSpec { name: metric::HOST_CPU_SYNC_AVERAGE, kind: InstrumentKind::Gauge, unit: "1", attributes: NO_ATTRIBUTES },
-    MetricSpec { name: metric::HOST_CPU_SYNC_MAX, kind: InstrumentKind::Gauge, unit: "1", attributes: NO_ATTRIBUTES },
-    MetricSpec { name: metric::PROCESS_CPU_BACKGROUND_AVERAGE, kind: InstrumentKind::Gauge, unit: "1", attributes: NO_ATTRIBUTES },
-    MetricSpec { name: metric::PROCESS_CPU_BACKGROUND_MAX, kind: InstrumentKind::Gauge, unit: "1", attributes: NO_ATTRIBUTES },
-    MetricSpec { name: metric::PROCESS_MEMORY_BACKGROUND_MAX, kind: InstrumentKind::Gauge, unit: "By", attributes: NO_ATTRIBUTES },
-    MetricSpec { name: metric::HOST_CPU_BACKGROUND_AVERAGE, kind: InstrumentKind::Gauge, unit: "1", attributes: NO_ATTRIBUTES },
-    MetricSpec { name: metric::HOST_CPU_BACKGROUND_MAX, kind: InstrumentKind::Gauge, unit: "1", attributes: NO_ATTRIBUTES },
+    MetricSpec {
+        name: metric::PROCESS_CPU_SYNC_AVERAGE,
+        kind: InstrumentKind::Gauge,
+        unit: "1",
+        attributes: NO_ATTRIBUTES,
+    },
+    MetricSpec {
+        name: metric::PROCESS_CPU_SYNC_MAX,
+        kind: InstrumentKind::Gauge,
+        unit: "1",
+        attributes: NO_ATTRIBUTES,
+    },
+    MetricSpec {
+        name: metric::PROCESS_MEMORY_SYNC_MAX,
+        kind: InstrumentKind::Gauge,
+        unit: "By",
+        attributes: NO_ATTRIBUTES,
+    },
+    MetricSpec {
+        name: metric::HOST_CPU_SYNC_AVERAGE,
+        kind: InstrumentKind::Gauge,
+        unit: "1",
+        attributes: NO_ATTRIBUTES,
+    },
+    MetricSpec {
+        name: metric::HOST_CPU_SYNC_MAX,
+        kind: InstrumentKind::Gauge,
+        unit: "1",
+        attributes: NO_ATTRIBUTES,
+    },
+    MetricSpec {
+        name: metric::PROCESS_CPU_BACKGROUND_AVERAGE,
+        kind: InstrumentKind::Gauge,
+        unit: "1",
+        attributes: NO_ATTRIBUTES,
+    },
+    MetricSpec {
+        name: metric::PROCESS_CPU_BACKGROUND_MAX,
+        kind: InstrumentKind::Gauge,
+        unit: "1",
+        attributes: NO_ATTRIBUTES,
+    },
+    MetricSpec {
+        name: metric::PROCESS_MEMORY_BACKGROUND_MAX,
+        kind: InstrumentKind::Gauge,
+        unit: "By",
+        attributes: NO_ATTRIBUTES,
+    },
+    MetricSpec {
+        name: metric::HOST_CPU_BACKGROUND_AVERAGE,
+        kind: InstrumentKind::Gauge,
+        unit: "1",
+        attributes: NO_ATTRIBUTES,
+    },
+    MetricSpec {
+        name: metric::HOST_CPU_BACKGROUND_MAX,
+        kind: InstrumentKind::Gauge,
+        unit: "1",
+        attributes: NO_ATTRIBUTES,
+    },
     MetricSpec {
         name: metric::MODEL_RUNTIME_EVENTS,
         kind: InstrumentKind::Counter,
@@ -390,12 +447,42 @@ pub const METRICS: &[MetricSpec] = &[
         unit: "ms",
         attributes: &[attribute::OUTCOME, attribute::POLICY_SOURCE],
     },
-    MetricSpec { name: metric::SYNC_SEGMENT_DURATION, kind: InstrumentKind::Counter, unit: "ms", attributes: NO_ATTRIBUTES },
-    MetricSpec { name: metric::SYNC_IMAGE_DURATION, kind: InstrumentKind::Counter, unit: "ms", attributes: NO_ATTRIBUTES },
-    MetricSpec { name: metric::SYNC_IMAGE_CANDIDATES_SCANNED, kind: InstrumentKind::Counter, unit: "{candidate}", attributes: NO_ATTRIBUTES },
-    MetricSpec { name: metric::SYNC_IMAGE_CANDIDATES_SELECTED, kind: InstrumentKind::Counter, unit: "{candidate}", attributes: NO_ATTRIBUTES },
-    MetricSpec { name: metric::SYNC_IMAGES_PREPARED, kind: InstrumentKind::Counter, unit: "{image}", attributes: NO_ATTRIBUTES },
-    MetricSpec { name: metric::SYNC_IMAGE_BYTES_PREPARED, kind: InstrumentKind::Counter, unit: "By", attributes: NO_ATTRIBUTES },
+    MetricSpec {
+        name: metric::SYNC_SEGMENT_DURATION,
+        kind: InstrumentKind::Counter,
+        unit: "ms",
+        attributes: NO_ATTRIBUTES,
+    },
+    MetricSpec {
+        name: metric::SYNC_IMAGE_DURATION,
+        kind: InstrumentKind::Counter,
+        unit: "ms",
+        attributes: NO_ATTRIBUTES,
+    },
+    MetricSpec {
+        name: metric::SYNC_IMAGE_CANDIDATES_SCANNED,
+        kind: InstrumentKind::Counter,
+        unit: "{candidate}",
+        attributes: NO_ATTRIBUTES,
+    },
+    MetricSpec {
+        name: metric::SYNC_IMAGE_CANDIDATES_SELECTED,
+        kind: InstrumentKind::Counter,
+        unit: "{candidate}",
+        attributes: NO_ATTRIBUTES,
+    },
+    MetricSpec {
+        name: metric::SYNC_IMAGES_PREPARED,
+        kind: InstrumentKind::Counter,
+        unit: "{image}",
+        attributes: NO_ATTRIBUTES,
+    },
+    MetricSpec {
+        name: metric::SYNC_IMAGE_BYTES_PREPARED,
+        kind: InstrumentKind::Counter,
+        unit: "By",
+        attributes: NO_ATTRIBUTES,
+    },
     MetricSpec {
         name: metric::SYNC_SEMANTIC_SAMPLE_RUNS,
         kind: InstrumentKind::Counter,

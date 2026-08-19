@@ -11,7 +11,6 @@ import { getBuildCapabilities } from "@/lib/build-capabilities";
 import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 import { commands, type TelemetrySettings, type WhenItRunsView } from "@/lib/utils/tauri";
 import { TextAction } from "./page-primitives";
-import { CAPTURE_CATEGORY_COPY } from "./capture-categories";
 import { AiModelsSettings } from "./ai-models-settings";
 import type { DystilShellProps, SettingsTab } from "./types";
 
@@ -22,14 +21,16 @@ export function SettingsWorkspace(props: DystilShellProps & { initialTab?: Setti
   const [tab, setTab] = useState<SettingsTab>(props.initialTab ?? "What Dystil can see");
   const [update, setUpdate] = useState<AppUpdateSettings | null>(null);
   const [installingUpdate, setInstallingUpdate] = useState(false);
+  const enterpriseManaged = useEnterpriseManagedBuild();
 
   useEffect(() => {
+    if (enterpriseManaged !== false) return;
     let cancelled = false;
     let unlisten: (() => void) | undefined;
     invoke<AppUpdateSettings>("get_app_update_settings").then((value) => { if (!cancelled) setUpdate(value); }).catch(() => {});
     listen<AppUpdateSettings>("app-update-state-changed", ({ payload }) => setUpdate(payload)).then((dispose) => { unlisten = dispose; }).catch(() => {});
     return () => { cancelled = true; unlisten?.(); };
-  }, []);
+  }, [enterpriseManaged]);
 
   const installAvailableUpdate = async () => {
     setInstallingUpdate(true);
@@ -41,7 +42,7 @@ export function SettingsWorkspace(props: DystilShellProps & { initialTab?: Setti
     }
   };
 
-  const showUpdateBanner = Boolean(update?.updaterAvailable && !update.autoUpdate && update.availableVersion);
+  const showUpdateBanner = enterpriseManaged === false && Boolean(update?.updaterAvailable && !update.autoUpdate && update.availableVersion);
   return <div className="grid h-full grid-cols-[268px_minmax(0,1fr)]">
     <aside className="flex min-h-0 flex-col border-r border-[#e3e3de] bg-white py-[27px]">
       <button type="button" onClick={props.onBack} className="px-[27px] text-left text-[17px] text-[#60636b] outline-none hover:text-[#0f6e56] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#0f6e56]">←&nbsp; Back to Dystil</button>
@@ -64,12 +65,56 @@ function SettingsPane({ tab, userName, userEmail, onLogout, loggingOut, version 
   if (tab === "AI models") return <AiModelsSettings />;
   if (tab === "When it runs") return <WhenItRunsSettings />;
   if (tab === "Storage") return <StorageSettings />;
-  if (tab === "Notifications") return <SettingsPage title="Notifications" lede="Dystil interrupts rarely and only when it has something. There are no reminders, streaks, or nudges to come back."><SettingsCard><ToggleRow title="When it finds something worth telling you" description="Roughly once a week, often less" initial /><ToggleRow title="When something you asked for is ready" description="" initial /></SettingsCard></SettingsPage>;
+  if (tab === "Notifications") return <NotificationSettings />;
   if (tab === "Invite your team") return <InviteTeamSettings />;
   return <AboutSettings userName={userName} userEmail={userEmail} onLogout={onLogout} loggingOut={loggingOut} version={version} />;
 }
 
 type AppUpdateSettings = { autoUpdate: boolean; updaterAvailable: boolean; availableVersion?: string | null };
+
+function useEnterpriseManagedBuild() {
+  const [enterpriseManaged, setEnterpriseManaged] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getBuildCapabilities().then((capabilities) => {
+      if (!cancelled) setEnterpriseManaged(capabilities.enterpriseManaged);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  return enterpriseManaged;
+}
+
+function NotificationSettings() {
+  const { settings, updateSettings } = useSettings();
+  const prefs = settings.notificationPrefs;
+  const requestedWorkReady = prefs?.requestedWorkReady ?? true;
+
+  const setRequestedWorkReady = async (enabled: boolean) => {
+    try {
+      await updateSettings({
+        notificationPrefs: {
+          captureStalls: prefs?.captureStalls ?? true,
+          appUpdates: prefs?.appUpdates ?? true,
+          pipeNotifications: prefs?.pipeNotifications ?? true,
+          displayChanges: prefs?.displayChanges ?? true,
+          meetingLiveNotes: prefs?.meetingLiveNotes ?? true,
+          mutedPipes: prefs?.mutedPipes ?? [],
+          requestedWorkReady: enabled,
+        },
+      });
+    } catch (cause) {
+      toast({
+        title: "Could not update notifications",
+        description: cause instanceof Error ? cause.message : String(cause),
+        variant: "destructive",
+      });
+    }
+  };
+
+  return <SettingsPage title="Notifications" lede="Dystil interrupts rarely and only when it has something. There are no reminders, streaks, or nudges to come back."><SettingsCard><ToggleRow title="When it finds something worth telling you" description="Roughly once a week, often less" initial /><ToggleRow title="When something you asked for is ready" description="" initial={requestedWorkReady} onChange={(enabled) => void setRequestedWorkReady(enabled)} /></SettingsCard></SettingsPage>;
+}
 
 export function AboutSettings({ userName, userEmail, onLogout, loggingOut, version }: Pick<DystilShellProps, "userName" | "userEmail" | "onLogout" | "loggingOut" | "version">) {
   const [updateSettings, setUpdateSettings] = useState<AppUpdateSettings | null>(null);
@@ -79,14 +124,16 @@ export function AboutSettings({ userName, userEmail, onLogout, loggingOut, versi
   const [telemetry, setTelemetry] = useState<TelemetrySettings | null>(null);
   const [savingTelemetry, setSavingTelemetry] = useState(false);
   const [telemetryError, setTelemetryError] = useState("");
+  const enterpriseManaged = useEnterpriseManagedBuild();
 
   useEffect(() => {
+    if (enterpriseManaged !== false) return;
     let cancelled = false;
     invoke<TelemetrySettings>("get_telemetry_settings")
       .then((result) => { if (!cancelled) setTelemetry(result); })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, []);
+  }, [enterpriseManaged]);
 
   const changeTelemetry = async (enabled: boolean) => {
     setSavingTelemetry(true);
@@ -104,6 +151,7 @@ export function AboutSettings({ userName, userEmail, onLogout, loggingOut, versi
   };
 
   useEffect(() => {
+    if (enterpriseManaged !== false) return;
     let cancelled = false;
     let unlisten: (() => void) | undefined;
     invoke<AppUpdateSettings>("get_app_update_settings")
@@ -114,7 +162,7 @@ export function AboutSettings({ userName, userEmail, onLogout, loggingOut, versi
       });
     listen<AppUpdateSettings>("app-update-state-changed", ({ payload }) => setUpdateSettings(payload)).then((dispose) => { unlisten = dispose; }).catch(() => {});
     return () => { cancelled = true; unlisten?.(); };
-  }, []);
+  }, [enterpriseManaged]);
 
   const setAutoUpdate = async (enabled: boolean) => {
     setSavingAutoUpdate(true);
@@ -156,12 +204,12 @@ export function AboutSettings({ userName, userEmail, onLogout, loggingOut, versi
 
   return <SettingsPage title="About" lede="">
     <SettingsCard>
-      <div className="flex min-h-[62px] items-center justify-between gap-5 border-b border-[#efefe9] px-[19px] py-[13px]"><span className="text-[17px]">Version {version || "—"}</span>{updateAction}</div>
-      {updateSettings?.updaterAvailable && <div className="flex min-h-[72px] items-center justify-between gap-5 border-b border-[#efefe9] px-[19px] py-[13px]"><div><p className="text-[17px]">Update automatically</p><p className="mt-1 text-[14px] text-[#74777e]">{updateSettings.autoUpdate ? "Installs new versions automatically and restarts Dystil to finish." : "Dystil will tell you when an update is ready."}</p></div><ToggleSwitch label="Update Dystil automatically" checked={updateSettings.autoUpdate} disabled={savingAutoUpdate} onChange={(enabled) => void setAutoUpdate(enabled)} /></div>}
-      {updateSettings && !updateSettings.updaterAvailable && <div className="border-b border-[#efefe9] px-[19px] py-[13px]"><p className="text-[17px]">Updates</p><p className="mt-1 text-[14px] text-[#74777e]">Managed outside Dystil in this build.</p></div>}
-      {updateError && <p role="alert" className="border-b border-[#efefe9] bg-[#fff5f2] px-[19px] py-[10px] text-[13px] text-[#8b3f32]">{updateError}</p>}
-      {telemetry && !telemetry.managedByOrganization && <div className="flex min-h-[72px] items-center justify-between gap-5 border-b border-[#efefe9] px-[19px] py-[13px]"><div><p className="text-[17px]">Send anonymous usage counts</p><p className="mt-1 max-w-[560px] text-[14px] text-[#74777e]">{telemetry.disabledByEnv ? "Turned off by DYSTIL_TELEMETRY on this machine." : "Counts and timings only — how often capture ran, whether it worked, how long it took. Never what Dystil read, and never window titles, app names, URLs, or file paths."}</p></div><ToggleSwitch label="Send anonymous usage counts" checked={telemetry.effective} disabled={savingTelemetry || !telemetry.userCanChange} onChange={(enabled) => void changeTelemetry(enabled)} /></div>}
-      {telemetryError && <p role="alert" className="border-b border-[#efefe9] bg-[#fff5f2] px-[19px] py-[10px] text-[13px] text-[#8b3f32]">{telemetryError}</p>}
+      <div className="flex min-h-[62px] items-center justify-between gap-5 border-b border-[#efefe9] px-[19px] py-[13px]"><span className="text-[17px]">Version {version || "—"}</span>{enterpriseManaged === false && updateAction}</div>
+      {enterpriseManaged === false && updateSettings?.updaterAvailable && <div className="flex min-h-[72px] items-center justify-between gap-5 border-b border-[#efefe9] px-[19px] py-[13px]"><div><p className="text-[17px]">Update automatically</p><p className="mt-1 text-[14px] text-[#74777e]">{updateSettings.autoUpdate ? "Installs new versions automatically and restarts Dystil to finish." : "Dystil will tell you when an update is ready."}</p></div><ToggleSwitch label="Update Dystil automatically" checked={updateSettings.autoUpdate} disabled={savingAutoUpdate} onChange={(enabled) => void setAutoUpdate(enabled)} /></div>}
+      {enterpriseManaged === false && updateSettings && !updateSettings.updaterAvailable && <div className="border-b border-[#efefe9] px-[19px] py-[13px]"><p className="text-[17px]">Updates</p><p className="mt-1 text-[14px] text-[#74777e]">Managed outside Dystil in this build.</p></div>}
+      {enterpriseManaged === false && updateError && <p role="alert" className="border-b border-[#efefe9] bg-[#fff5f2] px-[19px] py-[10px] text-[13px] text-[#8b3f32]">{updateError}</p>}
+      {enterpriseManaged === false && telemetry && !telemetry.managedByOrganization && <div className="flex min-h-[72px] items-center justify-between gap-5 border-b border-[#efefe9] px-[19px] py-[13px]"><div><p className="text-[17px]">Send anonymous usage counts</p><p className="mt-1 max-w-[560px] text-[14px] text-[#74777e]">{telemetry.disabledByEnv ? "Turned off by DYSTIL_TELEMETRY on this machine." : "Counts and timings only — how often capture ran, whether it worked, how long it took. Never what Dystil read, and never window titles, app names, URLs, or file paths."}</p></div><ToggleSwitch label="Send anonymous usage counts" checked={telemetry.effective} disabled={savingTelemetry || !telemetry.userCanChange} onChange={(enabled) => void changeTelemetry(enabled)} /></div>}
+      {enterpriseManaged === false && telemetryError && <p role="alert" className="border-b border-[#efefe9] bg-[#fff5f2] px-[19px] py-[10px] text-[13px] text-[#8b3f32]">{telemetryError}</p>}
       <div className="flex min-h-[62px] items-center justify-between gap-5 px-[19px] py-[13px]"><span className="text-[17px]">Read the source code</span><button type="button" onClick={() => void openSource()} className="text-[15px] text-[#0f6e56] outline-none hover:text-[#094b3b] focus-visible:ring-2 focus-visible:ring-[#0f6e56] focus-visible:ring-offset-2">Open</button></div>
     </SettingsCard>
     <SettingsCard padded><div className="flex justify-between gap-5"><span className="min-w-0 truncate text-[16px]" title={userEmail || userName}>{userEmail || userName}</span><button type="button" onClick={onLogout} disabled={loggingOut} className="shrink-0 text-[15px] text-[#60636b] outline-none hover:text-[#1a1c20] focus-visible:ring-2 focus-visible:ring-[#0f6e56] focus-visible:ring-offset-2 disabled:opacity-50">{loggingOut ? "Signing out…" : "Sign out"}</button></div></SettingsCard>
@@ -358,9 +406,8 @@ function retentionMessage(days: number) {
   return { title: "Keep everything", body: "Dystil will not automatically delete raw work history. You can shorten retention later." };
 }
 
-type CaptureCategory = { id: string; enabled: boolean };
 type CaptureSource = { id: string; kind: "app" | "site"; name: string; activeMinutes: number; enabled: boolean };
-type CaptureVisibility = { categories: CaptureCategory[]; sources: CaptureSource[]; sourcesError?: string | null };
+type CaptureVisibility = { sources: CaptureSource[]; sourcesError?: string | null };
 
 function pauseStatusCopy(pauseUntil?: string | null) {
   if (!pauseUntil) return "Paused";
@@ -380,7 +427,7 @@ export function WhenItRunsSettings() {
   const [runtime, setRuntime] = useState<WhenItRunsView | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [enterpriseManaged, setEnterpriseManaged] = useState<boolean | null>(null);
+  const enterpriseManaged = useEnterpriseManagedBuild();
 
   const load = async () => {
     try {
@@ -395,9 +442,6 @@ export function WhenItRunsSettings() {
 
   useEffect(() => {
     void load();
-    void getBuildCapabilities().then((capabilities) => {
-      setEnterpriseManaged(capabilities.enterpriseManaged);
-    });
     let unlisten: (() => void) | undefined;
     listen("recording-status-changed", () => void load())
       .then((dispose) => { unlisten = dispose; })
@@ -437,25 +481,21 @@ export function WhenItRunsSettings() {
   };
 
   return <SettingsPage title="When it runs" lede="Dystil works in the background whether or not this window is open. If it is not running while you work, it has nothing to tell you later.">
-    <SettingsCard>
-      {!runtime && !loadError && <SettingsLoadingRows count={2} />}
-      {runtime && <>
+    {enterpriseManaged !== true && <SettingsCard>
+      {(!runtime || enterpriseManaged === null) && !loadError && <SettingsLoadingRows count={2} />}
+      {runtime && enterpriseManaged === false && <>
         <CaptureToggleRow title="Start when you log in" description="Starts quietly in the system tray without opening a window." checked={runtime.autostartEnabled} busy={busy !== null} switchLabel={`${runtime.autostartEnabled ? "Stop" : "Start"} Dystil when you log in`} onChange={(enabled) => void run("autostart", "Could not update login startup", async () => { const result = await commands.setAutostart(enabled); if (result.status === "error") throw new Error(result.error); })} />
         <CaptureToggleRow
           title="Capture screenshots"
-          description={enterpriseManaged
-            ? "Required and managed by your organization."
-            : "Adds visual context. Turning this off keeps accessibility and text capture running."}
+          description="Adds visual context. Turning this off keeps accessibility and text capture running."
           checked={runtime.screenshotEnabled}
-          busy={busy !== null || enterpriseManaged !== false}
-          switchLabel={enterpriseManaged
-            ? "Screenshot capture is managed by your organization"
-            : `${runtime.screenshotEnabled ? "Stop" : "Start"} capturing screenshots`}
+          busy={busy !== null}
+          switchLabel={`${runtime.screenshotEnabled ? "Stop" : "Start"} capturing screenshots`}
           onChange={(enabled) => void setScreenshots(enabled)}
         />
       </>}
       {loadError && <SettingsInlineError message="Dystil could not load its runtime settings." onRetry={() => void load()} />}
-    </SettingsCard>
+    </SettingsCard>}
     <SettingsCard padded>
       <div className="flex items-center justify-between gap-5">
         <div className="min-w-0">
@@ -498,22 +538,6 @@ function CaptureVisibilitySettings() {
     return next;
   });
 
-  const changeCategory = async (category: CaptureCategory, enabled: boolean) => {
-    if (!visibility) return;
-    setBusyState(category.id, true);
-    setVisibility({ ...visibility, categories: visibility.categories.map((item) => item.id === category.id ? { ...item, enabled } : item) });
-    try {
-      await invoke("set_capture_category_enabled", { categoryId: category.id, enabled });
-      await reloadStore();
-      await load();
-    } catch (error) {
-      setVisibility((current) => current ? { ...current, categories: current.categories.map((item) => item.id === category.id ? category : item) } : current);
-      toast({ title: "Could not update what Dystil can see", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
-    } finally {
-      setBusyState(category.id, false);
-    }
-  };
-
   const changeSource = async (source: CaptureSource, enabled: boolean) => {
     if (!visibility) return;
     setBusyState(source.id, true);
@@ -549,16 +573,7 @@ function CaptureVisibilitySettings() {
   const turnedOff = visibility?.sources.filter((source) => !source.enabled).length ?? 0;
 
   return <SettingsPage title="What Dystil can see" lede={<>Changes here apply from now on. To remove something already captured, use <a href="/home/privacy" className="font-medium text-[#0f6e56] underline decoration-[#8bcdb6] underline-offset-2 outline-none hover:decoration-[#0f6e56] focus-visible:ring-2 focus-visible:ring-[#0f6e56]">What stays on this computer</a>.</>}>
-    <SettingLabel>Sensitive categories</SettingLabel>
-    <SettingsCard>
-      {!visibility && !loadError ? <SettingsLoadingRows count={5} /> : visibility?.categories.map((category) => {
-        const copy = CAPTURE_CATEGORY_COPY[category.id] ?? { title: category.id, description: "" };
-        return <CaptureToggleRow key={category.id} title={copy.title} description={copy.description} checked={category.enabled} busy={busy.size > 0} onChange={(enabled) => void changeCategory(category, enabled)} />;
-      })}
-      {loadError && <SettingsInlineError message="Dystil could not load your capture filters." onRetry={() => void load()} />}
-    </SettingsCard>
-
-    <div className="mb-[10px] mt-[28px] flex items-baseline justify-between gap-4">
+    <div className="mb-[10px] flex items-baseline justify-between gap-4">
       <SettingLabel className="mb-0">Apps and sites it has come across</SettingLabel>
       {visibility && <span className="text-[14px] text-[#60636b]">{turnedOff ? `${turnedOff} turned off` : "All allowed"}</span>}
     </div>
@@ -612,7 +627,7 @@ function SettingsInlineError({ message, onRetry }: { message: string; onRetry: (
 function SettingsPage({ title, lede, children }: { title: string; lede: React.ReactNode; children: React.ReactNode }) { return <div className="mx-auto max-w-[880px]"><h1 className="text-[29px] font-medium tracking-[-0.02em]">{title}</h1>{lede && <p className="mb-[26px] mt-[8px] max-w-[690px] text-[18px] leading-[1.6] text-[#60636b]">{lede}</p>}{children}</div>; }
 function SettingsCard({ children, padded = false, accent = false }: { children: React.ReactNode; padded?: boolean; accent?: boolean }) { return <div className={`mb-[14px] overflow-hidden rounded-[12px] border bg-white ${accent ? "border-[#c9e7db]" : "border-[#e7e7e2]"} ${padded ? "p-[20px]" : ""}`}>{children}</div>; }
 function SettingLabel({ children, className = "" }: { children: React.ReactNode; className?: string }) { return <p className={`mb-[10px] text-[14px] text-[#9a9da5] ${className}`}>{children}</p>; }
-function ToggleRow({ title, description, initial, onChange, disabled = false }: { title: string; description: string; initial: boolean; onChange?: (value: boolean) => void; disabled?: boolean }) { const [on, setOn] = useState(initial); return <div className="flex min-h-[66px] items-center justify-between gap-5 border-b border-[#efefe9] px-[19px] py-[13px] last:border-b-0"><div><p className="text-[17px]">{title}</p>{description && <p className="mt-1 text-[14px] text-[#9a9da5]">{description}</p>}</div><button type="button" disabled={disabled} aria-pressed={on} onClick={() => { const value = !on; setOn(value); onChange?.(value); }} className={`h-[26px] w-[46px] rounded-full p-[3px] ${on ? "bg-[#1d9e75]" : "bg-[#e7e7e2]"}`}><span className={`block h-[20px] w-[20px] rounded-full bg-white transition-transform ${on ? "translate-x-[20px]" : ""}`} /></button></div>; }
+function ToggleRow({ title, description, initial, onChange, disabled = false }: { title: string; description: string; initial: boolean; onChange?: (value: boolean) => void; disabled?: boolean }) { const [on, setOn] = useState(initial); useEffect(() => setOn(initial), [initial]); return <div className="flex min-h-[66px] items-center justify-between gap-5 border-b border-[#efefe9] px-[19px] py-[13px] last:border-b-0"><div><p className="text-[17px]">{title}</p>{description && <p className="mt-1 text-[14px] text-[#9a9da5]">{description}</p>}</div><button type="button" disabled={disabled} aria-pressed={on} onClick={() => { const value = !on; setOn(value); onChange?.(value); }} className={`h-[26px] w-[46px] rounded-full p-[3px] ${on ? "bg-[#1d9e75]" : "bg-[#e7e7e2]"}`}><span className={`block h-[20px] w-[20px] rounded-full bg-white transition-transform ${on ? "translate-x-[20px]" : ""}`} /></button></div>; }
 function Stat({ value, label, accent = false }: { value: string; label: string; accent?: boolean }) { return <div><p className={`text-[28px] font-medium ${accent ? "text-[#0f6e56]" : ""}`}>{value}</p><p className="mt-1 text-[14px] text-[#9a9da5]">{label}</p></div>; }
 function SmallButton({ onClick, disabled, children }: { onClick: () => void; disabled?: boolean; children: React.ReactNode }) { return <button type="button" disabled={disabled} onClick={onClick} className="rounded-[9px] border border-[#e1e1dc] bg-white px-[14px] py-[9px] text-[15px] disabled:opacity-50">{children}</button>; }
 function SimpleRow({ title, action }: { title: string; action: string }) { return <div className="flex min-h-[62px] items-center justify-between border-b border-[#efefe9] px-[19px] py-[13px] last:border-b-0"><span className="text-[17px]">{title}</span><button type="button" className="text-[15px] text-[#0f6e56]">{action}</button></div>; }

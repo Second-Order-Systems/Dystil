@@ -229,6 +229,10 @@ windows = { version = "0.58", features = [
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.1"
 base64 = "0.22.1"
+# The Tauri notification plugin dispatches Linux notifications back through
+# Tokio. `notify-rust` lets completed background work notify via D-Bus from a
+# plain OS thread instead.
+notify-rust = "=4.18.0"
 freedesktop-desktop-entry = "0.7.0"
 freedesktop-icon-lookup = "0.1.3"
 xdg = "2.5.2"

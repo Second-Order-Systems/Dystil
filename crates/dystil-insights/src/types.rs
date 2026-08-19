@@ -392,6 +392,71 @@ pub struct ReadyArtifactMutationResult {
     pub revision: u32,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillBundleStatus {
+    Pending,
+    Running,
+    Ready,
+    Failed,
+    Interrupted,
+}
+
+/// A concise, Dystil-owned build stage. Provider event payloads never cross
+/// this boundary; the UI receives only this safe progress label.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillBundleStage {
+    Preparing,
+    Investigating,
+    Building,
+    Validating,
+    Ready,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillBundleView {
+    pub job_id: Option<String>,
+    pub bundle_id: Option<String>,
+    pub revision: Option<u32>,
+    pub skill_name: Option<String>,
+    pub status: SkillBundleStatus,
+    pub stage: Option<SkillBundleStage>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillInstallTarget {
+    Codex,
+    Claude,
+    ClaudeUpload,
+    Chatgpt,
+    Pi,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillInstallReceipt {
+    pub install_id: String,
+    pub bundle_id: String,
+    pub target: SkillInstallTarget,
+    pub destination: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillInstallTargetAvailability {
+    pub target: SkillInstallTarget,
+    pub available: bool,
+    pub installed: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtifactChangePreview {

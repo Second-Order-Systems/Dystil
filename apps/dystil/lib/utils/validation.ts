@@ -82,6 +82,24 @@ export interface FieldValidationResult {
   warning?: string;
 }
 
+/** Validate a user-visible preset id without treating whitespace variants as
+ * distinct names. The current preset is allowed to retain its own name. */
+export const validatePresetName = (
+  name: string,
+  visiblePresets: Array<{ id: string }>,
+  currentPresetId?: string,
+): FieldValidationResult => {
+  const normalized = name.trim();
+  const current = currentPresetId?.trim();
+  const duplicate = visiblePresets.some((preset) => {
+    const id = preset.id.trim();
+    return id === normalized && id !== current;
+  });
+  return duplicate
+    ? { isValid: false, error: "A preset with this name already exists" }
+    : { isValid: true };
+};
+
 // Field-specific validators
 export const validateField = (
   field: keyof SettingsStore,

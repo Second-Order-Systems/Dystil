@@ -471,6 +471,19 @@ async automationSetEnabled(name: string, enabled: boolean) : Promise<Result<Auto
 }
 },
 /**
+ * Build a portable prompt and Agent Skill from a kept shortcut. The builder
+ * runs through the already configured headless AI runtime; it never opens a
+ * provider UI or installs its output.
+ */
+async buildReadyArtifactSkillBundle(artifactId: string) : Promise<Result<SkillBundleView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("build_ready_artifact_skill_bundle", { artifactId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Check only accessibility permission.
  */
 async checkAccessibilityPermissionCmd() : Promise<OSPermissionStatus> {
@@ -667,6 +680,14 @@ async ensureWebviewFocus() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async exportSkillBundle(bundleId: string) : Promise<Result<SkillInstallReceipt, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("export_skill_bundle", { bundleId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Register Dystil's read-only stdio sidecar in the user's own Codex CLI or
  * Claude Code configuration. This is intentionally separate from Dystil's
@@ -746,9 +767,8 @@ async getCaptureHealth() : Promise<Result<CaptureHealth, string>> {
 }
 },
 /**
- * Return the privacy categories and real apps/sites observed in local capture
- * for the current calendar month. Durations are estimated from frame gaps and
- * never leave the device.
+ * Return the real apps/sites observed in local capture for the current calendar
+ * month. Durations are estimated from frame gaps and never leave the device.
  */
 async getCaptureVisibility() : Promise<Result<CaptureVisibilityView, string>> {
     try {
@@ -883,6 +903,14 @@ async getReadyArtifactProvenance(artifactId: string) : Promise<Result<WorthFixin
     else return { status: "error", error: e  as any };
 }
 },
+async getReadyArtifactSkillBundle(artifactId: string) : Promise<Result<SkillBundleView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_ready_artifact_skill_bundle", { artifactId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async getReadyToUse(cursor: string | null, limit: number) : Promise<Result<ArtifactPage, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_ready_to_use", { cursor, limit }) };
@@ -894,6 +922,22 @@ async getReadyToUse(cursor: string | null, limit: number) : Promise<Result<Artif
 async getRetentionStorage(forceRefresh: boolean | null) : Promise<Result<RetentionStorageView, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_retention_storage", { forceRefresh }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getSkillBundleInstallTargets(bundleId: string) : Promise<Result<SkillInstallTargetAvailability[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_skill_bundle_install_targets", { bundleId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getSkillBundlePrompt(bundleId: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_skill_bundle_prompt", { bundleId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -957,6 +1001,14 @@ async hideNotificationPanel() : Promise<Result<null, string>> {
 async installAppUpdate() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("install_app_update") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async installSkillBundle(bundleId: string, target: SkillInstallTarget) : Promise<Result<SkillInstallReceipt, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("install_skill_bundle", { bundleId, target }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1123,6 +1175,18 @@ async openReadyCapability(artifactId: string) : Promise<Result<ReadyArtifactUseR
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Opens an installed desktop provider when available, with a browser fallback
+ * for users who have not installed that provider locally.
+ */
+async openSkillBundleProvider(provider: SkillBundleProvider) : Promise<Result<SkillBundleProviderLaunch, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_skill_bundle_provider", { provider }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async openWindowsShellTarget(target: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("open_windows_shell_target", { target }) };
@@ -1158,6 +1222,19 @@ async proposeReadyArtifactChange(artifactId: string, request: string) : Promise<
 async recordReadyArtifactUsed(artifactId: string, action: ReadyArtifactAction) : Promise<Result<ReadyArtifactUseResult, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("record_ready_artifact_used", { artifactId, action }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Records the user's explicit intent to install a ready skill. The bundle is
+ * intentionally not an argument: titles, IDs, and destinations never enter
+ * telemetry.
+ */
+async recordSkillBundleInstallIntent() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("record_skill_bundle_install_intent") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1302,6 +1379,27 @@ async retryReadyArtifactChange(changeJobId: string) : Promise<Result<ArtifactCha
     else return { status: "error", error: e  as any };
 }
 },
+async retryReadyArtifactSkillBundle(artifactId: string) : Promise<Result<SkillBundleView, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("retry_ready_artifact_skill_bundle", { artifactId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Reveal the exported portable bundle without invoking the opener plugin from
+ * a Tokio worker. On Linux the plugin's D-Bus implementation is blocking and
+ * creates its own runtime, so it must run on the blocking thread pool.
+ */
+async revealSkillBundleExport(bundleId: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("reveal_skill_bundle_export", { bundleId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async saveWorthFixingFinding(findingId: string) : Promise<Result<KeepFindingResult, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("save_worth_fixing_finding", { findingId }) };
@@ -1335,18 +1433,6 @@ async setAppAutoUpdate(enabled: boolean) : Promise<Result<AppUpdateSettingsView,
 async setAutostart(enabled: boolean) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_autostart", { enabled }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Enable or block one sensitive category by updating the capture engine's
- * real window and URL filters.
- */
-async setCaptureCategoryEnabled(categoryId: string, enabled: boolean) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("set_capture_category_enabled", { categoryId, enabled }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1710,10 +1796,9 @@ export type BrowserLogEntry = { level: string; message: string }
 export type BuildCapabilities = { cloudAvailable: boolean; authMode: AuthMode; cloudBaseUrl: string | null; officialBuild: boolean; enterpriseManaged: boolean }
 export type CacheFile = { path: string; label: string; size_bytes: number }
 export type Cadence = "none" | "daily" | "weekly" | "monthly"
-export type CaptureCategoryView = { id: string; enabled: boolean }
 export type CaptureHealth = { status: string; status_code: number; last_frame_timestamp: string | null; last_ui_timestamp: string | null; frame_status: string; ui_status: string; message: string }
 export type CaptureSourceView = { id: string; kind: string; name: string; activeMinutes: number; enabled: boolean }
-export type CaptureVisibilityView = { categories: CaptureCategoryView[]; sources: CaptureSourceView[]; sourcesError: string | null }
+export type CaptureVisibilityView = { sources: CaptureSourceView[]; sourcesError: string | null }
 export type Credits = { amount: number }
 export type DeletionPreview = { frameCount: number; eventCount: number; capturedDurationSeconds: number; screenshotCount: number; mediaBytes: number; oldestAt: string | null; newestAt: string | null; cloudCopyMayRemain: boolean }
 export type DeletionResult = { deletedFrames: number; deletedEvents: number; deletedScreenshots: number; forgottenEvidence: number; withdrawnFindings: number; cloudCopyMayRemain: boolean }
@@ -2097,6 +2182,23 @@ uiTheme?: string;
  */
 minimizeToTrayOnClose?: boolean }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | "Onboarding" | "PermissionRecovery"
+export type SkillBundleProvider = "claude" | "chatgpt"
+export type SkillBundleProviderLaunch = {
+/**
+ * `desktop` means Dystil found and launched the locally installed app.
+ * `web` is the deliberate fallback when that provider is not installed.
+ */
+destination: string }
+/**
+ * A concise, Dystil-owned build stage. Provider event payloads never cross
+ * this boundary; the UI receives only this safe progress label.
+ */
+export type SkillBundleStage = "preparing" | "investigating" | "building" | "validating" | "ready" | "failed"
+export type SkillBundleStatus = "pending" | "running" | "ready" | "failed" | "interrupted"
+export type SkillBundleView = { jobId: string | null; bundleId: string | null; revision: number | null; skillName: string | null; status: SkillBundleStatus; stage: SkillBundleStage | null; provider: string | null; model: string | null; errorMessage: string | null }
+export type SkillInstallReceipt = { installId: string; bundleId: string; target: SkillInstallTarget; destination: string; status: string }
+export type SkillInstallTarget = "codex" | "claude" | "claude_upload" | "chatgpt" | "pi"
+export type SkillInstallTargetAvailability = { target: SkillInstallTarget; available: boolean; installed: boolean }
 export type SyncConsent = { segments: boolean; screenshots: boolean }
 /**
  * Current effective telemetry state, and whether the user may change it.

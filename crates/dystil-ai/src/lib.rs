@@ -587,8 +587,23 @@ impl CliProvider {
                     "--permission-mode",
                     "bypassPermissions",
                     "--allowedTools",
-                    "Read,Write,Edit,Bash",
+                    "Read,Write,Edit,Bash,mcp__dystil__dystil_get_activity_overview,mcp__dystil__dystil_search_activity,mcp__dystil__dystil_get_source,mcp__dystil__dystil_get_activity_context,mcp__dystil__dystil_get_activity_range",
                 ]);
+                if let Some(mcp) = &self.mcp_server {
+                    // This is a Dystil-owned, per-run file inside the already
+                    // isolated automation workspace. It does not change the
+                    // user's Claude configuration or open any UI.
+                    let mcp_path = request.working_directory.join(".dystil-mcp.json");
+                    fs::write(
+                        &mcp_path,
+                        serde_json::to_vec(&serde_json::json!({
+                            "mcpServers": {"dystil": {"command": mcp.command, "args": mcp.args}}
+                        }))
+                        .map_err(|error| AiError::InvalidOutput(error.to_string()))?,
+                    )?;
+                    command.args(["--strict-mcp-config", "--mcp-config"]);
+                    command.arg(mcp_path);
+                }
                 if let Some(model) = model {
                     command.args(["--model", model]);
                 }
@@ -667,7 +682,23 @@ impl CliProvider {
             if !status.success() {
                 let detail = terminal_error.unwrap_or_else(|| {
                     if stderr.is_empty() {
-                        format!("provider exited with {status}")
+                        if fallback.trim().is_empty() {
+                            format!("provider exited with {status}")
+                        } else {
+                            // Claude's stream-json protocol can report the useful
+                            // failure on stdout while leaving stderr empty. Its
+                            // startup event is large, while the terminal error is
+                            // at the end of the stream.
+                            let tail = fallback
+                                .chars()
+                                .rev()
+                                .take(1_000)
+                                .collect::<String>()
+                                .chars()
+                                .rev()
+                                .collect::<String>();
+                            bounded_stderr(tail.as_bytes())
+                        }
                     } else {
                         bounded_stderr(&stderr)
                     }
@@ -676,9 +707,18 @@ impl CliProvider {
             }
             Ok(fallback)
         };
-        let fallback = timeout(request.timeout, collect)
-            .await
-            .map_err(|_| AiError::Timeout)??;
+        let fallback = match timeout(request.timeout, collect).await {
+            Ok(result) => result?,
+            Err(_) => {
+                // `kill_on_drop` is not sufficient here: the provider can keep
+                // descendants (notably its MCP server) alive after the future is
+                // cancelled. Reap the direct child explicitly before returning so
+                // an expired build cannot remain indefinitely in `running`.
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Err(AiError::Timeout);
+            }
+        };
         let output = fs::read_to_string(&output_path)
             .unwrap_or(fallback)
             .trim()
@@ -1478,6 +1518,41 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("usage limit reached"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn automation_timeout_kills_and_reaps_the_provider() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let executable = dir.path().join("hanging-provider");
+        std::fs::write(&executable, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let (events, _receiver) = mpsc::channel(16);
+
+        let started = std::time::Instant::now();
+        let error = CliProvider {
+            provider: ProviderKind::Codex,
+            executable,
+            runtime_version: None,
+            environment: Vec::new(),
+            mcp_server: None,
+        }
+        .run_automation_with_model(
+            AiAutomationRequest {
+                prompt: "create an automation".into(),
+                working_directory: dir.path().join("work"),
+                timeout: Duration::from_millis(50),
+            },
+            None,
+            events,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, AiError::Timeout));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[cfg(unix)]

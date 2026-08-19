@@ -4,16 +4,40 @@
 //! SQLite remain native.
 
 use dystil_insights::{
-    cleanup_diagnostics, finding_evidence, home_worth_fixing_summary, keep_finding,
-    open_insights_database, other_findings, pending_observations, record_disposition,
-    record_wake_start, run_steward_wake, set_enhanced_diagnostics, worth_fixing_summary,
-    DiagnosticRetention, DispositionKind, FindingPage, KeepFindingResult, WakeResult,
-    WorthFixingEvidenceLine, WorthFixingSummary,
+    cleanup_diagnostics, finding_evidence, home_worth_fixing_summary,
+    interrupt_abandoned_skill_bundle_builds, keep_finding, open_insights_database, other_findings,
+    pending_observations, record_disposition, record_wake_start, run_steward_wake,
+    set_enhanced_diagnostics, worth_fixing_summary, DiagnosticRetention, DispositionKind,
+    FindingPage, KeepFindingResult, WakeResult, WorthFixingEvidenceLine, WorthFixingSummary,
 };
 use serde::Serialize;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, State};
 use tokio::sync::OnceCell;
+
+/// A finding is counted only once it has been accepted into the local
+/// projection and can appear in Worth Fixing. No finding content or ID enters
+/// telemetry.
+pub(crate) async fn record_worth_fixing_findings_shown(
+    recording: &crate::recording::RecordingState,
+    count: usize,
+) {
+    if count == 0 {
+        return;
+    }
+    let telemetry = recording
+        .server
+        .lock()
+        .await
+        .as_ref()
+        .map(|server| server.telemetry.clone());
+    if let Some(telemetry) = telemetry {
+        telemetry.record_product_event(
+            dystil_telemetry::ProductEventKind::WorthFixingFindingShown,
+            count as u64,
+        );
+    }
+}
 
 #[derive(Default)]
 pub struct WorthFixingState {
@@ -28,6 +52,9 @@ impl WorthFixingState {
                     crate::log_files::get_data_dir(app).map_err(|error| error.to_string())?;
                 let path = data_dir.join("worth-fixing.sqlite");
                 let pool = open_insights_database(&path)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                interrupt_abandoned_skill_bundle_builds(&pool)
                     .await
                     .map_err(|error| error.to_string())?;
                 #[cfg(unix)]
@@ -141,7 +168,7 @@ pub async fn refresh_worth_fixing(
     record_wake_start(insights, &local_day, "explicit_request", true)
         .await
         .map_err(|error| error.to_string())?;
-    match run_steward_wake(
+    let wake = run_steward_wake(
         insights,
         runtime.as_ref(),
         &local_day,
@@ -150,8 +177,11 @@ pub async fn refresh_worth_fixing(
         250,
     )
     .await
-    .map_err(|error| error.to_string())?
-    {
+    .map_err(|error| error.to_string())?;
+    if let WakeResult::Accepted { ref apply, .. } = wake {
+        record_worth_fixing_findings_shown(&recording, apply.findings_created).await;
+    }
+    match wake {
         WakeResult::NoWork => Ok(WorthFixingRefreshResult {
             status: "no_pending_observations".into(),
             job_id: None,

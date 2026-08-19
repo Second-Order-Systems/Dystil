@@ -47,8 +47,8 @@ pub enum SignalKind {
     ImageCapture,
 }
 
-/// A deliberately small set of user-visible AI setup actions. Routine status
-/// polling is excluded so telemetry reflects actionable failures.
+/// A deliberately small set of user-visible AI actions. Routine status polling
+/// is excluded so telemetry reflects actionable failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AiOperationKind {
     Install,
@@ -56,6 +56,7 @@ pub enum AiOperationKind {
     ConnectionTest,
     McpSetup,
     McpConnect,
+    SkillBundleBuild,
 }
 
 impl AiOperationKind {
@@ -66,6 +67,7 @@ impl AiOperationKind {
             Self::ConnectionTest => "connection_test",
             Self::McpSetup => "mcp_setup",
             Self::McpConnect => "mcp_connect",
+            Self::SkillBundleBuild => "skill_bundle_build",
         }
     }
 }
@@ -128,6 +130,31 @@ pub struct AiOperationPoint {
     pub operation: AiOperationKind,
     pub outcome: Outcome,
     pub error: AiErrorKind,
+    pub value: u64,
+}
+
+/// A small set of product moments worth counting. These values deliberately
+/// exclude artifact titles, finding content, IDs, and provider/account data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProductEventKind {
+    WorthFixingFindingShown,
+    SkillBuildRequested,
+    SkillInstallRequested,
+}
+
+impl ProductEventKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::WorthFixingFindingShown => "worth_fixing_finding_shown",
+            Self::SkillBuildRequested => "skill_build_requested",
+            Self::SkillInstallRequested => "skill_install_requested",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProductEventPoint {
+    pub event: ProductEventKind,
     pub value: u64,
 }
 
@@ -202,13 +229,25 @@ pub struct SyncDiagnostics {
 
 impl SyncDiagnostics {
     fn add(&mut self, value: Self) {
-        self.iteration_duration_ms = self.iteration_duration_ms.saturating_add(value.iteration_duration_ms);
-        self.segment_duration_ms = self.segment_duration_ms.saturating_add(value.segment_duration_ms);
-        self.image_duration_ms = self.image_duration_ms.saturating_add(value.image_duration_ms);
-        self.image_candidates_scanned = self.image_candidates_scanned.saturating_add(value.image_candidates_scanned);
-        self.image_candidates_selected = self.image_candidates_selected.saturating_add(value.image_candidates_selected);
+        self.iteration_duration_ms = self
+            .iteration_duration_ms
+            .saturating_add(value.iteration_duration_ms);
+        self.segment_duration_ms = self
+            .segment_duration_ms
+            .saturating_add(value.segment_duration_ms);
+        self.image_duration_ms = self
+            .image_duration_ms
+            .saturating_add(value.image_duration_ms);
+        self.image_candidates_scanned = self
+            .image_candidates_scanned
+            .saturating_add(value.image_candidates_scanned);
+        self.image_candidates_selected = self
+            .image_candidates_selected
+            .saturating_add(value.image_candidates_selected);
         self.images_prepared = self.images_prepared.saturating_add(value.images_prepared);
-        self.image_bytes_prepared = self.image_bytes_prepared.saturating_add(value.image_bytes_prepared);
+        self.image_bytes_prepared = self
+            .image_bytes_prepared
+            .saturating_add(value.image_bytes_prepared);
     }
 }
 
@@ -228,6 +267,7 @@ pub struct IntervalSnapshot {
     pub consent_version: u16,
     pub points: Vec<CounterPoint>,
     pub ai_operations: Vec<AiOperationPoint>,
+    pub product_events: Vec<ProductEventPoint>,
     pub app_starts: Vec<StartupPoint>,
     pub storage_operations: Vec<StorageOperationPoint>,
     pub sync_iterations: Vec<SyncIterationPoint>,
@@ -303,12 +343,16 @@ impl ResourceActivityBucket {
         if let Some(value) = snapshot.process_cpu_percent_x100 {
             self.process_cpu_sum_x100 = self.process_cpu_sum_x100.saturating_add(value as u64);
             self.process_cpu_samples = self.process_cpu_samples.saturating_add(1);
-            self.process_cpu_max_x100 =
-                Some(self.process_cpu_max_x100.map_or(value, |old| old.max(value)));
+            self.process_cpu_max_x100 = Some(
+                self.process_cpu_max_x100
+                    .map_or(value, |old| old.max(value)),
+            );
         }
         if let Some(value) = snapshot.process_memory_rss_bytes {
-            self.process_memory_max_bytes =
-                Some(self.process_memory_max_bytes.map_or(value, |old| old.max(value)));
+            self.process_memory_max_bytes = Some(
+                self.process_memory_max_bytes
+                    .map_or(value, |old| old.max(value)),
+            );
         }
         if let Some(value) = snapshot.host_cpu_percent_x100 {
             self.host_cpu_sum_x100 = self.host_cpu_sum_x100.saturating_add(value as u64);
@@ -324,8 +368,7 @@ impl ResourceActivityBucket {
     }
 
     fn host_average(&self) -> Option<u32> {
-        (self.host_cpu_samples > 0)
-            .then(|| (self.host_cpu_sum_x100 / self.host_cpu_samples) as u32)
+        (self.host_cpu_samples > 0).then(|| (self.host_cpu_sum_x100 / self.host_cpu_samples) as u32)
     }
 }
 
@@ -535,6 +578,7 @@ pub struct Telemetry {
     capture: CounterBank,
     image: ImageCounterBank,
     ai_operations: Mutex<HashMap<(AiProviderKind, AiOperationKind, Outcome, AiErrorKind), u64>>,
+    product_events: Mutex<HashMap<ProductEventKind, u64>>,
     app_starts: Mutex<HashMap<(AppStartReason, Outcome), u64>>,
     storage_operations: Mutex<HashMap<(StorageOperationKind, Outcome, Option<ErrorKind>), u64>>,
     sync_iterations: Mutex<HashMap<(Outcome, Option<ErrorKind>), u64>>,
@@ -569,6 +613,7 @@ impl Telemetry {
             capture: CounterBank::new(),
             image: ImageCounterBank::new(),
             ai_operations: Mutex::new(HashMap::new()),
+            product_events: Mutex::new(HashMap::new()),
             app_starts: Mutex::new(HashMap::new()),
             storage_operations: Mutex::new(HashMap::new()),
             sync_iterations: Mutex::new(HashMap::new()),
@@ -621,6 +666,15 @@ impl Telemetry {
                     },
                 )
                 .collect();
+        let product_events = std::mem::take(
+            &mut *self
+                .product_events
+                .lock()
+                .expect("telemetry mutex poisoned"),
+        )
+        .into_iter()
+        .map(|(event, value)| ProductEventPoint { event, value })
+        .collect();
         let app_starts =
             std::mem::take(&mut *self.app_starts.lock().expect("telemetry mutex poisoned"))
                 .into_iter()
@@ -689,6 +743,7 @@ impl Telemetry {
             consent_version: TELEMETRY_CONSENT_VERSION,
             points,
             ai_operations,
+            product_events,
             app_starts,
             storage_operations,
             sync_iterations,
@@ -712,6 +767,10 @@ impl Telemetry {
         self.image.clear();
         *self.resources.lock().expect("telemetry mutex poisoned") = None;
         self.ai_operations
+            .lock()
+            .expect("telemetry mutex poisoned")
+            .clear();
+        self.product_events
             .lock()
             .expect("telemetry mutex poisoned")
             .clear();
@@ -740,7 +799,10 @@ impl Telemetry {
             return RecordStatus::Disabled;
         }
         *self.resources.lock().expect("telemetry mutex poisoned") = Some(resources);
-        let mut activity = self.resource_activity.lock().expect("telemetry mutex poisoned");
+        let mut activity = self
+            .resource_activity
+            .lock()
+            .expect("telemetry mutex poisoned");
         if self.sync_active.load(Ordering::Acquire) {
             activity.sync.record(resources);
         } else {
@@ -772,6 +834,21 @@ impl Telemetry {
         *operations
             .entry((provider, operation, outcome, error))
             .or_default() += 1;
+        RecordStatus::Recorded
+    }
+
+    /// Record an aggregate product event. `count` is used only for a bounded
+    /// batch of findings that became displayable in one steward wake.
+    pub fn record_product_event(&self, event: ProductEventKind, count: u64) -> RecordStatus {
+        if !self.is_enabled() || count == 0 {
+            return RecordStatus::Disabled;
+        }
+        *self
+            .product_events
+            .lock()
+            .expect("telemetry mutex poisoned")
+            .entry(event)
+            .or_default() += count;
         RecordStatus::Recorded
     }
 
@@ -814,8 +891,13 @@ impl Telemetry {
         if !self.is_enabled() {
             return RecordStatus::Disabled;
         }
-        let mut current = self.sync_diagnostics.lock().expect("telemetry mutex poisoned");
-        current.get_or_insert_with(SyncDiagnostics::default).add(diagnostics);
+        let mut current = self
+            .sync_diagnostics
+            .lock()
+            .expect("telemetry mutex poisoned");
+        current
+            .get_or_insert_with(SyncDiagnostics::default)
+            .add(diagnostics);
         RecordStatus::Recorded
     }
 
@@ -954,6 +1036,29 @@ mod tests {
         });
         assert!(!telemetry.is_enabled());
         assert!(telemetry.drain_interval().is_none());
+    }
+
+    #[test]
+    fn product_events_are_aggregate_only_and_preserve_their_count() {
+        let telemetry = Telemetry::new();
+        grant(&telemetry);
+        assert_eq!(
+            telemetry.record_product_event(ProductEventKind::WorthFixingFindingShown, 3),
+            RecordStatus::Recorded,
+        );
+        assert_eq!(
+            telemetry.record_product_event(ProductEventKind::SkillBuildRequested, 1),
+            RecordStatus::Recorded,
+        );
+        let snapshot = telemetry.drain_interval().unwrap();
+        assert!(snapshot.product_events.contains(&ProductEventPoint {
+            event: ProductEventKind::WorthFixingFindingShown,
+            value: 3,
+        }));
+        assert!(snapshot.product_events.contains(&ProductEventPoint {
+            event: ProductEventKind::SkillBuildRequested,
+            value: 1,
+        }));
     }
 
     #[test]

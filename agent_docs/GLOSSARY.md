@@ -1,11 +1,11 @@
 ---
 status: verified
 authority: ground-truth
-verified_against: e84d34c
-verified_on: 2026-08-08
+verified_against: working-tree
+verified_on: 2026-08-18
 ---
 
-> **Verified** against `e84d34c`. If a citation no longer resolves, this document is
+> **Verified** against the working tree. If a citation no longer resolves, this document is
 > wrong.
 
 # Glossary — marketing term → real type
@@ -22,6 +22,8 @@ as a struct.**
 | **Surface visit** | `dystil-work-index` | The real unit. "Deterministic construction of compact surface visits from captured frames." ~18 references. |
 | **Worth fixing** | `dystil-insights`, `components/dystil/pages/worth-fixing.tsx` | Real, both backend and UI. Findings with evidence. |
 | **Your shortcuts** | `components/dystil/home/your-shortcuts.tsx`, `dystil-insights` via `ready_to_use_commands.rs` | Real. Kept, reusable artifacts. Called **"Ready to use"** before the v2 design; the route is still `/home/ready`. **Not** `dystil-automation` — that crate backs `automation_commands.rs`, a separate subsystem the UI never calls. |
+| **Skill bundle** | `dystil-insights/src/skill_bundle.rs :: build_skill_bundle()` | A user-triggered, immutable revision containing `prompt.md` and exactly one portable Agent Skill. It is generated from a kept shortcut, not from an automation schedule. |
+| **Workflow reconstruction** | `dystil-insights/src/skill_bundle.rs :: run_skill_bundle_build()` and `artifact_workflow_reconstructions` | A durable, evidence-grounded Markdown investigation created after Build skill and before final skill authoring. It is not a Worth Fixing finding or a generic runbook. |
 | **The pile** | `components/dystil/home/the-pile.tsx` | The Home route's default state: unsettled findings, one at a time. Deliberately not a list. |
 | **Settle** | `HomeActions.settle` in `lib/mock/types.ts` | To decide a finding, in either direction, and remove it from the queue. Distinct from **defer**, which rotates it to the back and is not progress. |
 | **Ask for fix** | `components/dystil/pages/ask-for-fix.tsx` | Real UI surface. |

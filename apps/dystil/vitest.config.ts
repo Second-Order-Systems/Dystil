@@ -6,6 +6,11 @@ export default defineConfig({
 	plugins: [react()],
 	test: {
 		environment: "jsdom",
+		// jsdom only exposes localStorage for a non-opaque origin. The desktop
+		// UI uses it for small local preferences such as font size.
+		environmentOptions: {
+			jsdom: { url: "http://localhost" },
+		},
 		globals: true,
 		setupFiles: ["./vitest.setup.ts"],
 		include: ["**/__tests__/**/*.test.{ts,tsx}", "**/*.test.{ts,tsx}"],

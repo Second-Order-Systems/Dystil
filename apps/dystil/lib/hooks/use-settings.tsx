@@ -160,6 +160,8 @@ export type Settings = SettingsStore & {
     displayChanges?: boolean;
     /** Live-note prompt when a meeting is detected. Default true. */
     meetingLiveNotes?: boolean;
+    /** Native notification when a requested reusable skill finishes building. Default true. */
+    requestedWorkReady?: boolean;
     mutedPipes: string[];
   };
   /** Remote devices to monitor pipes on (LAN addresses) */

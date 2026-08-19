@@ -6,7 +6,6 @@ import { homeDir, join } from "@tauri-apps/api/path";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { AppWindow, CalendarRange, Loader2, RotateCcw, Search, Trash2, X } from "lucide-react";
 import { ChipRow, PrivacyCard, TextAction } from "../page-primitives";
-import { CAPTURE_CATEGORIES } from "../capture-categories";
 import { getBuildCapabilities } from "@/lib/build-capabilities";
 
 const DYSTIL_SOURCE_URL = "https://github.com/Second-Order-Systems/Dystil";
@@ -38,9 +37,8 @@ type DeletionResult = {
   withdrawnFindings: number;
   cloudCopyMayRemain: boolean;
 };
-type CaptureCategory = { id: string; enabled: boolean };
 type CaptureSource = { id: string; kind: "app" | "site"; name: string; activeMinutes: number; enabled: boolean };
-type CaptureVisibility = { categories: CaptureCategory[]; sources: CaptureSource[]; sourcesError?: string | null };
+type CaptureVisibility = { sources: CaptureSource[]; sourcesError?: string | null };
 
 const SOURCE_PREVIEW_LIMIT = 6;
 
@@ -248,11 +246,6 @@ export function Privacy({ onOpenSettings }: { onOpenSettings: () => void }) {
   }, []);
   useEffect(() => { void loadVisibility(); }, [loadVisibility]);
 
-  const categoryChips = useMemo(() => CAPTURE_CATEGORIES.map((definition) => {
-    const enabled = visibility?.categories.find((category) => category.id === definition.id)?.enabled ?? false;
-    return { label: `${definition.title}${enabled ? ", on" : ""}`, enabled };
-  }), [visibility?.categories]);
-  const enabledCount = categoryChips.filter((category) => category.enabled).length;
   // Managed deployments handle telemetry through the organization agreement,
   // so this page says nothing about it. Community builds disclose it here and
   // offer the switch.
@@ -265,9 +258,6 @@ export function Privacy({ onOpenSettings }: { onOpenSettings: () => void }) {
     return () => { cancelled = true; };
   }, []);
 
-  const categorySummary = enabledCount === 0
-    ? "These are off. Turn on only what counts as work for you."
-    : `Personal for most people, work for some. You have turned ${enabledCount === 1 ? "one" : enabledCount} on.`;
   const allSources = visibility?.sources ?? [];
   const enabledSources = allSources.filter((source) => source.enabled);
   const disabledSources = allSources.filter((source) => !source.enabled);
@@ -283,11 +273,6 @@ export function Privacy({ onOpenSettings }: { onOpenSettings: () => void }) {
   return <div className="mx-auto max-w-[1124px] pb-10"><h1 className="text-[29px] font-medium tracking-[-0.02em] text-[#1a1c20]">What stays on this computer</h1><p className="mt-[10px] max-w-[680px] text-[18px] leading-[1.65] text-[#60636b]">{enterpriseManaged ? "Everything Dystil has read is in one folder on this machine, and there is no copy of it to ask for." : "Everything Dystil has read is in one folder on this machine, and there is no copy of it to ask for. The only thing that leaves is anonymous usage counts, which you can turn off."}</p><div className="mt-[18px] rounded-[12px] bg-[#f3f8f5] px-[18px] py-[14px] text-[17px] leading-[1.55] text-[#60636b]">This page is the whole picture in one place. Anything you want to change is one click away in <button type="button" className="text-[#0f6e56]" onClick={onOpenSettings}>Settings</button>.</div>
     <PrivacyCard accent title="What never leaves">Everything Dystil reads about your work, and everything it has worked out from it.<br />Where it lives: <span className="text-[#1a1c20]">~/.dystil</span><div className="mt-[14px] flex gap-5"><TextAction onClick={() => void openDystilFolder()}>Open that folder</TextAction><TextAction onClick={() => void openSourceCode()}>Read the code that does this</TextAction></div></PrivacyCard>
     <PrivacyCard title="Never read, and there is no switch for it">No job needs these, and getting them wrong would matter too much. They are skipped in the code, not in a setting.<ChipRow items={["Passwords and credentials", "Banking and payments", "Health", "Dating and faith apps", "Private browsing windows"]} /></PrivacyCard>
-    <PrivacyCard title="Off unless you say otherwise" action={<TextAction onClick={onOpenSettings}>Change in Settings</TextAction>}>
-      {!visibility && !visibilityError && <div aria-label="Loading sensitive categories" className="mt-[14px] flex flex-wrap gap-[8px]">{CAPTURE_CATEGORIES.map((category) => <span key={category.id} className="h-[34px] w-[142px] animate-pulse rounded-full bg-[#efefe9]" />)}</div>}
-      {visibility && <>{categorySummary}<ChipRow items={categoryChips.map((category) => category.label)} activeItems={categoryChips.filter((category) => category.enabled).map((category) => category.label)} /></>}
-      {visibilityError && <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[#8b3f32]">Dystil could not load these settings.<TextAction onClick={() => void loadVisibility()}>Try again</TextAction></div>}
-    </PrivacyCard>
     {!enterpriseManaged && <PrivacyCard title="The one thing that does leave" action={<TextAction onClick={onOpenSettings}>Turn it off in Settings</TextAction>}>
       Anonymous counts of how Dystil is working — how often capture ran, whether it succeeded, how long things took. It is on by default and nothing is sent until you have finished setting up.<br />
       Never included: anything Dystil read, window titles, app names, URLs, file paths, prompts, or model replies.

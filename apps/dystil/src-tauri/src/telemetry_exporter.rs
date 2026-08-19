@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dystil_telemetry::{
-    schema, AiOperationPoint, CounterPoint, IntervalSnapshot, ResourceActivitySummary,
+    schema, AiOperationPoint, CounterPoint, IntervalSnapshot, ProductEventPoint, ResourceActivitySummary,
     ResourceSnapshot, SignalKind, StartupPoint, StorageOperationPoint, SyncDiagnostics,
     SyncIterationPoint, Telemetry, TelemetryRecorder,
 };
@@ -52,6 +52,7 @@ pub fn start(telemetry: Arc<Telemetry>, instance_id: String) -> Option<JoinHandl
             }
             let metric_points = snapshot.points.len()
                 + snapshot.ai_operations.len()
+                + snapshot.product_events.len()
                 + snapshot.app_starts.len()
                 + snapshot.storage_operations.len()
                 + snapshot.sync_iterations.len()
@@ -213,6 +214,12 @@ fn encode_metrics(snapshot: IntervalSnapshot, instance_id: &str) -> Vec<u8> {
             .ai_operations
             .into_iter()
             .map(|point| ai_operation_metric(point, now)),
+    );
+    metrics.extend(
+        snapshot
+            .product_events
+            .into_iter()
+            .map(|point| product_event_metric(point, now)),
     );
     if let Some(diagnostics) = snapshot.sync_diagnostics {
         metrics.extend(sync_diagnostic_metrics(diagnostics, now));
@@ -393,6 +400,16 @@ fn ai_operation_metric(point: AiOperationPoint, now: u64) -> Metric {
             is_monotonic: true,
         })),
     }
+}
+
+fn product_event_metric(point: ProductEventPoint, now: u64) -> Metric {
+    sum_metric(
+        schema::metric::PRODUCT_EVENTS,
+        "{event}",
+        vec![string_attribute(schema::attribute::ACTION, point.event.as_str())],
+        point.value,
+        now,
+    )
 }
 
 fn counter_metric(point: CounterPoint, now: u64) -> Metric {
