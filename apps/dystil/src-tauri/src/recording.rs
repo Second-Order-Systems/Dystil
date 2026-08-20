@@ -7,7 +7,6 @@
 use crate::capture_config::DystilCaptureConfig;
 use crate::capture_session::CaptureSession;
 use crate::config;
-use crate::permissions::do_permissions_check;
 use crate::server_core::ServerCore;
 use crate::store::SettingsStore;
 use chrono::{DateTime, Utc};
@@ -581,31 +580,8 @@ pub async fn spawn_capture(
         }
     }
 
-    // Permissions check
     let store = SettingsStore::get(&app).ok().flatten().unwrap_or_default();
-    let permissions_check = do_permissions_check(false);
-    if crate::capture_policy::product_capture_mode(store.recording.disable_vision)
-        == dystil_capture::CaptureMode::FullCapture
-        && !permissions_check.screen_recording.permitted()
-    {
-        warn!(
-            "Screen recording permission not granted: {:?}. Cannot start server.",
-            permissions_check.screen_recording
-        );
-        state.is_starting.store(false, Ordering::SeqCst);
-        state.is_starting_capture.store(false, Ordering::SeqCst);
-        // Flip the tray state machine to a terminal Error so the
-        // recording status indicator stops showing "Starting…" forever
-        // when the user has clicked "click to record" with TCC denied.
-        crate::health::set_recording_status(crate::health::RecordingStatus::Error);
-        notify_recording_state_changed(&app);
-        return Err(
-                "Screen recording permission required for FullCapture. Please grant permission or choose TextOnly."
-                .to_string(),
-        );
-    }
-
-    info!("Permissions OK. Starting server + capture.");
+    info!("Starting server + capture; macOS falls back to accessibility evidence until Screen Recording is granted.");
 
     let (data_dir, fell_back) = config::resolve_data_dir(&store.data_dir);
     if fell_back {
