@@ -3,16 +3,17 @@
 use dystil_insights::{
     capability_target, confirm_artifact_change, propose_artifact_change, ready_artifact_detail,
     ready_artifact_provenance, ready_artifacts, record_artifact_used, reject_artifact_change,
-    remove_artifact, retry_artifact_change, ArtifactChangePreview, ArtifactPage,
-    ReadyArtifactAction, ReadyArtifactDetail, ReadyArtifactMutationResult, ReadyArtifactUseResult,
-    run_skill_bundle_build, start_skill_bundle_build, SkillBundlePaths, SkillBundleView, SkillInstallReceipt, SkillInstallTarget,
-    SkillInstallTargetAvailability, WorthFixingEvidenceLine,
+    remove_artifact, retry_artifact_change, run_skill_bundle_build, start_skill_bundle_build,
+    ArtifactChangePreview, ArtifactPage, ReadyArtifactAction, ReadyArtifactDetail,
+    ReadyArtifactMutationResult, ReadyArtifactUseResult, SkillBundlePaths, SkillBundleView,
+    SkillInstallReceipt, SkillInstallTarget, SkillInstallTargetAvailability,
+    WorthFixingEvidenceLine,
 };
+use dystil_telemetry::{AiErrorKind, AiOperationKind, AiProviderKind, Outcome, Telemetry};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 #[cfg(not(target_os = "linux"))]
 use tauri_plugin_notification::NotificationExt;
-use dystil_telemetry::{AiErrorKind, AiOperationKind, AiProviderKind, Outcome, Telemetry};
 
 #[derive(Debug, Clone, Copy, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
@@ -77,14 +78,19 @@ impl SkillBundleProvider {
 
 #[cfg(target_os = "linux")]
 fn linux_desktop_entry_exists(id: &str) -> bool {
-    let mut roots = vec![std::path::PathBuf::from("/usr/share/applications"), std::path::PathBuf::from("/usr/local/share/applications")];
+    let mut roots = vec![
+        std::path::PathBuf::from("/usr/share/applications"),
+        std::path::PathBuf::from("/usr/local/share/applications"),
+    ];
     if let Some(home) = dirs::home_dir() {
         roots.push(home.join(".local/share/applications"));
     }
     if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
         roots.push(std::path::PathBuf::from(data_home).join("applications"));
     }
-    roots.into_iter().any(|root| root.join(format!("{id}.desktop")).is_file())
+    roots
+        .into_iter()
+        .any(|root| root.join(format!("{id}.desktop")).is_file())
 }
 
 fn launch_desktop_provider(provider: SkillBundleProvider) -> Result<bool, String> {
@@ -109,9 +115,16 @@ fn launch_desktop_provider(provider: SkillBundleProvider) -> Result<bool, String
         let app_name = provider.macos_app_name();
         let exists = ["/Applications", "/System/Applications"]
             .iter()
-            .any(|root| std::path::Path::new(root).join(format!("{app_name}.app")).is_dir())
-            || dirs::home_dir()
-                .is_some_and(|home| home.join("Applications").join(format!("{app_name}.app")).is_dir());
+            .any(|root| {
+                std::path::Path::new(root)
+                    .join(format!("{app_name}.app"))
+                    .is_dir()
+            })
+            || dirs::home_dir().is_some_and(|home| {
+                home.join("Applications")
+                    .join(format!("{app_name}.app"))
+                    .is_dir()
+            });
         if !exists {
             return Ok(false);
         }
@@ -124,7 +137,11 @@ fn launch_desktop_provider(provider: SkillBundleProvider) -> Result<bool, String
 
     #[cfg(target_os = "windows")]
     {
-        if let Some(executable) = provider.windows_executables().into_iter().find(|path| path.is_file()) {
+        if let Some(executable) = provider
+            .windows_executables()
+            .into_iter()
+            .find(|path| path.is_file())
+        {
             std::process::Command::new(executable)
                 .spawn()
                 .map_err(|error| format!("could not open the desktop app: {error}"))?;
@@ -137,7 +154,9 @@ fn launch_desktop_provider(provider: SkillBundleProvider) -> Result<bool, String
     Ok(false)
 }
 
-use crate::{recording::RecordingState, store::SettingsStore, worth_fixing_commands::WorthFixingState};
+use crate::{
+    recording::RecordingState, store::SettingsStore, worth_fixing_commands::WorthFixingState,
+};
 
 /// The ready-work notification is opt-out. Existing installations predate the
 /// setting, so a missing or malformed preference deliberately keeps alerts on.
@@ -255,19 +274,28 @@ async fn runtime(
     app: &AppHandle,
     recording: &RecordingState,
 ) -> Result<Box<dyn dystil_ai::AiRuntime>, String> {
-    let capture = {
-        let server = recording.server.lock().await;
-        server
-            .as_ref()
-            .ok_or("capture database is not ready")?
-            .db
-            .pool
-            .clone()
-    };
-    let timezone = crate::ai::local_timezone_offset();
-    crate::ai_runtime::resolve(app, recording, &capture, &timezone)
-        .await
-        .map_err(|error| error.to_string())
+    #[cfg(feature = "enterprise-client")]
+    {
+        let _ = (app, recording);
+        return Err("Local Ready-to-Use and skill generation are disabled in this enterprise build."
+            .to_string());
+    }
+    #[cfg(not(feature = "enterprise-client"))]
+    {
+        let capture = {
+            let server = recording.server.lock().await;
+            server
+                .as_ref()
+                .ok_or("capture database is not ready")?
+                .db
+                .pool
+                .clone()
+        };
+        let timezone = crate::ai::local_timezone_offset();
+        crate::ai_runtime::resolve(app, recording, &capture, &timezone)
+            .await
+            .map_err(|error| error.to_string())
+    }
 }
 
 #[tauri::command]
@@ -422,7 +450,11 @@ pub async fn build_ready_artifact_skill_bundle(
     recording: State<'_, RecordingState>,
     artifact_id: String,
 ) -> Result<SkillBundleView, String> {
-    record_product_event(&app, dystil_telemetry::ProductEventKind::SkillBuildRequested).await;
+    record_product_event(
+        &app,
+        dystil_telemetry::ProductEventKind::SkillBuildRequested,
+    )
+    .await;
     let runtime = runtime(&app, &recording).await?;
     let paths = SkillBundlePaths::new(crate::dystil_paths::data_dir());
     let pool = state.pool(&app).await?.clone();
@@ -454,7 +486,10 @@ pub async fn build_ready_artifact_skill_bundle(
             );
             match result {
                 Ok(bundle) => {
-                    let skill_name = bundle.skill_name.as_deref().unwrap_or("Your reusable skill");
+                    let skill_name = bundle
+                        .skill_name
+                        .as_deref()
+                        .unwrap_or("Your reusable skill");
                     notify_skill_bundle_finished(
                         notification_app.clone(),
                         "Skill ready to install".into(),
@@ -487,14 +522,22 @@ mod notification_preference_tests {
 
     #[test]
     fn ready_work_notifications_default_to_enabled() {
-        assert!(requested_work_ready_notifications_enabled_from_extra(&HashMap::new()));
-        assert!(requested_work_ready_notifications_enabled_from_extra(&extra_with(json!({}))));
+        assert!(requested_work_ready_notifications_enabled_from_extra(
+            &HashMap::new()
+        ));
+        assert!(requested_work_ready_notifications_enabled_from_extra(
+            &extra_with(json!({}))
+        ));
     }
 
     #[test]
     fn ready_work_notifications_respect_the_setting() {
-        assert!(!requested_work_ready_notifications_enabled_from_extra(&extra_with(json!({ "requestedWorkReady": false }))));
-        assert!(requested_work_ready_notifications_enabled_from_extra(&extra_with(json!({ "requestedWorkReady": true }))));
+        assert!(!requested_work_ready_notifications_enabled_from_extra(
+            &extra_with(json!({ "requestedWorkReady": false }))
+        ));
+        assert!(requested_work_ready_notifications_enabled_from_extra(
+            &extra_with(json!({ "requestedWorkReady": true }))
+        ));
     }
 
     #[test]
@@ -507,16 +550,22 @@ mod notification_preference_tests {
 
     #[test]
     fn portable_skill_archive_keeps_the_skill_directory_and_files() {
-        let root = std::env::temp_dir().join(format!("dystil-skill-export-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("dystil-skill-export-{}", uuid::Uuid::new_v4()));
         let skill = root.join("prepare-purchase-order");
         std::fs::create_dir_all(skill.join("references")).unwrap();
         std::fs::write(skill.join("SKILL.md"), "# Prepare purchase order\n").unwrap();
-        std::fs::write(skill.join("references").join("checklist.md"), "Check totals.\n").unwrap();
+        std::fs::write(
+            skill.join("references").join("checklist.md"),
+            "Check totals.\n",
+        )
+        .unwrap();
         let archive_path = root.join("prepare-purchase-order--v1.zip");
 
         create_skill_bundle_archive(&skill, &archive_path).unwrap();
 
-        let mut archive = zip::ZipArchive::new(std::fs::File::open(&archive_path).unwrap()).unwrap();
+        let mut archive =
+            zip::ZipArchive::new(std::fs::File::open(&archive_path).unwrap()).unwrap();
         let names = (0..archive.len())
             .map(|index| archive.by_index(index).unwrap().name().to_owned())
             .collect::<Vec<_>>();
@@ -564,7 +613,8 @@ pub async fn get_skill_bundle_prompt(
         .map_err(|error| error.to_string())?
         .ok_or("skill bundle is not ready")?;
     use sqlx::Row;
-    let path = std::path::PathBuf::from(row.get::<String, _>("directory")).join(row.get::<String, _>("prompt_path"));
+    let path = std::path::PathBuf::from(row.get::<String, _>("directory"))
+        .join(row.get::<String, _>("prompt_path"));
     std::fs::read_to_string(path).map_err(|error| error.to_string())
 }
 
@@ -588,12 +638,18 @@ fn copy_directory(source: &std::path::Path, destination: &std::path::Path) -> Re
 /// Compare a Dystil-owned installation with its immutable source before we
 /// claim it is installed. This deliberately compares bytes rather than trusting
 /// a prior database receipt: users can edit or remove files after installation.
-fn directories_match(source: &std::path::Path, destination: &std::path::Path) -> Result<bool, String> {
-    let source_entries = std::fs::read_dir(source).map_err(|error| error.to_string())?
+fn directories_match(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> Result<bool, String> {
+    let source_entries = std::fs::read_dir(source)
+        .map_err(|error| error.to_string())?
         .map(|entry| entry.map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
     let destination_entries = match std::fs::read_dir(destination) {
-        Ok(entries) => entries.map(|entry| entry.map_err(|error| error.to_string())).collect::<Result<Vec<_>, _>>()?,
+        Ok(entries) => entries
+            .map(|entry| entry.map_err(|error| error.to_string()))
+            .collect::<Result<Vec<_>, _>>()?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error.to_string()),
     };
@@ -609,7 +665,11 @@ fn directories_match(source: &std::path::Path, destination: &std::path::Path) ->
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(error) => return Err(error.to_string()),
         };
-        if source_kind.is_symlink() || destination_kind.is_symlink() || source_kind.is_dir() != destination_kind.is_dir() || source_kind.is_file() != destination_kind.is_file() {
+        if source_kind.is_symlink()
+            || destination_kind.is_symlink()
+            || source_kind.is_dir() != destination_kind.is_dir()
+            || source_kind.is_file() != destination_kind.is_file()
+        {
             return Ok(false);
         }
         if source_kind.is_dir() {
@@ -632,7 +692,10 @@ fn directories_match(source: &std::path::Path, destination: &std::path::Path) ->
 /// The archive deliberately includes the skill directory itself, matching the
 /// layout generated by the old `zip -qr archive skill-name` invocation and the
 /// layout expected by Claude and ChatGPT's skill upload flows.
-fn create_skill_bundle_archive(source: &std::path::Path, archive: &std::path::Path) -> Result<(), String> {
+fn create_skill_bundle_archive(
+    source: &std::path::Path,
+    archive: &std::path::Path,
+) -> Result<(), String> {
     let archive_root = source.parent().ok_or("bundle skill path has no parent")?;
     let file = std::fs::File::create(archive).map_err(|error| error.to_string())?;
     let mut writer = zip::ZipWriter::new(file);
@@ -693,7 +756,9 @@ fn skill_install_root(target: SkillInstallTarget) -> Result<std::path::PathBuf, 
         SkillInstallTarget::Codex => Ok(home.join(".agents/skills")),
         SkillInstallTarget::Claude => Ok(home.join(".claude/skills")),
         SkillInstallTarget::Pi => Ok(home.join(".pi/skills")),
-        SkillInstallTarget::ClaudeUpload | SkillInstallTarget::Chatgpt => Err("This target uses an exported skill archive; use Export for Claude instead.".into()),
+        SkillInstallTarget::ClaudeUpload | SkillInstallTarget::Chatgpt => {
+            Err("This target uses an exported skill archive; use Export for Claude instead.".into())
+        }
     }
 }
 
@@ -704,12 +769,17 @@ pub async fn get_skill_bundle_install_targets(
     state: State<'_, WorthFixingState>,
     bundle_id: String,
 ) -> Result<Vec<SkillInstallTargetAvailability>, String> {
-    let (source, _, _) = dystil_insights::ready_bundle_location(state.pool(&app).await?, &bundle_id)
-        .await
-        .map_err(|error| error.to_string())?;
+    let (source, _, _) =
+        dystil_insights::ready_bundle_location(state.pool(&app).await?, &bundle_id)
+            .await
+            .map_err(|error| error.to_string())?;
     let name = source.file_name().ok_or("bundle skill path has no name")?;
     let mut targets = Vec::new();
-    for target in [SkillInstallTarget::Codex, SkillInstallTarget::Claude, SkillInstallTarget::Pi] {
+    for target in [
+        SkillInstallTarget::Codex,
+        SkillInstallTarget::Claude,
+        SkillInstallTarget::Pi,
+    ] {
         let root = skill_install_root(target)?;
         targets.push(SkillInstallTargetAvailability {
             target,
@@ -717,7 +787,11 @@ pub async fn get_skill_bundle_install_targets(
             installed: root.join(name).exists(),
         });
     }
-    targets.push(SkillInstallTargetAvailability { target: SkillInstallTarget::ClaudeUpload, available: true, installed: false });
+    targets.push(SkillInstallTargetAvailability {
+        target: SkillInstallTarget::ClaudeUpload,
+        available: true,
+        installed: false,
+    });
     Ok(targets)
 }
 
@@ -727,7 +801,11 @@ pub async fn get_skill_bundle_install_targets(
 #[tauri::command]
 #[specta::specta]
 pub async fn record_skill_bundle_install_intent(app: AppHandle) -> Result<(), String> {
-    record_product_event(&app, dystil_telemetry::ProductEventKind::SkillInstallRequested).await;
+    record_product_event(
+        &app,
+        dystil_telemetry::ProductEventKind::SkillInstallRequested,
+    )
+    .await;
     Ok(())
 }
 
@@ -745,11 +823,14 @@ pub async fn install_skill_bundle(
         .map_err(|error| error.to_string())?;
     let name = source.file_name().ok_or("bundle skill path has no name")?;
     let destination = skill_install_root(target)?.join(name);
-    let already_installed = dystil_insights::skill_bundle_installation_exists(pool, &bundle_id, target, &destination)
-        .await
-        .map_err(|error| error.to_string())?;
+    let already_installed =
+        dystil_insights::skill_bundle_installation_exists(pool, &bundle_id, target, &destination)
+            .await
+            .map_err(|error| error.to_string())?;
     if destination.exists() && !already_installed {
-        return Err("A skill with this name already exists and was not installed by Dystil.".into());
+        return Err(
+            "A skill with this name already exists and was not installed by Dystil.".into(),
+        );
     }
     let needs_copy = !already_installed || !directories_match(&source, &destination)?;
     if needs_copy {
@@ -792,11 +873,12 @@ pub async fn export_skill_bundle(
     let (source, checksum, _) = dystil_insights::ready_bundle_location(pool, &bundle_id)
         .await
         .map_err(|error| error.to_string())?;
-    let revision: i64 = sqlx::query_scalar("SELECT revision FROM artifact_bundles WHERE bundle_id=?1")
-        .bind(&bundle_id)
-        .fetch_one(pool)
-        .await
-        .map_err(|error| error.to_string())?;
+    let revision: i64 =
+        sqlx::query_scalar("SELECT revision FROM artifact_bundles WHERE bundle_id=?1")
+            .bind(&bundle_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|error| error.to_string())?;
     let export_root = crate::dystil_paths::data_dir().join("skill-bundle-exports");
     std::fs::create_dir_all(&export_root).map_err(|error| error.to_string())?;
     let skill_name = source.file_name().ok_or("bundle skill path has no name")?;
@@ -807,9 +889,15 @@ pub async fn export_skill_bundle(
     tokio::task::spawn_blocking(move || create_skill_bundle_archive(&source, &archive_for_write))
         .await
         .map_err(|error| format!("could not export skill archive: {error}"))??;
-    dystil_insights::record_skill_bundle_install(pool, &bundle_id, SkillInstallTarget::ClaudeUpload, &archive, &checksum)
-        .await
-        .map_err(|error| error.to_string())
+    dystil_insights::record_skill_bundle_install(
+        pool,
+        &bundle_id,
+        SkillInstallTarget::ClaudeUpload,
+        &archive,
+        &checksum,
+    )
+    .await
+    .map_err(|error| error.to_string())
 }
 
 /// Reveal the exported portable bundle without invoking the opener plugin from

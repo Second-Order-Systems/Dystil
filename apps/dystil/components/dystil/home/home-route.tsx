@@ -11,10 +11,11 @@
  * above a "0 left" counter.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useHome } from "@/lib/home/provider";
 import type { CorrectionReason } from "@/lib/home/types";
+import { getBuildCapabilities } from "@/lib/build-capabilities";
 import { NothingWaiting } from "./nothing-waiting";
 import { ThePile } from "./the-pile";
 
@@ -25,7 +26,6 @@ export function HomeRoute() {
     queue,
     originalTotal,
     shortcuts,
-    lastSpokeUp,
     save,
     dismiss,
     defer,
@@ -37,6 +37,13 @@ export function HomeRoute() {
   // Distinguishes "nothing waiting" from "you just cleared it" — the second
   // is a completion moment and has to be earned within this session.
   const [justCleared, setJustCleared] = useState(false);
+  const [enterpriseManaged, setEnterpriseManaged] = useState<boolean | null>(null);
+  useEffect(() => { void getBuildCapabilities().then((capabilities) => setEnterpriseManaged(capabilities.enterpriseManaged)); }, []);
+  useEffect(() => {
+    if (enterpriseManaged) router.replace("/home/ask");
+  }, [enterpriseManaged, router]);
+
+  if (enterpriseManaged) return null;
 
   const currentId = queue[0];
   const item = items.find((candidate) => candidate.id === currentId);
@@ -48,7 +55,6 @@ export function HomeRoute() {
     return (
       <NothingWaiting
         justCleared={justCleared}
-        lastSpokeUp={lastSpokeUp}
         settledCount={originalTotal}
         shortcuts={shortcuts}
         onAsk={(text) => router.push(`/home/ask?initial=${encodeURIComponent(text.trim())}`)}

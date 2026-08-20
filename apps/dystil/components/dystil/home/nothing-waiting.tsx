@@ -24,7 +24,6 @@ const STARTERS = [
 type NothingWaitingProps = {
   /** C is B plus a completion moment; they share almost all their markup. */
   justCleared: boolean;
-  lastSpokeUp: string;
   settledCount: number;
   shortcuts: Shortcut[];
   onAsk: (text: string) => void;
@@ -34,7 +33,6 @@ type NothingWaitingProps = {
 
 export function NothingWaiting({
   justCleared,
-  lastSpokeUp,
   settledCount,
   shortcuts,
   onAsk,
@@ -46,16 +44,12 @@ export function NothingWaiting({
   return (
     <div className={`flex h-full flex-col ${justCleared ? "animate-rise" : ""}`}>
       <div className="mx-auto flex w-full max-w-[600px] flex-1 flex-col justify-center px-10 pb-10 pt-5">
-        {justCleared ? (
+        {justCleared && (
           <div className="mb-[14px] flex items-center gap-[11px]">
             <SegmentedTrack segments={Array(settledCount).fill("settled")} />
             <span className="text-label font-bold uppercase tracking-[0.13em] text-muted-ink-2">
               All settled · four minutes
             </span>
-          </div>
-        ) : (
-          <div className="mb-[14px] text-label font-bold uppercase tracking-[0.13em] text-muted-ink-2">
-            Last spoke up on {lastSpokeUp}
           </div>
         )}
 

@@ -100,6 +100,15 @@ async fn pool(state: &RecordingState) -> Result<sqlx::SqlitePool, String> {
     Ok(pool)
 }
 
+fn require_local_automation() -> Result<(), String> {
+    #[cfg(feature = "enterprise-client")]
+    {
+        return Err("Local automations are disabled in this enterprise build.".to_string());
+    }
+    #[cfg(not(feature = "enterprise-client"))]
+    Ok(())
+}
+
 fn to_view(document: &AutomationDocument) -> AutomationView {
     let (trigger_type, trigger_detail) = match &document.trigger {
         dystil_automation::Trigger::Manual => ("manual".into(), None),
@@ -394,6 +403,7 @@ pub async fn automation_run_now(
     app: AppHandle,
     state: State<'_, RecordingState>,
 ) -> Result<AutomationRunView, String> {
+    require_local_automation()?;
     let document = document(&name)?;
     let database = pool(&state).await?;
     let _permit = concurrency()
@@ -671,6 +681,7 @@ pub async fn automation_draft(
     app: AppHandle,
     state: State<'_, RecordingState>,
 ) -> Result<Vec<AutomationDraftView>, String> {
+    require_local_automation()?;
     if request.trim().is_empty() || request.len() > 4000 {
         return Err("automation request must be between 1 and 4000 characters".into());
     }

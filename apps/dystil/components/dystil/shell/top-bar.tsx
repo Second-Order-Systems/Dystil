@@ -22,6 +22,7 @@ type TopBarProps = {
   onShortcuts: () => void;
   onAsk: () => void;
   onSettings: () => void;
+  enterpriseManaged?: boolean;
 };
 
 export function TopBar({
@@ -34,6 +35,7 @@ export function TopBar({
   onShortcuts,
   onAsk,
   onSettings,
+  enterpriseManaged = false,
 }: TopBarProps) {
   return (
     <header className="flex h-[54px] shrink-0 items-center gap-[10px] px-[22px]">
@@ -71,7 +73,7 @@ export function TopBar({
         Invite your team
       </button>
 
-      <button
+      {!enterpriseManaged && <button
         type="button"
         onClick={onShortcuts}
         className="flex items-center gap-[7px] rounded-tile px-[13px] py-2 text-ui font-medium text-ink-2 transition-colors hover:bg-chrome"
@@ -80,7 +82,7 @@ export function TopBar({
         <span className="rounded-pill bg-line-2 px-[6px] py-[1px] text-label-sm font-bold text-muted-ink-2">
           {shortcutCount}
         </span>
-      </button>
+      </button>}
 
       {/* The app's one persistent action — reachable from every screen. */}
       <button

@@ -6,6 +6,7 @@ import { AppShell } from "@/components/dystil/shell/app-shell";
 import { ToastAction } from "@/components/ui/toast";
 import { toast } from "@/components/ui/use-toast";
 import { HomeProvider } from "@/lib/home/provider";
+import { getBuildCapabilities } from "@/lib/build-capabilities";
 
 type ManagedProvider = "codex" | "claude";
 type ProviderStatus = { state: string; authenticated?: boolean | null };
@@ -39,6 +40,8 @@ function useProviderSetupResume() {
     let cancelled = false;
 
     const resume = async () => {
+      const capabilities = await getBuildCapabilities();
+      if (capabilities.enterpriseManaged) return;
       const onboarding = await invoke<OnboardingStatus>("get_onboarding_status").catch(() => null);
       const choice = onboarding?.aiSetupChoice;
       if (choice !== "codex" && choice !== "claude") return;

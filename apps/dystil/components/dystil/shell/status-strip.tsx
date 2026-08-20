@@ -20,9 +20,10 @@ type StatusStripProps = {
   onPrivacy: () => void;
   onStopJob: () => void;
   onOpenResult: () => void;
+  enterpriseManaged?: boolean;
 };
 
-export function StatusStrip({ job, onPrivacy, onStopJob, onOpenResult }: StatusStripProps) {
+export function StatusStrip({ job, onPrivacy, onStopJob, onOpenResult, enterpriseManaged = false }: StatusStripProps) {
   const running = job?.state === "running";
 
   return (
@@ -39,15 +40,15 @@ export function StatusStrip({ job, onPrivacy, onStopJob, onOpenResult }: StatusS
         <span className="absolute h-[6px] w-[6px] animate-halo rounded-full bg-green-mid" />
         <span className="relative h-[6px] w-[6px] rounded-full bg-green-mid" />
       </span>
-      <span className="text-meta font-semibold text-ink-2">Watching, locally</span>
-      <span className="text-meta text-muted-ink">nothing has left this Mac</span>
+      <span className="text-meta font-semibold text-ink-2">{enterpriseManaged ? "Watching for your organization" : "Watching, locally"}</span>
+      <span className="text-meta text-muted-ink">{enterpriseManaged ? "approved capture syncs to Dystil Cloud" : "nothing has left this Mac"}</span>
 
       <button
         type="button"
         onClick={onPrivacy}
         className="rounded-strip border border-line-2c px-[10px] py-[4px] text-meta font-semibold text-ink-3 transition-colors hover:border-chevron hover:bg-line-2 hover:text-ink"
       >
-        What stays on this computer →
+        {enterpriseManaged ? "How your data is handled →" : "What stays on this computer →"}
       </button>
 
       <div className="flex-1" />

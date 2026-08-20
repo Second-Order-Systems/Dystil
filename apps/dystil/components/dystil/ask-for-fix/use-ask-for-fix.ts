@@ -109,10 +109,10 @@ export function useAskForFix() {
     });
   }, [busy, ensureSession, run]);
 
-  const confirm = useCallback(async () => {
+  const confirm = useCallback(async (summary?: string) => {
     if (!session || busy) return;
     setOptimisticText("Solve this.");
-    await run(async () => unwrap(await commands.askForFixConfirm(session.sessionId)));
+    await run(async () => unwrap(await commands.askForFixConfirm(session.sessionId, summary ?? null)));
   }, [busy, run, session]);
 
   const retry = useCallback(async () => {

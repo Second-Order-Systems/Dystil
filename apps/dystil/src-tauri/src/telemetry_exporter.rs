@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dystil_telemetry::{
-    schema, AiOperationPoint, CounterPoint, IntervalSnapshot, ProductEventPoint, ResourceActivitySummary,
-    ResourceSnapshot, SignalKind, StartupPoint, StorageOperationPoint, SyncDiagnostics,
-    SyncIterationPoint, Telemetry, TelemetryRecorder,
+    schema, AiOperationPoint, CounterPoint, IntervalSnapshot, ProductEventPoint,
+    ResourceActivitySummary, ResourceSnapshot, SignalKind, StartupPoint, StorageOperationPoint,
+    SyncDiagnostics, SyncIterationPoint, Telemetry, TelemetryRecorder,
 };
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
@@ -406,7 +406,10 @@ fn product_event_metric(point: ProductEventPoint, now: u64) -> Metric {
     sum_metric(
         schema::metric::PRODUCT_EVENTS,
         "{event}",
-        vec![string_attribute(schema::attribute::ACTION, point.event.as_str())],
+        vec![string_attribute(
+            schema::attribute::ACTION,
+            point.event.as_str(),
+        )],
         point.value,
         now,
     )
