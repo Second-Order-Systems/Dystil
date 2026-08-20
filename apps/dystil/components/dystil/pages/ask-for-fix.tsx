@@ -245,7 +245,7 @@ function PresentationCard({ presentation, session, busy, enterpriseManaged, onKe
   return <section className="mt-6 sm:ml-[50px]"><div className="rounded-[14px] bg-[#eef5f1] p-5 ring-1 ring-[#c9d9d0]"><p className="text-[11px] font-semibold text-[#116849]">{enterpriseManaged ? "Watching for a fix" : "Answer · based on the current understanding"}</p><h2 className="mt-2 text-balance text-[23px] font-medium leading-[1.35] tracking-[-0.025em] text-[#202722]">{presentation.headline}</h2><p className="mt-3 max-w-[70ch] whitespace-pre-wrap text-[14px] leading-6 text-[#505a53]">{presentation.explanation}</p>{presentation.limitations.length > 0 && <div className="mt-4 border-t border-[#d5e1da] pt-4"><p className="text-[11px] font-semibold text-[#657169]">What this does not assume</p><ul className="mt-2 space-y-1.5 text-[13px] leading-5 text-[#5c655f]">{presentation.limitations.map((item) => <li key={item}>• {item}</li>)}</ul></div>}</div><WatchCard session={session} busy={busy} onStart={onStartWatching} onStop={onStopWatching} onReview={onReviewWatch} onGuidance={onWatchGuidance} />{presentation.artifact && <ArtifactCard artifact={presentation.artifact} route={presentation.route} kept={Boolean(session.artifactKeptId)} busy={busy} onKeep={onKeep} onRevise={onRevise} />}</section>;
 }
 
-function Composer({ value, onChange, onSubmit, disabled, placeholder, autoFocus = false, enterpriseManaged = false }: { value: string; onChange: (value: string) => void; onSubmit: () => void; disabled: boolean; placeholder: string; autoFocus?: boolean; enterpriseManaged?: boolean }) {
+function Composer({ value, onChange, onSubmit, disabled, placeholder, autoFocus = false }: { value: string; onChange: (value: string) => void; onSubmit: () => void; disabled: boolean; placeholder: string; autoFocus?: boolean }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { if (autoFocus) ref.current?.focus(); }, [autoFocus]);
   useEffect(() => {
@@ -255,10 +255,9 @@ function Composer({ value, onChange, onSubmit, disabled, placeholder, autoFocus 
     textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 32), 176)}px`;
   }, [value]);
   return (
-    <div className="flex min-h-[74px] items-end gap-2 overflow-hidden rounded-[30px] bg-white px-2.5 py-2.5 shadow-[0_10px_30px_rgba(27,39,31,0.10)] ring-1 ring-[#c9d1cb] transition-[box-shadow] focus-within:shadow-[0_14px_34px_rgba(24,62,43,0.13)] focus-within:ring-[#78a28e]">
-      <div className="min-w-0 flex-1 py-0.5">
+    <div className="flex min-h-[56px] items-center gap-2 overflow-hidden rounded-[30px] bg-white px-2.5 py-2 shadow-[0_10px_30px_rgba(27,39,31,0.10)] ring-1 ring-[#c9d1cb] transition-[box-shadow] focus-within:shadow-[0_14px_34px_rgba(24,62,43,0.13)] focus-within:ring-[#78a28e]">
+      <div className="min-w-0 flex-1">
         <textarea ref={ref} value={value} disabled={disabled} maxLength={1600} rows={1} onChange={(event) => onChange(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); onSubmit(); } }} placeholder={placeholder} className="block min-h-8 max-h-44 w-full resize-none overflow-y-auto bg-transparent px-3 text-[15px] leading-8 text-[#222824] outline-none placeholder:text-[#747d76] disabled:cursor-not-allowed disabled:opacity-60" />
-        <div className="flex items-center gap-3 px-3 text-[11px] leading-4 text-[#737c76]"><span>{enterpriseManaged ? "Shared with your organization’s Dystil Cloud" : "Stays on this computer"} · {value.length}/1600</span><span className="hidden text-[#8b938d] sm:inline">⌘ Enter to send</span></div>
       </div>
       <button type="button" aria-label="Send answer" disabled={disabled || !value.trim()} onClick={onSubmit} className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#176f51] text-white shadow-[0_4px_12px_rgba(18,82,58,0.20)] transition-[background-color,transform] hover:bg-[#105d43] active:scale-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c] disabled:cursor-not-allowed disabled:bg-[#d6ddd8] disabled:text-[#87918a] disabled:shadow-none"><ArrowUp size={18} strokeWidth={2.4} /></button>
     </div>
@@ -275,6 +274,7 @@ export function AskForFix({ initialText = "" }: { initialText?: string }) {
   const question = session?.currentQuestion ?? null;
   const isConsolidating = session?.phase === "consolidate" && !session.locked;
   const isAnswered = session?.status === "answered" && Boolean(session.presentation);
+  const isInitialPrompt = !loading && !session?.messages.length;
   const showComposer = revisionMode || (!isAnswered && (!isConsolidating || customAnswer) && (question?.kind === "free_text" || customAnswer || !question));
 
   useEffect(() => { void getBuildCapabilities().then((capabilities) => setEnterpriseManaged(capabilities.enterpriseManaged)); }, []);
@@ -301,13 +301,13 @@ export function AskForFix({ initialText = "" }: { initialText?: string }) {
 
   return (
     <div className="mx-auto flex min-h-[calc(100vh-112px)] max-w-[900px] flex-col pb-8">
-      <header className="flex flex-wrap items-start justify-between gap-5 border-b border-[#dde1dd] pb-5">
-        <div><h1 className="text-balance text-[30px] font-medium leading-tight tracking-[-0.03em] text-[#171d19]">Ask for a fix</h1><p className="mt-2 max-w-[62ch] text-[14px] leading-6 text-[#69716b]">{enterpriseManaged ? "Tell Dystil what you need. We’ll clarify it together, then keep watch for it." : "Bring any problem that annoys you. Dystil will understand it before proposing an answer."}</p></div>
+      <header className="flex flex-wrap items-start justify-between gap-5 pb-5">
+        {isInitialPrompt ? <div className="flex gap-3"><TurnMark current /><div><h1 className="max-w-[650px] text-pretty font-display text-display-sm font-normal text-ink">What problem keeps stealing your attention?</h1><p className="mt-2 max-w-[64ch] text-body-lg text-muted-ink">It can be repetitive work, a slow handoff, a confusing process, or something you cannot quite name yet. Start messy.</p></div></div> : <div />}
         <div className="flex flex-col items-end gap-3"><PhaseRail session={session} />{session && <button type="button" disabled={busy} onClick={() => void startNew()} className="rounded-strip px-[10px] py-[5px] text-meta font-semibold text-ink-3 transition-colors hover:bg-chrome hover:text-ink disabled:opacity-50"><RotateCcw size={13} />Start over</button>}</div>
       </header>
 
-      <div className="flex-1 py-7" aria-live="polite">
-        {loading ? <div className="flex gap-3"><TurnMark /><div className="space-y-2 pt-1"><div className="h-4 w-24 animate-pulse rounded bg-line-2" /><div className="h-5 max-w-md animate-pulse rounded bg-line-3" /></div></div> : session?.messages.length ? <ConversationMessages session={session} /> : <div className="flex gap-3"><TurnMark current /><div><h2 className="max-w-[650px] text-pretty font-display text-display-sm font-normal text-ink">What problem keeps stealing your attention?</h2><p className="mt-2 max-w-[64ch] text-body-lg text-muted-ink">It can be repetitive work, a slow handoff, a confusing process, or something you cannot quite name yet. Start messy.</p></div></div>}
+      <div className={`${isInitialPrompt ? "" : "flex-1 py-7"}`} aria-live="polite">
+        {loading ? <div className="flex gap-3"><TurnMark /><div className="space-y-2 pt-1"><div className="h-4 w-24 animate-pulse rounded bg-line-2" /><div className="h-5 max-w-md animate-pulse rounded bg-line-3" /></div></div> : session?.messages.length ? <ConversationMessages session={session} /> : null}
 
         {optimisticText && <div className="mt-7 flex justify-end"><div className="max-w-[min(78%,620px)] rounded-[16px_16px_4px_16px] bg-[#252b27] px-4 py-3 text-[15px] leading-6 text-white">{optimisticText}</div></div>}
 
@@ -320,7 +320,7 @@ export function AskForFix({ initialText = "" }: { initialText?: string }) {
         {error && <div role="alert" className="mt-6 flex flex-wrap items-center gap-3 rounded-[12px] bg-[#f7eeeb] px-4 py-3 text-[13px] leading-5 text-[#753d33] ring-1 ring-[#e3c4bc]"><span className="min-w-0 flex-1">{error}</span>{session && <button type="button" disabled={busy} onClick={() => void retry()} className="min-h-8 rounded-[8px] bg-white px-3 font-semibold text-[#753d33] ring-1 ring-[#d8b6ad] hover:bg-[#fffaf8] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8b3f32]">Try again</button>}</div>}
       </div>
 
-      {!loading && !busy && showComposer && <div className="sticky bottom-0 z-10 pt-5 pb-2"><Composer value={draft} onChange={setDraft} onSubmit={sendDraft} disabled={busy} autoFocus={customAnswer || revisionMode} enterpriseManaged={enterpriseManaged} placeholder={revisionMode ? "What should Dystil change in this answer?" : isConsolidating ? "What did Dystil misunderstand or miss?" : question ? "Answer in your own words…" : "Describe the problem, where it happens, and why it is annoying…"} />{!session?.messages.length && <div className="mt-4 flex flex-wrap gap-2">{examples.map((example) => <button key={example} type="button" onClick={() => setDraft(example)} className="rounded-full border border-[#d2d8d3] bg-[#fbfcfa] px-3 py-1.5 text-[12px] text-[#616a64] hover:border-[#9fb9aa] hover:text-[#116849] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c]">{example}</button>)}</div>}</div>}
+      {!loading && !busy && showComposer && <div className="sticky bottom-0 z-10 w-full max-w-[620px] pt-2 pb-2"><Composer value={draft} onChange={setDraft} onSubmit={sendDraft} disabled={busy} autoFocus={customAnswer || revisionMode} placeholder={revisionMode ? "What should Dystil change in this answer?" : isConsolidating ? "What did Dystil misunderstand or miss?" : question ? "Answer in your own words…" : "Describe the problem, where it happens, and why it is annoying…"} />{!session?.messages.length && <div className="mt-4 flex flex-wrap gap-2">{examples.map((example) => <button key={example} type="button" onClick={() => setDraft(example)} className="rounded-full border border-[#d2d8d3] bg-[#fbfcfa] px-3 py-1.5 text-[12px] text-[#616a64] hover:border-[#9fb9aa] hover:text-[#116849] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c]">{example}</button>)}</div>}</div>}
       {isAnswered && <div className="flex justify-center border-t border-[#e0e4e0] pt-5"><button type="button" disabled={busy} onClick={() => void startNew()} className="inline-flex min-h-9 items-center gap-2 rounded-[9px] border border-[#cbd3cd] bg-white px-4 text-[13px] font-medium text-[#4e5851] hover:bg-[#f0f3f0] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c]"><RotateCcw size={14} />Ask about another problem</button></div>}
     </div>
   );
