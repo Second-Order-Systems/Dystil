@@ -584,6 +584,10 @@ export function OnboardingWizard() {
   };
 
   const continueFromEducation = () => {
+    if (currentStepIndex === stepIds.length - 1) {
+      void finishOnboarding();
+      return;
+    }
     goForward();
   };
 
