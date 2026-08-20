@@ -206,9 +206,9 @@ async askForFixCancel(sessionId: string) : Promise<Result<AskSessionView, string
     else return { status: "error", error: e  as any };
 }
 },
-async askForFixConfirm(sessionId: string) : Promise<Result<AskSessionView, string>> {
+async askForFixConfirm(sessionId: string, summary: string | null) : Promise<Result<AskSessionView, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_confirm", { sessionId }) };
+    return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_confirm", { sessionId, summary }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

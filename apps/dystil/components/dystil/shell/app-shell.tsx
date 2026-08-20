@@ -9,6 +9,8 @@
  */
 
 import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { getBuildCapabilities } from "@/lib/build-capabilities";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useHome } from "@/lib/home/provider";
 import { StatusStrip } from "./status-strip";
@@ -19,6 +21,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { queue, shortcuts } = useHome();
   const { isMac } = usePlatform();
+  const [enterpriseManaged, setEnterpriseManaged] = useState(false);
+  useEffect(() => { void getBuildCapabilities().then((capabilities) => setEnterpriseManaged(capabilities.enterpriseManaged)); }, []);
+  useEffect(() => {
+    if (enterpriseManaged && (pathname === "/home" || pathname.startsWith("/home/ready") || pathname.startsWith("/home/all"))) {
+      router.replace("/home/ask");
+    }
+  }, [enterpriseManaged, pathname, router]);
   const go = (path: string) => router.push(path);
 
   // The pill is a way back to the pile, so it is pointless while you are
@@ -50,6 +59,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         onShortcuts={() => go("/home/ready")}
         onAsk={() => go("/home/ask")}
         onSettings={() => go("/home/settings")}
+        enterpriseManaged={enterpriseManaged}
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
@@ -59,6 +69,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         onPrivacy={() => go("/home/privacy")}
         onStopJob={() => {}}
         onOpenResult={() => go("/home")}
+        enterpriseManaged={enterpriseManaged}
       />
     </main>
   );

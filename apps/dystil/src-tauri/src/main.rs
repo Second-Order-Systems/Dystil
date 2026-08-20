@@ -45,6 +45,8 @@ mod commands;
 mod deletion;
 mod disk_usage;
 mod dystil_paths;
+#[cfg(feature = "enterprise-client")]
+mod enterprise_ask;
 mod hardware;
 #[allow(deprecated)]
 mod icons;
@@ -653,8 +655,14 @@ async fn main() {
             let app_handle = app.handle();
             #[cfg(feature = "cloud-sync")]
             capture_state_reporter::start(app_handle.clone());
-            automation_commands::start_manager(app_handle.clone());
-            worth_fixing_engine::start(app_handle.clone());
+            // Enterprise is capture + cloud Ask only.  Do not start the local
+            // inference/automation workers: their SQLite projections and AI
+            // runtime must remain inactive in that build.
+            #[cfg(not(feature = "enterprise-client"))]
+            {
+                automation_commands::start_manager(app_handle.clone());
+                worth_fixing_engine::start(app_handle.clone());
+            }
 
             // Create macOS app menu with Settings
             #[cfg(target_os = "macos")]

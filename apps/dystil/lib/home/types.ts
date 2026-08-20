@@ -52,7 +52,6 @@ export type HomeSource = {
   queue: string[];
   originalTotal: number;
   shortcuts: Shortcut[];
-  lastSpokeUp: string;
   loading: boolean;
   error: string | null;
   save: (id: string) => Promise<boolean>;

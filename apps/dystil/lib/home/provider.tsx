@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import { commands, type DispositionKind, type HomeWorthFixingItem, type ReadyArtifactAction, type ReadyArtifactCard, type SkillBundleView } from "@/lib/utils/tauri";
+import { getBuildCapabilities } from "@/lib/build-capabilities";
 
 import type { CorrectionReason, HomeItem, HomeSource, Shortcut } from "./types";
 
@@ -59,7 +60,6 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
   const [queue, setQueue] = useState<string[]>([]);
   const [originalTotal, setOriginalTotal] = useState(0);
   const [shortcuts, setShortcuts] = useState<Shortcut[]>([]);
-  const [lastSpokeUp, setLastSpokeUp] = useState("recently");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const loaded = useRef(false);
@@ -67,6 +67,18 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
+      const capabilities = await getBuildCapabilities();
+      // Enterprise intentionally has no local Worth Fixing or Ready-to-use
+      // projections. Avoid touching their commands altogether.
+      if (capabilities.enterpriseManaged) {
+        setItems([]);
+        setQueue([]);
+        setShortcuts([]);
+        setOriginalTotal(0);
+        setError(null);
+        loaded.current = true;
+        return;
+      }
       const [home, ready] = await Promise.all([
         commands.getHomeWorthFixingSummary(),
         commands.getReadyToUse(null, 50),
@@ -103,7 +115,6 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
         };
       }));
       setShortcuts(mapped);
-      setLastSpokeUp(home.data.lastSuccessfulWakeAt ? relativeWhen(home.data.lastSuccessfulWakeAt) : "recently");
       setError(null);
       loaded.current = true;
     } catch (cause) {
@@ -255,7 +266,6 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     queue,
     originalTotal,
     shortcuts,
-    lastSpokeUp,
     loading: loading && !loaded.current,
     error,
     save,
