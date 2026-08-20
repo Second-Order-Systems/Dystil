@@ -2271,7 +2271,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-app"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "aes",
  "aes-gcm",
