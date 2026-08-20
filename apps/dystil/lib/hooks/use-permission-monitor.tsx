@@ -8,7 +8,6 @@ import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
 import { getAuthState, subscribeAuthState, type DystilAuthState } from "@/lib/auth-store";
 import { useOnboardingStatus } from "@/lib/hooks/use-onboarding-status";
-import { useSettings } from "@/lib/hooks/use-settings";
 import { getBuildCapabilities } from "@/lib/build-capabilities";
 
 interface PermissionLostPayload {
@@ -37,21 +36,18 @@ export function isAuthReady(status: DystilAuthState["status"]) {
 
 export function hasCriticalPermissionLoss(
   permissions: Awaited<ReturnType<typeof commands.doPermissionsCheck>> | null,
-  screenshotsEnabled: boolean,
 ) {
   if (!permissions) return false;
-  const screenOk =
-    permissions.screenRecording === "granted" || permissions.screenRecording === "notNeeded";
   const accessibilityOk =
     permissions.accessibility === "granted" || permissions.accessibility === "notNeeded";
-  return !accessibilityOk || (screenshotsEnabled && !screenOk);
+  return !accessibilityOk;
 }
 
 /**
  * Hook that listens for permission-lost events from the Rust backend
  * and automatically shows the permission recovery window.
- * Accessibility is always critical. Screen Recording is critical only after
- * the user has explicitly enabled screenshot capture.
+ * Accessibility is always critical. Screen Recording is optional: capture
+ * continues with accessibility/text evidence until it is granted again.
  * Browser automation is optional and never triggers the recovery modal (#2510).
  */
 export function usePermissionMonitor() {
@@ -61,7 +57,6 @@ export function usePermissionMonitor() {
   const authStateRef = useRef<DystilAuthState>(getAuthState());
   const onboardingPhaseRef = useRef<"uninitialized" | "fetching" | "ready">("uninitialized");
   const onboardingCompletedRef = useRef(false);
-  const screenshotsEnabledRef = useRef(false);
   const [authState, setAuthState] = useState<DystilAuthState>(() => getAuthState());
   const [enterpriseManaged, setEnterpriseManaged] = useState<boolean | null>(null);
   const {
@@ -69,14 +64,10 @@ export function usePermissionMonitor() {
     onboarding,
     refresh: refreshOnboardingStatus,
   } = useOnboardingStatus();
-  const { settings, isSettingsLoaded } = useSettings();
   const pathname = usePathname();
-
-  const screenshotsEnabled = enterpriseManaged === true || !settings.disableVision;
 
   const isRecoveryEligible =
     isAuthReady(authState.status) &&
-    isSettingsLoaded &&
     enterpriseManaged !== null &&
     onboardingPhase === "ready" &&
     Boolean(onboarding?.isCompleted);
@@ -95,10 +86,6 @@ export function usePermissionMonitor() {
     onboardingPhaseRef.current = onboardingPhase;
     onboardingCompletedRef.current = Boolean(onboarding?.isCompleted);
   }, [onboarding?.isCompleted, onboardingPhase]);
-
-  useEffect(() => {
-    screenshotsEnabledRef.current = screenshotsEnabled;
-  }, [screenshotsEnabled]);
 
   useEffect(() => {
     const unsubscribe = subscribeAuthState((next) => {
@@ -142,7 +129,7 @@ export function usePermissionMonitor() {
     if (shouldSkipPermissionRecovery(pathname)) return;
 
     const permissions = await commands.doPermissionsCheck(false);
-    if (!hasCriticalPermissionLoss(permissions, screenshotsEnabledRef.current)) {
+    if (!hasCriticalPermissionLoss(permissions)) {
       pendingRecoveryRef.current = null;
       return;
     }
@@ -162,7 +149,7 @@ export function usePermissionMonitor() {
     let permissions: Awaited<ReturnType<typeof commands.doPermissionsCheck>> | null = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       permissions = await commands.doPermissionsCheck(false);
-      if (!hasCriticalPermissionLoss(permissions, screenshotsEnabledRef.current)) {
+      if (!hasCriticalPermissionLoss(permissions)) {
         return;
       }
       if (attempt < 2) {

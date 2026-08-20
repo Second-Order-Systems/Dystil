@@ -1,25 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Monitor, MousePointerClick } from "lucide-react";
+import { Check, MousePointerClick } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
-import { useSettings } from "@/lib/hooks/use-settings";
-import { getBuildCapabilities } from "@/lib/build-capabilities";
 
-type PermissionName = "screenRecording" | "accessibility";
+type PermissionName = "accessibility";
 
 export default function PermissionRecoveryPage() {
-  const { settings } = useSettings();
   const [permissions, setPermissions] = useState<Record<string, string> | null>(null);
-  const [enterpriseManaged, setEnterpriseManaged] = useState(false);
   const refresh = async () => {
     try { setPermissions(await commands.doPermissionsCheck(false)); } catch { /* retry on interval */ }
   };
   useEffect(() => {
-    void getBuildCapabilities().then((capabilities) => {
-      setEnterpriseManaged(capabilities.enterpriseManaged);
-    });
     void refresh();
     const timer = setInterval(() => void refresh(), 2_000);
     return () => clearInterval(timer);
@@ -39,6 +32,5 @@ export default function PermissionRecoveryPage() {
     </div>
   );
 
-  const screenshotsRequired = enterpriseManaged || !settings.disableVision;
-  return <main className="flex min-h-screen items-center justify-center bg-background p-6"><section className="w-full max-w-lg space-y-4"><h1 className="text-2xl font-bold">Dystil needs a quick hand</h1><p className="text-muted-foreground">Turn the required permissions back on and Dystil will resume capture.</p>{screenshotsRequired ? row("screenRecording", "Screen recording", enterpriseManaged ? "Required and managed by your organization." : "Allows screenshots you explicitly enabled.", <Monitor className="h-5 w-5" />) : null}{row("accessibility", "Accessibility", "Allows Dystil to capture accessibility text and interactions.", <MousePointerClick className="h-5 w-5" />)}</section></main>;
+  return <main className="flex min-h-screen items-center justify-center bg-background p-6"><section className="w-full max-w-lg space-y-4"><h1 className="text-2xl font-bold">Dystil needs a quick hand</h1><p className="text-muted-foreground">Turn Accessibility back on and Dystil will resume capture.</p>{row("accessibility", "Accessibility", "Allows Dystil to capture accessibility text and interactions.", <MousePointerClick className="h-5 w-5" />)}</section></main>;
 }

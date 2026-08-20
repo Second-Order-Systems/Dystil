@@ -645,7 +645,10 @@ export function OnboardingWizard() {
                   className="space-y-6"
                 >
                   {isPermissionStep ? (
-                    <OnboardingPermissionsStep onReadyChange={setPermissionsReady} />
+                    <OnboardingPermissionsStep
+                      enterpriseManaged={enterpriseManaged}
+                      onReadyChange={setPermissionsReady}
+                    />
                   ) : isAiSetupStep ? (
                     <OnboardingAiSetupStep onReadyChange={setAiSetupReady} onSetupChange={setAiSetup} />
                   ) : visibleFields.map((field) => {

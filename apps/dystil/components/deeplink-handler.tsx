@@ -11,14 +11,28 @@ import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 //   dystilViewerPathFromHref,
 // } from "@/components/markdown";
 import { bootstrapAuthSession } from "@/lib/auth-session";
-import { getAuthState, setAuthSessionToken, setAuthState } from "@/lib/auth-store";
+import {
+  getAuthSessionToken,
+  getAuthState,
+  setAuthSessionToken,
+  setAuthState,
+  type DystilAuthState,
+} from "@/lib/auth-store";
 import { getBuildCapabilities } from "@/lib/build-capabilities";
+import {
+  claimOAuthCallback,
+  isConsumedOAuthStateError,
+  markOAuthCallbackProcessed,
+  oauthCallbackIdentity,
+  releaseOAuthCallbackClaim,
+} from "@/lib/oauth-callback-replay";
 import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
 const AUTH_BASE_PATHS = ["/api/auth/individual/", "/api/auth/"];
 const GOOGLE_SIGN_IN_FAILED =
   "Google sign-in could not be completed. If you are using a personal Gmail account, please use your Google Workspace account instead.";
+const activeOAuthCallbacks = new Set<string>();
 
 export function DeeplinkHandler() {
   const { toast } = useToast();
@@ -33,8 +47,23 @@ export function DeeplinkHandler() {
     const authBasePathForUrl = (url: string) =>
       AUTH_BASE_PATHS.find((path) => url.includes(path));
 
+    const hasStoredSession = async () => {
+      if (getAuthSessionToken() || getAuthState().session?.session_token) return true;
+      try {
+        const state = await invoke<DystilAuthState>("auth_get_state");
+        return Boolean(state.session?.session_token);
+      } catch (error) {
+        logError("auth_get_state failed while checking callback", error);
+        return false;
+      }
+    };
+
     const processDeepLinkUrl = async (url: string, source: string) => {
-      console.log("[auth-flow][deeplink] received url", { source, url });
+      const authBasePath = authBasePathForUrl(url);
+      console.log("[auth-flow][deeplink] received url", {
+        source,
+        kind: authBasePath ? "auth" : "other",
+      });
       // Deeplinks should reuse the window the user already has open.
       // Explicit navigation links below may still open their own surface,
       // but generic handoff/focus URLs should not spawn a new one.
@@ -51,16 +80,30 @@ export function DeeplinkHandler() {
       // normalizes to dystil://api/auth/callback/... (double slash, "api" as
       // host). The plugin's own handleAuthDeepLink can't parse this format,
       // so we intercept it here as a fallback.
-      const authBasePath = authBasePathForUrl(url);
-
       const capabilities = await getBuildCapabilities();
       if (!capabilities.cloudAvailable || !capabilities.cloudBaseUrl) {
         return;
       }
 
       if (authBasePath && !url.includes(`${authBasePath}verify-email`)) {
+        const callbackIdentity = oauthCallbackIdentity(url, authBasePath);
+        if (activeOAuthCallbacks.has(callbackIdentity) || !claimOAuthCallback(callbackIdentity)) {
+          console.log("[auth-flow][deeplink] ignored duplicate auth callback", { source });
+          return;
+        }
+        activeOAuthCallbacks.add(callbackIdentity);
+        let callbackResponded = false;
+
         console.log("[auth-flow][deeplink] auth callback matched", { source });
         try {
+          if (await hasStoredSession()) {
+            markOAuthCallbackProcessed(callbackIdentity);
+            console.log("[auth-flow][deeplink] ignored auth callback for existing session", {
+              source,
+            });
+            return;
+          }
+
           const pathStart = url.indexOf(authBasePath);
           if (pathStart === -1) {
             console.warn("[auth-flow][deeplink] auth callback missing auth path", { source, url });
@@ -69,9 +112,11 @@ export function DeeplinkHandler() {
           const baseUrl = capabilities.cloudBaseUrl;
           const href = url.slice(pathStart);
           const fullUrl = `${baseUrl}${href}`;
-          console.log("[auth-flow][deeplink] fetching callback", { source, href, fullUrl });
+          console.log("[auth-flow][deeplink] fetching callback", { source, authBasePath });
 
           const resp = await tauriFetch(fullUrl, { method: "GET", maxRedirections: 0 } as any);
+          callbackResponded = true;
+          markOAuthCallbackProcessed(callbackIdentity);
           console.log("[auth-flow][deeplink] callback response", {
             source,
             status: resp.status,
@@ -93,7 +138,19 @@ export function DeeplinkHandler() {
               status: resp.status,
               location: resp.headers.get("location"),
             });
-            setAuthSessionToken(null);
+            const responseBody = await resp.clone().text().catch(() => "");
+            const alreadyConsumed = isConsumedOAuthStateError(responseBody);
+            const existingSession = await hasStoredSession();
+            if (alreadyConsumed || existingSession) {
+              if (existingSession) await bootstrapAuthSession();
+              console.log("[auth-flow][deeplink] ignored non-destructive callback replay", {
+                source,
+                alreadyConsumed,
+                existingSession,
+              });
+              return;
+            }
+
             setAuthState({
               ...getAuthState(),
               status: "error",
@@ -121,6 +178,9 @@ export function DeeplinkHandler() {
             variant: "destructive",
             showWhenNotificationsDisabled: true,
           });
+        } finally {
+          activeOAuthCallbacks.delete(callbackIdentity);
+          if (!callbackResponded) releaseOAuthCallbackClaim(callbackIdentity);
         }
         return;
       }

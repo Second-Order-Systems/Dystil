@@ -856,35 +856,6 @@ async fn main() {
                         server_runtime.block_on(async move {
                             let config = store_clone.to_dystil_capture_config(data_dir_clone.clone());
 
-                            // Permissions check
-                            let permissions_check = permissions::do_permissions_check(false);
-                            let disable_vision = config.disable_vision;
-
-                            // Only block server start when the code-owned mode
-                            // requires continuous vision. macOS on-demand mode
-                            // boots the server and AX lane without touching SCK;
-                            // CaptureSession enables its provider only after the
-                            // existing permission has been observed as granted.
-                            if !startup_pause_active
-                                && !disable_vision
-                                && !permissions_check.screen_recording.permitted()
-                            {
-                                warn!("Screen recording permission not granted: {:?}. FullCapture will not start.", permissions_check.screen_recording);
-                                // Flip the recording state to a terminal Error
-                                // value so the tray stops showing "Starting…"
-                                // forever. Without this the user sees a
-                                // perpetual spinner with no signal that
-                                // anything is wrong; clearing only `is_starting`
-                                // leaves RECORDING_INFO at its default Starting
-                                // value and the health poll has no
-                                // ever_connected signal to recover from.
-                                crate::health::set_recording_status(
-                                    crate::health::RecordingStatus::Error,
-                                );
-                                is_starting_clone.store(false, std::sync::atomic::Ordering::SeqCst);
-                                return;
-                            }
-
                             info!("Starting Dystil runtime + capture on dedicated runtime...");
 
                             let server = match server_core::ServerCore::start(&config)
