@@ -14,6 +14,7 @@ use crate::store::SettingsStore;
 use crate::worth_fixing_commands::WorthFixingState;
 
 const BATCH_SIZE: usize = 1_000;
+#[cfg(not(feature = "enterprise-client"))]
 const SOURCE_NAMESPACE: &str = "local-capture";
 static DELETION_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
 
@@ -471,7 +472,10 @@ pub async fn delete_capture_data(
             server.data_path.clone(),
         )
     };
+    #[cfg(not(feature = "enterprise-client"))]
     let insights_pool = insights.pool(&app).await?.clone();
+    #[cfg(feature = "enterprise-client")]
+    let _ = insights;
     let was_running = recording
         .capture_active
         .load(std::sync::atomic::Ordering::SeqCst);
@@ -484,6 +488,7 @@ pub async fn delete_capture_data(
         let frame_ids = matching_ids(&capture, "frames", "app_name", &scope).await?;
         let event_ids = matching_ids(&capture, "ui_events", "app_name", &scope).await?;
         let snapshots = matching_snapshots(&capture, &scope).await?;
+        #[cfg(not(feature = "enterprise-client"))]
         let source_ids = frame_ids
             .iter()
             .map(|id| format!("frame:{id}"))
@@ -495,6 +500,7 @@ pub async fn delete_capture_data(
         // instead of leaving an undiscoverable orphan behind.
         let deleted_screenshots = delete_media(&snapshots, &media_dir)?;
 
+        #[cfg(not(feature = "enterprise-client"))]
         let (forgotten_evidence, withdrawn_findings) = if is_all {
             dystil_insights::delete_all_insights_data(&insights_pool)
                 .await
@@ -519,11 +525,16 @@ pub async fn delete_capture_data(
                 &source_ids,
             )
             .await
-            .map_err(|error| error.to_string())?
+                .map_err(|error| error.to_string())?
         };
+        #[cfg(feature = "enterprise-client")]
+        let (forgotten_evidence, withdrawn_findings) = (0, 0);
+
+        #[cfg(not(feature = "enterprise-client"))]
         dystil_insights::invalidate_ask_for_fix_retrieval_memos(&insights_pool)
             .await
             .map_err(|error| error.to_string())?;
+        #[cfg(not(feature = "enterprise-client"))]
         dystil_insights::invalidate_workflow_reconstructions(&insights_pool)
             .await
             .map_err(|error| error.to_string())?;
@@ -553,11 +564,14 @@ pub async fn delete_capture_data(
         if let Err(error) = sqlx::query("VACUUM").execute(&capture).await {
             warn!(error = %error, "deletion completed but database compaction was deferred");
         }
-        let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(&insights_pool)
-            .await;
-        if let Err(error) = sqlx::query("VACUUM").execute(&insights_pool).await {
-            warn!(error = %error, "derived history was removed but insights database compaction was deferred");
+        #[cfg(not(feature = "enterprise-client"))]
+        {
+            let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                .execute(&insights_pool)
+                .await;
+            if let Err(error) = sqlx::query("VACUUM").execute(&insights_pool).await {
+                warn!(error = %error, "derived history was removed but insights database compaction was deferred");
+            }
         }
         if let Err(error) = crate::disk_usage::disk_usage(&data_dir, true).await {
             warn!(error = %error, "deletion completed but the storage-size cache was not refreshed");

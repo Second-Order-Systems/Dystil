@@ -58,6 +58,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         onInvite={() => go("/home/settings?tab=Invite your team")}
         onShortcuts={() => go("/home/ready")}
         onAsk={() => go("/home/ask")}
+        showAsk={!pathname.startsWith("/home/ask")}
         onSettings={() => go("/home/settings")}
         enterpriseManaged={enterpriseManaged}
       />

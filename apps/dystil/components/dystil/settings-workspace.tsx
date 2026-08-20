@@ -15,6 +15,7 @@ import { AiModelsSettings } from "./ai-models-settings";
 import type { DystilShellProps, SettingsTab } from "./types";
 
 const settingsTabs: readonly SettingsTab[] = ["What Dystil can see", "AI models", "When it runs", "Storage", "Notifications", "Invite your team", "About"];
+const enterpriseHiddenTabs = new Set<SettingsTab>(["AI models", "Notifications", "Invite your team"]);
 const DYSTIL_SOURCE_URL = "https://github.com/Second-Order-Systems/Dystil";
 
 export function SettingsWorkspace(props: DystilShellProps & { initialTab?: SettingsTab; onBack: () => void }) {
@@ -22,10 +23,10 @@ export function SettingsWorkspace(props: DystilShellProps & { initialTab?: Setti
   const [update, setUpdate] = useState<AppUpdateSettings | null>(null);
   const [installingUpdate, setInstallingUpdate] = useState(false);
   const enterpriseManaged = useEnterpriseManagedBuild();
-  const visibleTabs = enterpriseManaged ? settingsTabs.filter((item) => item !== "AI models") : settingsTabs;
+  const visibleTabs = enterpriseManaged ? settingsTabs.filter((item) => !enterpriseHiddenTabs.has(item)) : settingsTabs;
 
   useEffect(() => {
-    if (enterpriseManaged && tab === "AI models") setTab("What Dystil can see");
+    if (enterpriseManaged && enterpriseHiddenTabs.has(tab)) setTab("What Dystil can see");
   }, [enterpriseManaged, tab]);
 
   useEffect(() => {
@@ -49,7 +50,7 @@ export function SettingsWorkspace(props: DystilShellProps & { initialTab?: Setti
 
   const showUpdateBanner = enterpriseManaged === false && Boolean(update?.updaterAvailable && !update.autoUpdate && update.availableVersion);
   return <div className="grid h-full grid-cols-[268px_minmax(0,1fr)]">
-    <aside className="flex min-h-0 flex-col border-r border-[#e3e3de] bg-white py-[27px]">
+    <aside className="flex min-h-0 flex-col border-r border-[#e3e3de] bg-ground py-[27px]">
       <button type="button" onClick={props.onBack} className="px-[27px] text-left text-[17px] text-[#60636b] outline-none hover:text-[#0f6e56] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#0f6e56]">←&nbsp; Back to Dystil</button>
       <p className="mb-[10px] mt-[28px] px-[27px] text-[13px] tracking-[0.08em] text-[#9a9da5]">SETTINGS</p>
       <nav>{visibleTabs.map((item) => <button key={item} type="button" aria-current={tab === item ? "page" : undefined} onClick={() => setTab(item)} className={`relative block min-h-[47px] w-full px-[27px] text-left text-[17px] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#0f6e56] ${tab === item ? "bg-[#e1f5ee] text-[#0f6e56]" : "text-[#60636b] hover:bg-[#f8f8f7]"}`}>{tab === item && <span aria-hidden="true" className="absolute inset-y-0 left-0 w-[2px] bg-[#1d9e75]" />}{item}</button>)}</nav>

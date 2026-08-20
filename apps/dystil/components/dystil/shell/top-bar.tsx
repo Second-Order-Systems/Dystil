@@ -21,6 +21,7 @@ type TopBarProps = {
   onInvite: () => void;
   onShortcuts: () => void;
   onAsk: () => void;
+  showAsk?: boolean;
   onSettings: () => void;
   enterpriseManaged?: boolean;
 };
@@ -34,6 +35,7 @@ export function TopBar({
   onInvite,
   onShortcuts,
   onAsk,
+  showAsk = true,
   onSettings,
   enterpriseManaged = false,
 }: TopBarProps) {
@@ -64,14 +66,14 @@ export function TopBar({
 
       <div className="flex-1" />
 
-      <button
+      {!enterpriseManaged && <button
         type="button"
         onClick={onInvite}
         className="flex items-center gap-[7px] rounded-tile px-[13px] py-2 text-ui font-medium text-ink-2 transition-colors hover:bg-chrome"
       >
         <InvitePersonIcon />
         Invite your team
-      </button>
+      </button>}
 
       {!enterpriseManaged && <button
         type="button"
@@ -85,14 +87,14 @@ export function TopBar({
       </button>}
 
       {/* The app's one persistent action — reachable from every screen. */}
-      <button
+      {showAsk && <button
         type="button"
         onClick={onAsk}
         className="flex items-center gap-[7px] rounded-tile bg-green-deep px-[17px] py-[9px] text-ui font-semibold text-paper shadow-primary transition-colors hover:bg-green-deep-hover"
       >
         <Droplet width={8} height={11} className="text-droplet-on-deep" />
         Ask for a fix
-      </button>
+      </button>}
 
       <button
         type="button"
