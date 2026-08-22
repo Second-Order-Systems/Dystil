@@ -722,6 +722,12 @@ async getAiPiiRedactionSettings() : Promise<Result<AiPiiRedactionSettingsView, s
 async getAppIdentifier() : Promise<string> {
     return await TAURI_INVOKE("get_app_identifier");
 },
+async getAppPolicy() : Promise<AppPolicy> {
+    return await TAURI_INVOKE("get_app_policy");
+},
+async getAppPolicySnapshot() : Promise<AppPolicySnapshot> {
+    return await TAURI_INVOKE("get_app_policy_snapshot");
+},
 /**
  * Get the app-local focus/notification server port.
  */
@@ -1219,6 +1225,18 @@ async proposeReadyArtifactChange(artifactId: string, request: string) : Promise<
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Records only the policy-load failure count. The browser retains the detailed
+ * failure in local logs; no error text or browser data is exported.
+ */
+async recordAppPolicyLoadFailed() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("record_app_policy_load_failed") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async recordReadyArtifactUsed(artifactId: string, action: ReadyArtifactAction) : Promise<Result<ReadyArtifactUseResult, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("record_ready_artifact_used", { artifactId, action }) };
@@ -1511,8 +1529,9 @@ async setRetentionDays(retentionDays: number) : Promise<Result<RetentionStorageV
 /**
  * Persist the user's explicit screenshot-capture choice and refresh an
  * active capture session so the new mode takes effect immediately. A paused
- * session stays paused. Enabling screenshots is rejected unless the platform
- * reports Screen Recording permission as granted (or not required).
+ * session stays paused. This command is unavailable when screenshots are
+ * organization-enabled. Enabling user-choice screenshots is rejected unless
+ * the platform reports Screen Recording permission as granted (or not required).
  */
 async setScreenshotCaptureEnabled(enabled: boolean) : Promise<Result<null, string>> {
     try {
@@ -1524,7 +1543,8 @@ async setScreenshotCaptureEnabled(enabled: boolean) : Promise<Result<null, strin
 },
 /**
  * Persist explicit local cloud-sync consent. Screenshot uploads are never
- * allowed independently of segment uploads.
+ * allowed independently of segment uploads. Organization-required sync is
+ * not user-editable.
  */
 async setSyncConsent(consent: SyncConsent) : Promise<Result<SyncConsent, string>> {
     try {
@@ -1537,9 +1557,9 @@ async setSyncConsent(consent: SyncConsent) : Promise<Result<SyncConsent, string>
 /**
  * Enable or disable anonymous operational telemetry.
  *
- * Community builds only. Under `enterprise-client` telemetry is organization-
- * managed, so this rejects rather than silently ignoring the request — the same
- * shape as [`set_sync_consent`].
+ * User-editable only when the policy gives users telemetry authority. An
+ * organization-managed policy rejects the request rather than silently
+ * ignoring it — the same shape as [`set_sync_consent`].
  */
 async setTelemetryEnabled(enabled: boolean) : Promise<Result<boolean, string>> {
     try {
@@ -1733,12 +1753,15 @@ export type AiPresetModelsView = { models: string[]; detail: string }
 export type AiPresetView = { id: string; name: string; providerKind: string; endpoint: string | null; model: string; active: boolean; credentialPresent: boolean; validationStatus: string; validationMessage: string | null; validatedAt: string | null }
 export type AiProviderModelView = { id: string; displayName: string; description: string; isDefault: boolean }
 export type AiProviderStatusView = { provider: string; state: string; installedVersion: string | null; authenticated: boolean | null; detail: string | null }
+export type AppPolicy = { edition: Edition; localWorthFixing: Availability; localAutomation: Availability; localAi: Availability; readyToUse: Availability; askBackend: AskBackend; capture: CapturePolicy; telemetryManagement: Management; updateManagement: Management; manualUpdate: Availability; autostartManagement: Management; notifications: NotificationPolicy; teamInvitation: Availability }
+export type AppPolicySnapshot = { status: string; assignment: EditionAssignment | null; policy: AppPolicy | null; source: AssignmentSource | null }
 export type AppUpdateSettingsView = { autoUpdate: boolean; updaterAvailable: boolean; availableVersion: string | null }
 export type ArtifactChangePreview = { changeJobId: string; artifactId: string; title: string; body: string; changedLineCount: number }
 export type ArtifactChangeSummary = { request: string; changedAt: string }
 export type ArtifactPage = { items: ReadyArtifactCard[]; nextCursor: string | null }
 export type AskArtifact = { kind: AskArtifactKind; title: string; description: string; body: string; steps: string[]; tool: string; capability: string; instructions: string[] }
 export type AskArtifactKind = "prompt" | "runbook" | "existing_capability"
+export type AskBackend = "local" | "cloud"
 export type AskInputEvent = { kind: string; questionId: string | null; selectedOptionIds: string[] }
 export type AskMessageRole = "user" | "assistant"
 export type AskMessageView = { messageId: string; role: AskMessageRole; text: string; event: AskInputEvent | null; createdAt: string }
@@ -1762,12 +1785,14 @@ event: AskInputEvent }
 export type AskWatchSpec = { goal: string; relevantSignals: string[]; missingEvidence: string[]; sufficiencyRule: string }
 export type AskWatchState = "active" | "review_ready" | "stopped" | "dismissed"
 export type AskWatchView = { watchId: string; state: AskWatchState; spec: AskWatchSpec; supportingEvidenceCount: number; weekCheckpointDue: boolean; createdAt: string; updatedAt: string }
+export type AssignmentSource = "fresh" | "cached"
 export type AuthMode = "individual" | "workspace"
 export type AutomationArtifactView = { id: string; runId: string; automationName: string; relativePath: string; sizeBytes: number; mediaType: string; liveView: boolean; outputKind: string; contentJson: string | null; createdAt: string }
 export type AutomationDraftView = { id: string; request: string; markdown: string; automation: AutomationView }
 export type AutomationRunEventView = { id: number; runId: string; kind: string; message: string; createdAt: string }
 export type AutomationRunView = { id: string; automationName: string; status: string; trigger: string; attempt: number; startedAt: string | null; finishedAt: string | null; provider: string | null; model: string | null; output: string | null; errorCategory: string | null; errorMessage: string | null }
 export type AutomationView = { name: string; title: string; description: string | null; enabled: boolean; triggerType: string; triggerDetail: string | null; path: string }
+export type Availability = "enabled" | "disabled"
 export type BootPhaseSnapshot = {
 /**
  * One of: idle | starting | migrating_database |
@@ -1793,10 +1818,11 @@ sinceEpochSecs: number }
  */
 export type BrowserAutomationStatus = { name: string; status: string; running: boolean }
 export type BrowserLogEntry = { level: string; message: string }
-export type BuildCapabilities = { cloudAvailable: boolean; authMode: AuthMode; cloudBaseUrl: string | null; officialBuild: boolean; enterpriseManaged: boolean }
+export type BuildCapabilities = { cloudAvailable: boolean; authMode: AuthMode; cloudBaseUrl: string | null; officialBuild: boolean }
 export type CacheFile = { path: string; label: string; size_bytes: number }
 export type Cadence = "none" | "daily" | "weekly" | "monthly"
 export type CaptureHealth = { status: string; status_code: number; last_frame_timestamp: string | null; last_ui_timestamp: string | null; frame_status: string; ui_status: string; message: string }
+export type CapturePolicy = { availability: Availability; permanentControl: Management; temporaryPause: Availability; exclusionsControl: Management; localDeletion: Availability; screenshots: ScreenshotPolicy; sync: SyncPolicy }
 export type CaptureSourceView = { id: string; kind: string; name: string; activeMinutes: number; enabled: boolean }
 export type CaptureVisibilityView = { sources: CaptureSourceView[]; sourcesError: string | null }
 export type Credits = { amount: number }
@@ -1809,6 +1835,8 @@ export type DystilAuthState = { status: string; session: DystilUserSession | nul
 export type DystilUserOrg = { id: string; name: string | null; slug: string | null; roles: string[] }
 export type DystilUserProfile = { id: string; email: string | null; name: string | null; image: string | null; org: DystilUserOrg | null }
 export type DystilUserSession = { session_token: string | null; expires_at: string | null }
+export type Edition = "community" | "individual" | "enterprise"
+export type EditionAssignment = { schemaVersion: number; edition: Edition; revision: number }
 export type ExternalMcpSetupView = { client: string; detail: string }
 export type FindingPage = { items: WorthFixingCard[]; nextCursor: string | null }
 export type HandoffType = "prompt" | "saved_prompt" | "existing_capability" | "runbook"
@@ -1830,8 +1858,10 @@ export type KeychainStatus = { state: string }
 export type LocalChatMessageView = { id: string; sessionId: string; role: string; mode: string; question: string | null; answer: string | null; status: string; citationsJson: string | null; provider: string | null; model: string | null; elapsedMs: number | null; errorCode: string | null; createdAt: string }
 export type LocalChatSessionView = { id: string; title: string; updatedAt: string }
 export type LogFile = { name: string; path: string; modified_at: number }
+export type Management = "user" | "organization"
 export type McpConnectionStatus = { connected: boolean; detail: string }
 export type MonitorDevice = { id: number; stableId: string; name: string; isDefault: boolean; width: number; height: number }
+export type NotificationPolicy = { delivery: Availability; preferences: PreferenceControl }
 export type OAuthInstanceInfo = { instance: string | null; display_name: string | null }
 export type OAuthStatus = { connected: boolean; display_name: string | null; needs_attention?: boolean }
 export type OSPermission = "screenRecording" | "accessibility" | "automation" | "inputMonitoring" | "calendar"
@@ -1849,6 +1879,7 @@ currentStep?: string | null;
  * local preference only; provider credentials live in their own stores.
  */
 aiSetupChoice?: string | null }
+export type PreferenceControl = "userEditable" | "fixed"
 export type ReadyArtifactAction = "copy" | "open" | "share" | "show_how"
 export type ReadyArtifactCard = { artifactId: string; title: string; kind: HandoffType; description: string; lastUsedAt: string | null; primaryAction: ReadyArtifactAction; secondaryAction: ReadyArtifactAction }
 export type ReadyArtifactDetail = { card: ReadyArtifactCard; body: string; keptAt: string; changeCount: number; changes: ArtifactChangeSummary[]; provenanceAvailable: boolean; provenanceLabel: string }
@@ -1875,6 +1906,7 @@ endTime: string;
  * What to record: "all" or "screen_only"
  */
 recordMode: string }
+export type ScreenshotPolicy = "userChoice" | "organizationEnabled" | "prohibited"
 export type SettingsStore =
 /**
  * All recording/capture config lives here. Flattened so the JSON shape
@@ -2200,6 +2232,7 @@ export type SkillInstallReceipt = { installId: string; bundleId: string; target:
 export type SkillInstallTarget = "codex" | "claude" | "claude_upload" | "chatgpt" | "pi"
 export type SkillInstallTargetAvailability = { target: SkillInstallTarget; available: boolean; installed: boolean }
 export type SyncConsent = { segments: boolean; screenshots: boolean }
+export type SyncPolicy = "disabled" | "userConsent" | "required"
 /**
  * Current effective telemetry state, and whether the user may change it.
  *

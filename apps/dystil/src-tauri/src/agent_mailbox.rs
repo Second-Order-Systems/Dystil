@@ -28,6 +28,7 @@ fn headers(device_token: &str) -> Result<HeaderMap, String> {
 }
 
 pub(crate) async fn cloud_client() -> Result<(reqwest::Client, String, String), String> {
+    crate::app_policy::require_cloud_product()?;
     let token = auth::current_device_token()
         .await?
         .ok_or_else(|| "Dystil device is not registered".to_string())?;

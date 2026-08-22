@@ -8,7 +8,7 @@ import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
 import { getAuthState, subscribeAuthState, type DystilAuthState } from "@/lib/auth-store";
 import { useOnboardingStatus } from "@/lib/hooks/use-onboarding-status";
-import { getBuildCapabilities } from "@/lib/build-capabilities";
+import { useAppPolicy } from "@/lib/app-policy";
 
 interface PermissionLostPayload {
   screen_recording: boolean;
@@ -58,7 +58,7 @@ export function usePermissionMonitor() {
   const onboardingPhaseRef = useRef<"uninitialized" | "fetching" | "ready">("uninitialized");
   const onboardingCompletedRef = useRef(false);
   const [authState, setAuthState] = useState<DystilAuthState>(() => getAuthState());
-  const [enterpriseManaged, setEnterpriseManaged] = useState<boolean | null>(null);
+  const { policy } = useAppPolicy();
   const {
     phase: onboardingPhase,
     onboarding,
@@ -68,15 +68,9 @@ export function usePermissionMonitor() {
 
   const isRecoveryEligible =
     isAuthReady(authState.status) &&
-    enterpriseManaged !== null &&
+    policy !== null &&
     onboardingPhase === "ready" &&
     Boolean(onboarding?.isCompleted);
-
-  useEffect(() => {
-    void getBuildCapabilities().then((capabilities) => {
-      setEnterpriseManaged(capabilities.enterpriseManaged);
-    });
-  }, []);
 
   useEffect(() => {
     authStateRef.current = authState;

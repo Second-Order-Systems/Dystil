@@ -20,10 +20,10 @@ type StatusStripProps = {
   onPrivacy: () => void;
   onStopJob: () => void;
   onOpenResult: () => void;
-  enterpriseManaged?: boolean;
+  cloudAsk?: boolean;
 };
 
-export function StatusStrip({ job, onPrivacy, onStopJob, onOpenResult, enterpriseManaged = false }: StatusStripProps) {
+export function StatusStrip({ job, onPrivacy, onStopJob, onOpenResult, cloudAsk = false }: StatusStripProps) {
   const running = job?.state === "running";
 
   return (
@@ -40,7 +40,7 @@ export function StatusStrip({ job, onPrivacy, onStopJob, onOpenResult, enterpris
         <span className="absolute h-[6px] w-[6px] animate-halo rounded-full bg-green-mid" />
         <span className="relative h-[6px] w-[6px] rounded-full bg-green-mid" />
       </span>
-      {!enterpriseManaged && <>
+      {!cloudAsk && <>
         <span className="text-meta font-semibold text-ink-2">Watching, locally</span>
         <span className="text-meta text-muted-ink">nothing has left this Mac</span>
       </>}
@@ -50,7 +50,7 @@ export function StatusStrip({ job, onPrivacy, onStopJob, onOpenResult, enterpris
         onClick={onPrivacy}
         className="rounded-strip border border-line-2c px-[10px] py-[4px] text-meta font-semibold text-ink-3 transition-colors hover:border-chevron hover:bg-line-2 hover:text-ink"
       >
-        {enterpriseManaged ? "How your data is handled" : "What stays on this computer →"}
+        {cloudAsk ? "How your data is handled" : "What stays on this computer →"}
       </button>
 
       <div className="flex-1" />

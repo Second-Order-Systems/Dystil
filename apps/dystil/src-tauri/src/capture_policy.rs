@@ -1,13 +1,13 @@
 use dystil_capture::CaptureMode;
 
-pub const fn enterprise_managed() -> bool {
-    cfg!(feature = "enterprise-client")
-}
-
-/// Product-owned capture policy. Enterprise builds always use FullCapture;
-/// community builds honor the persisted `disable_vision` preference.
-pub const fn product_capture_mode(disable_vision: bool) -> CaptureMode {
-    if !enterprise_managed() && disable_vision {
+/// Product-owned capture policy. Organization-enabled screenshots use
+/// `FullCapture`; user-choice policies honor `disable_vision`.
+pub fn product_capture_mode(disable_vision: bool) -> CaptureMode {
+    if matches!(
+        crate::app_policy::current().capture.screenshots,
+        crate::app_policy::ScreenshotPolicy::UserChoice
+    ) && disable_vision
+    {
         CaptureMode::TextOnly
     } else {
         CaptureMode::FullCapture
@@ -28,7 +28,10 @@ mod tests {
     fn first_run_defaults_to_text_only() {
         let settings = crate::recording_settings::RecordingSettings::default();
         assert!(settings.disable_vision);
-        let expected = if enterprise_managed() {
+        let expected = if matches!(
+            crate::app_policy::current().capture.screenshots,
+            crate::app_policy::ScreenshotPolicy::OrganizationEnabled
+        ) {
             CaptureMode::FullCapture
         } else {
             CaptureMode::TextOnly

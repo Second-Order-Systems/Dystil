@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   setAutostart: vi.fn(),
   pauseCaptureFor: vi.fn(),
   resumeCaptureNow: vi.fn(),
-  getBuildCapabilities: vi.fn(),
+  appPolicy: vi.fn(),
 }));
 const { reloadStore, getWhenItRunsSettings, setAutostart, pauseCaptureFor, resumeCaptureNow } = mocks;
 
@@ -19,7 +19,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 vi.mock("@/lib/hooks/use-settings", () => ({ useSettings: () => ({ reloadStore: mocks.reloadStore }) }));
-vi.mock("@/lib/build-capabilities", () => ({ getBuildCapabilities: () => mocks.getBuildCapabilities() }));
+vi.mock("@/lib/app-policy", () => ({ useAppPolicy: () => mocks.appPolicy() }));
 vi.mock("@/lib/utils/permission-flow", () => ({ requestPermissionWithFlow: vi.fn() }));
 vi.mock("@/lib/utils/tauri", () => ({ commands: {
   getWhenItRunsSettings: mocks.getWhenItRunsSettings,
@@ -46,11 +46,11 @@ describe("When it runs settings", () => {
     setAutostart.mockResolvedValue({ status: "ok", data: null });
     pauseCaptureFor.mockResolvedValue({ status: "ok", data: null });
     resumeCaptureNow.mockResolvedValue({ status: "ok", data: null });
-    mocks.getBuildCapabilities.mockResolvedValue({ enterpriseManaged: false });
+    mocks.appPolicy.mockReturnValue({ policy: { autostartManagement: "user" } });
   });
 
   it("keeps pause controls but removes capture preferences in an enterprise build", async () => {
-    mocks.getBuildCapabilities.mockResolvedValue({ enterpriseManaged: true });
+    mocks.appPolicy.mockReturnValue({ policy: { autostartManagement: "organization" } });
     render(<WhenItRunsSettings />);
 
     expect(await screen.findByRole("button", { name: "1 hour" })).toBeInTheDocument();

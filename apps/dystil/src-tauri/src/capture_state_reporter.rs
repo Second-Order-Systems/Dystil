@@ -42,6 +42,12 @@ pub(crate) fn schedule() {
 }
 
 async fn report_current(app: &AppHandle) -> Result<(), String> {
+    if !matches!(
+        crate::app_policy::current().capture.sync,
+        crate::app_policy::SyncPolicy::Required
+    ) {
+        return Ok(());
+    }
     let settings = SettingsStore::get(app)?.unwrap_or_default();
     let payload = if settings.capture_paused {
         let deadline = persisted_pause_deadline(&settings)

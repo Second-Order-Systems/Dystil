@@ -1056,7 +1056,10 @@ pub async fn get_telemetry_settings(
 ) -> Result<TelemetrySettings, String> {
     let settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
     let disabled_by_env = crate::store::telemetry_disabled_by_env();
-    let managed_by_organization = cfg!(feature = "enterprise-client");
+    let managed_by_organization = matches!(
+        crate::app_policy::current().telemetry_management,
+        crate::app_policy::Management::Organization
+    );
     Ok(TelemetrySettings {
         effective: settings.telemetry_effective(),
         user_can_change: !disabled_by_env && !managed_by_organization,
@@ -1067,9 +1070,9 @@ pub async fn get_telemetry_settings(
 
 /// Enable or disable anonymous operational telemetry.
 ///
-/// Community builds only. Under `enterprise-client` telemetry is organization-
-/// managed, so this rejects rather than silently ignoring the request — the same
-/// shape as [`set_sync_consent`].
+/// User-editable only when the policy gives users telemetry authority. An
+/// organization-managed policy rejects the request rather than silently
+/// ignoring it — the same shape as [`set_sync_consent`].
 #[tauri::command]
 #[specta::specta]
 pub async fn set_telemetry_enabled(
@@ -1077,9 +1080,12 @@ pub async fn set_telemetry_enabled(
     state: State<'_, RecordingState>,
     enabled: bool,
 ) -> Result<bool, String> {
-    if cfg!(feature = "enterprise-client") && !enabled {
+    if matches!(
+        crate::app_policy::current().telemetry_management,
+        crate::app_policy::Management::Organization
+    ) {
         return Err(
-            "Operational telemetry is managed by your organization and cannot be disabled."
+            "Operational telemetry is managed by your organization and cannot be changed."
                 .to_string(),
         );
     }
@@ -1103,7 +1109,8 @@ pub async fn set_telemetry_enabled(
 }
 
 /// Persist explicit local cloud-sync consent. Screenshot uploads are never
-/// allowed independently of segment uploads.
+/// allowed independently of segment uploads. Organization-required sync is
+/// not user-editable.
 #[tauri::command]
 #[specta::specta]
 pub async fn set_sync_consent(
@@ -1111,9 +1118,12 @@ pub async fn set_sync_consent(
     consent: SyncConsent,
 ) -> Result<SyncConsent, String> {
     let consent = consent.validate()?;
-    if cfg!(feature = "enterprise-client") && (!consent.segments || !consent.screenshots) {
+    if matches!(
+        crate::app_policy::current().capture.sync,
+        crate::app_policy::SyncPolicy::Required
+    ) {
         return Err(
-            "Segment and screenshot sync are managed by your organization and cannot be disabled."
+            "Segment and screenshot sync are managed by your organization and cannot be changed."
                 .to_string(),
         );
     }
@@ -1205,8 +1215,9 @@ pub async fn apply_onboarding_capture_policy(
 
 /// Persist the user's explicit screenshot-capture choice and refresh an
 /// active capture session so the new mode takes effect immediately. A paused
-/// session stays paused. Enabling screenshots is rejected unless the platform
-/// reports Screen Recording permission as granted (or not required).
+/// session stays paused. This command is unavailable when screenshots are
+/// organization-enabled. Enabling user-choice screenshots is rejected unless
+/// the platform reports Screen Recording permission as granted (or not required).
 #[tauri::command]
 #[specta::specta]
 pub async fn set_screenshot_capture_enabled(
@@ -1214,10 +1225,12 @@ pub async fn set_screenshot_capture_enabled(
     state: State<'_, RecordingState>,
     enabled: bool,
 ) -> Result<(), String> {
-    if crate::capture_policy::enterprise_managed() && !enabled {
+    if matches!(
+        crate::app_policy::current().capture.screenshots,
+        crate::app_policy::ScreenshotPolicy::OrganizationEnabled
+    ) {
         return Err(
-            "Screenshot capture is managed by your organization and cannot be disabled."
-                .to_string(),
+            "Screenshot capture is managed by your organization and cannot be changed.".to_string(),
         );
     }
     if enabled {
@@ -1522,6 +1535,12 @@ pub async fn set_capture_source_enabled(
     source_name: String,
     enabled: bool,
 ) -> Result<(), String> {
+    if !matches!(
+        crate::app_policy::current().capture.exclusions_control,
+        crate::app_policy::Management::User
+    ) {
+        return Err("Capture exclusions are managed by your organization.".to_string());
+    }
     let previous = SettingsStore::get(&app_handle)?.unwrap_or_default();
     let mut updated = previous.clone();
     match source_kind.as_str() {
@@ -2314,6 +2333,12 @@ pub(crate) fn pause_deadline(
 #[tauri::command]
 #[specta::specta]
 pub async fn pause_capture_for(app_handle: tauri::AppHandle, mode: String) -> Result<(), String> {
+    if matches!(
+        crate::app_policy::current().capture.temporary_pause,
+        crate::app_policy::Availability::Disabled
+    ) {
+        return Err("Capture pause is unavailable in this edition.".to_string());
+    }
     let deadline = pause_deadline(&mode, chrono::Local::now())?;
     crate::recording::pause_capture_until(app_handle, deadline).await
 }
@@ -2321,13 +2346,22 @@ pub async fn pause_capture_for(app_handle: tauri::AppHandle, mode: String) -> Re
 #[tauri::command]
 #[specta::specta]
 pub async fn resume_capture_now(app_handle: tauri::AppHandle) -> Result<(), String> {
+    if matches!(
+        crate::app_policy::current().capture.temporary_pause,
+        crate::app_policy::Availability::Disabled
+    ) {
+        return Err("Capture pause is unavailable in this edition.".to_string());
+    }
     crate::recording::resume_capture_from_pause(app_handle).await
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn set_autostart(app_handle: tauri::AppHandle, enabled: bool) -> Result<(), String> {
-    if crate::capture_policy::enterprise_managed() {
+    if matches!(
+        crate::app_policy::current().autostart_management,
+        crate::app_policy::Management::Organization
+    ) {
         return Err("Login startup is managed by your organization.".to_string());
     }
     use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;

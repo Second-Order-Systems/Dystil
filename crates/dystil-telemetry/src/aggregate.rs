@@ -140,6 +140,7 @@ pub enum ProductEventKind {
     WorthFixingFindingShown,
     SkillBuildRequested,
     SkillInstallRequested,
+    AppPolicyLoadFailed,
 }
 
 impl ProductEventKind {
@@ -148,6 +149,7 @@ impl ProductEventKind {
             Self::WorthFixingFindingShown => "worth_fixing_finding_shown",
             Self::SkillBuildRequested => "skill_build_requested",
             Self::SkillInstallRequested => "skill_install_requested",
+            Self::AppPolicyLoadFailed => "app_policy_load_failed",
         }
     }
 }

@@ -21,6 +21,7 @@ fn headers(device_token: &str) -> Result<HeaderMap, String> {
 }
 
 async fn client() -> Result<(reqwest::Client, String), String> {
+    crate::app_policy::require_cloud_product()?;
     let device_token = auth::current_device_token()
         .await?
         .ok_or_else(|| "Sign in to your organization before asking for a fix.".to_string())?;

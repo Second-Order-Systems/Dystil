@@ -161,6 +161,12 @@ use crate::{
 /// The ready-work notification is opt-out. Existing installations predate the
 /// setting, so a missing or malformed preference deliberately keeps alerts on.
 fn requested_work_ready_notifications_enabled(app: &AppHandle) -> bool {
+    if matches!(
+        crate::app_policy::current().notifications.preferences,
+        crate::app_policy::PreferenceControl::Fixed
+    ) {
+        return true;
+    }
     let settings = match SettingsStore::get(app) {
         Ok(Some(settings)) => settings,
         _ => return true,
@@ -274,28 +280,32 @@ async fn runtime(
     app: &AppHandle,
     recording: &RecordingState,
 ) -> Result<Box<dyn dystil_ai::AiRuntime>, String> {
-    #[cfg(feature = "enterprise-client")]
-    {
+    if matches!(
+        crate::app_policy::current().ready_to_use,
+        crate::app_policy::Availability::Disabled
+    ) || matches!(
+        crate::app_policy::current().local_ai,
+        crate::app_policy::Availability::Disabled
+    ) {
         let _ = (app, recording);
-        return Err("Local Ready-to-Use and skill generation are disabled in this enterprise build."
-            .to_string());
+        return Err(
+            "Local Ready-to-Use and skill generation are disabled in this enterprise build."
+                .to_string(),
+        );
     }
-    #[cfg(not(feature = "enterprise-client"))]
-    {
-        let capture = {
-            let server = recording.server.lock().await;
-            server
-                .as_ref()
-                .ok_or("capture database is not ready")?
-                .db
-                .pool
-                .clone()
-        };
-        let timezone = crate::ai::local_timezone_offset();
-        crate::ai_runtime::resolve(app, recording, &capture, &timezone)
-            .await
-            .map_err(|error| error.to_string())
-    }
+    let capture = {
+        let server = recording.server.lock().await;
+        server
+            .as_ref()
+            .ok_or("capture database is not ready")?
+            .db
+            .pool
+            .clone()
+    };
+    let timezone = crate::ai::local_timezone_offset();
+    crate::ai_runtime::resolve(app, recording, &capture, &timezone)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

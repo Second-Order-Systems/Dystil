@@ -6,7 +6,7 @@ import { AppShell } from "@/components/dystil/shell/app-shell";
 import { ToastAction } from "@/components/ui/toast";
 import { toast } from "@/components/ui/use-toast";
 import { HomeProvider } from "@/lib/home/provider";
-import { getBuildCapabilities } from "@/lib/build-capabilities";
+import { useAppPolicy } from "@/lib/app-policy";
 
 type ManagedProvider = "codex" | "claude";
 type ProviderStatus = { state: string; authenticated?: boolean | null };
@@ -36,12 +36,12 @@ export default function HomeLayout({ children }: { children: React.ReactNode }) 
  * rather than on every navigation.
  */
 function useProviderSetupResume() {
+  const { policy } = useAppPolicy();
   useEffect(() => {
     let cancelled = false;
 
     const resume = async () => {
-      const capabilities = await getBuildCapabilities();
-      if (capabilities.enterpriseManaged) return;
+      if (policy?.localAi !== "enabled") return;
       const onboarding = await invoke<OnboardingStatus>("get_onboarding_status").catch(() => null);
       const choice = onboarding?.aiSetupChoice;
       if (choice !== "codex" && choice !== "claude") return;
@@ -165,5 +165,5 @@ function useProviderSetupResume() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [policy?.localAi]);
 }

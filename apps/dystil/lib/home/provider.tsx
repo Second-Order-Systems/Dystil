@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import { commands, type DispositionKind, type HomeWorthFixingItem, type ReadyArtifactAction, type ReadyArtifactCard, type SkillBundleView } from "@/lib/utils/tauri";
-import { getBuildCapabilities } from "@/lib/build-capabilities";
+import { useAppPolicy } from "@/lib/app-policy";
 
 import type { CorrectionReason, HomeItem, HomeSource, Shortcut } from "./types";
 
@@ -56,6 +56,7 @@ function dispositionFor(reason: CorrectionReason): DispositionKind {
 }
 
 export function HomeProvider({ children }: { children: React.ReactNode }) {
+  const { policy } = useAppPolicy();
   const [items, setItems] = useState<HomeItem[]>([]);
   const [queue, setQueue] = useState<string[]>([]);
   const [originalTotal, setOriginalTotal] = useState(0);
@@ -67,10 +68,9 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const capabilities = await getBuildCapabilities();
       // Enterprise intentionally has no local Worth Fixing or Ready-to-use
       // projections. Avoid touching their commands altogether.
-      if (capabilities.enterpriseManaged) {
+      if (!policy || policy.localWorthFixing === "disabled" || policy.readyToUse === "disabled") {
         setItems([]);
         setQueue([]);
         setShortcuts([]);
@@ -122,7 +122,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [policy]);
 
   useEffect(() => {
     void reload();

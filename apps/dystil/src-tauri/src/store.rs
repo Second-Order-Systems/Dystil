@@ -725,7 +725,10 @@ impl SettingsStore {
         if telemetry_disabled_by_env() {
             return false;
         }
-        if cfg!(feature = "enterprise-client") {
+        if matches!(
+            crate::app_policy::current().telemetry_management,
+            crate::app_policy::Management::Organization
+        ) {
             return true;
         }
         self.telemetry_enabled
@@ -733,8 +736,11 @@ impl SettingsStore {
 }
 
 impl SyncConsent {
-    pub const fn effective(self) -> Self {
-        if cfg!(feature = "enterprise-client") {
+    pub fn effective(self) -> Self {
+        if matches!(
+            crate::app_policy::current().capture.sync,
+            crate::app_policy::SyncPolicy::Required
+        ) {
             Self {
                 segments: true,
                 screenshots: true,
@@ -1006,7 +1012,10 @@ impl SettingsStore {
     /// clone with the authenticated user ID override.
     pub fn to_recording_settings(&self) -> crate::recording_settings::RecordingSettings {
         let mut settings = self.recording.clone();
-        if crate::capture_policy::enterprise_managed() {
+        if matches!(
+            crate::app_policy::current().capture.screenshots,
+            crate::app_policy::ScreenshotPolicy::OrganizationEnabled
+        ) {
             settings.disable_vision = false;
         }
         // Override user_id with the Clerk JWT token from the auth user object.
@@ -1335,8 +1344,12 @@ mod tests {
     #[test]
     fn effective_sync_consent_matches_the_compiled_policy() {
         let effective = SyncConsent::default().effective();
-        assert_eq!(effective.segments, cfg!(feature = "enterprise-client"));
-        assert_eq!(effective.screenshots, cfg!(feature = "enterprise-client"));
+        let required = matches!(
+            crate::app_policy::current().capture.sync,
+            crate::app_policy::SyncPolicy::Required
+        );
+        assert_eq!(effective.segments, required);
+        assert_eq!(effective.screenshots, required);
     }
 
     #[test]

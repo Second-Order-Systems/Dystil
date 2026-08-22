@@ -7,7 +7,6 @@ pub struct BuildCapabilities {
     pub auth_mode: AuthMode,
     pub cloud_base_url: Option<String>,
     pub official_build: bool,
-    pub enterprise_managed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
@@ -27,7 +26,6 @@ pub fn current() -> BuildCapabilities {
         },
         cloud_base_url: crate::app_config::cloud_base_url().map(str::to_owned),
         official_build: cfg!(feature = "official-build"),
-        enterprise_managed: cfg!(feature = "enterprise-client"),
     }
 }
 
@@ -48,10 +46,6 @@ mod tests {
         assert_eq!(
             capabilities.official_build,
             cfg!(feature = "official-build")
-        );
-        assert_eq!(
-            capabilities.enterprise_managed,
-            cfg!(feature = "enterprise-client")
         );
         assert!(matches!(
             capabilities.auth_mode,
