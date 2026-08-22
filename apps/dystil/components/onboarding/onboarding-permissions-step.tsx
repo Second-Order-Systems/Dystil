@@ -31,7 +31,7 @@ function PermissionRow({ permission, status, isBusy, onGrant }: { permission: Pe
   </article>;
 }
 
-export function OnboardingPermissionsStep({ onReadyChange, enterpriseManaged }: { onReadyChange: (ready: boolean) => void; enterpriseManaged: boolean }) {
+export function OnboardingPermissionsStep({ onReadyChange, screenshotsOrganizationEnabled }: { onReadyChange: (ready: boolean) => void; screenshotsOrganizationEnabled: boolean }) {
   const [permissions, setPermissions] = useState<OSPermissionsCheck | null>(null);
   const [busyPermission, setBusyPermission] = useState<PermissionKey | null>(null);
   const pendingPermissionRef = useRef<PermissionKey | null>(null);
@@ -44,7 +44,7 @@ export function OnboardingPermissionsStep({ onReadyChange, enterpriseManaged }: 
   const allGranted = accessibilityStatus === "granted";
   useEffect(() => { onReadyChange(allGranted); return () => onReadyChange(false); }, [allGranted, onReadyChange]);
   useEffect(() => {
-    if (!enterpriseManaged) return;
+    if (!screenshotsOrganizationEnabled) return;
     if (screenRecordingStatus !== "granted") {
       if (screenRecordingStatus === "denied") screenRecordingWasMissingRef.current = true;
       return;
@@ -59,7 +59,7 @@ export function OnboardingPermissionsStep({ onReadyChange, enterpriseManaged }: 
         console.error("Failed to enable screenshot capture after permission was granted:", error);
       }
     })();
-  }, [enterpriseManaged, screenRecordingStatus]);
+  }, [screenshotsOrganizationEnabled, screenRecordingStatus]);
   const handleGrant = async (permission: PermissionKey) => {
     if (pendingPermissionRef.current) return;
     pendingPermissionRef.current = permission;
@@ -69,7 +69,7 @@ export function OnboardingPermissionsStep({ onReadyChange, enterpriseManaged }: 
   useEffect(() => { if (!busyPermission) return; const refresh = () => void checkPermissions().then(() => clearPending()); window.addEventListener("focus", refresh); return () => window.removeEventListener("focus", refresh); }, [busyPermission, checkPermissions, clearPending]);
   return <div>
     <PermissionRow permission="accessibility" status={accessibilityStatus} isBusy={busyPermission === "accessibility"} onGrant={handleGrant} />
-    {enterpriseManaged ? (
+    {screenshotsOrganizationEnabled ? (
       <PermissionRow permission="screenRecording" status={screenRecordingStatus} isBusy={busyPermission === "screenRecording"} onGrant={handleGrant} />
     ) : (
       <p className="mt-4 text-center text-[12.5px] text-muted-foreground">Screenshot capture is optional and can be enabled later from Settings.</p>

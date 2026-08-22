@@ -9,6 +9,7 @@ import { LoginScreen } from "@/components/auth/login-screen";
 import { getBuildCapabilities, type BuildCapabilities } from "@/lib/build-capabilities";
 import { bootstrapAuthSession, subscribeAuthState } from "@/lib/auth-session";
 import { getAuthState, type DystilAuthState } from "@/lib/auth-store";
+import { useAppPolicy } from "@/lib/app-policy";
 import { useOnboardingStatus } from "@/lib/hooks/use-onboarding-status";
 
 function LoadingState({ label }: { label: string }) {
@@ -32,6 +33,7 @@ export function DystilSessionProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const isOnboardingRoute = pathname === "/onboarding";
+  const { status: policyStatus } = useAppPolicy();
 
   useEffect(() => {
     void getBuildCapabilities().then(setCapabilities);
@@ -78,7 +80,7 @@ export function DystilSessionProvider({ children }: { children: ReactNode }) {
   }, [state]);
 
   const cloudEnabled = capabilities?.cloudAvailable === true;
-  const accountReady = !cloudEnabled || state.status === "ready";
+  const accountReady = !cloudEnabled || (state.status === "ready" && policyStatus === "ready");
 
   useEffect(() => {
     if (!accountReady) return;
@@ -121,9 +123,9 @@ export function DystilSessionProvider({ children }: { children: ReactNode }) {
         <div className="fixed inset-0 z-50 bg-background">
           <LoginScreen />
         </div>
-      ) : (cloudEnabled && state.status !== "ready") || isSessionLoadingStatus ? (
+      ) : (cloudEnabled && (state.status !== "ready" || policyStatus !== "ready")) || isSessionLoadingStatus ? (
         <div className="fixed inset-0 z-50 bg-background">
-          <LoadingState label="Loading account..." />
+          <LoadingState label={state.status === "ready" ? "Loading product settings..." : "Loading account..."} />
         </div>
       ) : onboardingState === "checking" ? (
         <div className="fixed inset-0 z-50 bg-background">

@@ -12,7 +12,7 @@ import type {
   AskUnderstanding,
 } from "@/lib/utils/tauri";
 import { useAskForFix } from "@/components/dystil/ask-for-fix/use-ask-for-fix";
-import { getBuildCapabilities } from "@/lib/build-capabilities";
+import { useAppPolicy } from "@/lib/app-policy";
 import { Droplet } from "@/components/dystil/primitives/droplet";
 import {
   SegmentedTrack,
@@ -169,7 +169,7 @@ function QuestionCard({
   );
 }
 
-function UnderstandingCard({ understanding, busy, enterpriseManaged, onConfirm, onRefine }: { understanding: AskUnderstanding; busy: boolean; enterpriseManaged: boolean; onConfirm: (summary?: string) => void; onRefine: () => void }) {
+function UnderstandingCard({ understanding, busy, cloudAsk, onConfirm, onRefine }: { understanding: AskUnderstanding; busy: boolean; cloudAsk: boolean; onConfirm: (summary?: string) => void; onRefine: () => void }) {
   const [summary, setSummary] = useState(understanding.synthesis);
   useEffect(() => setSummary(understanding.synthesis), [understanding.synthesis]);
   const fields = [
@@ -183,12 +183,12 @@ function UnderstandingCard({ understanding, busy, enterpriseManaged, onConfirm, 
       <div className="flex flex-wrap items-center justify-between gap-2 bg-[#f0f6f2] px-5 py-3 text-[12px]"><span className="font-semibold text-[#116849]">Dystil&apos;s working understanding</span><span className="text-[#738078]">Synthesized from this conversation</span></div>
       <div className="p-5 sm:p-6">
         <p className="text-[11px] font-semibold text-[#647269]">My read</p>
-        {enterpriseManaged ? <textarea value={summary} maxLength={1600} onChange={(event) => setSummary(event.target.value)} className="mt-2 min-h-24 w-full max-w-[66ch] resize-y rounded-[10px] border border-[#cbd5ce] bg-white px-3 py-2 text-[16px] font-medium leading-6 tracking-[-0.015em] text-[#1f2722] outline-none focus:border-[#16805c] focus:ring-2 focus:ring-[#16805c]/20" aria-label="Request summary" /> : <h2 className="mt-2 max-w-[66ch] text-balance text-[22px] font-medium leading-[1.38] tracking-[-0.025em] text-[#1f2722]">{understanding.synthesis}</h2>}
+        {cloudAsk ? <textarea value={summary} maxLength={1600} onChange={(event) => setSummary(event.target.value)} className="mt-2 min-h-24 w-full max-w-[66ch] resize-y rounded-[10px] border border-[#cbd5ce] bg-white px-3 py-2 text-[16px] font-medium leading-6 tracking-[-0.015em] text-[#1f2722] outline-none focus:border-[#16805c] focus:ring-2 focus:ring-[#16805c]/20" aria-label="Request summary" /> : <h2 className="mt-2 max-w-[66ch] text-balance text-[22px] font-medium leading-[1.38] tracking-[-0.025em] text-[#1f2722]">{understanding.synthesis}</h2>}
         <div className="mt-5 grid border-y border-[#dfe6e1] sm:grid-cols-2">
           {fields.map(([label, value], index) => <div key={label} className={`min-w-0 py-4 ${index % 2 === 1 ? "sm:border-l sm:border-[#dfe6e1] sm:pl-5" : "sm:pr-5"} ${index > 1 ? "border-t border-[#dfe6e1]" : index === 1 ? "border-t border-[#dfe6e1] sm:border-t-0" : ""}`}><p className="text-[11px] text-[#7b857e]">{label}</p><p className="mt-1.5 break-words text-[13px] font-medium leading-5 text-[#313934]">{value || "Not yet specified"}</p></div>)}
         </div>
         <div className="mt-4 rounded-[10px] bg-[#eef0ed] px-4 py-3 text-[13px] leading-5 text-[#5f6761]"><span className="font-semibold text-[#3f4742]">Still uncertain: </span>{understanding.uncertainty.length ? understanding.uncertainty.join(" · ") : "Nothing material."}</div>
-        <div className="mt-5 flex flex-wrap gap-2.5"><button type="button" disabled={busy || (enterpriseManaged && !summary.trim())} onClick={() => onConfirm(enterpriseManaged ? summary.trim() : undefined)} className="min-h-10 rounded-[9px] bg-[#176f51] px-5 text-[14px] font-semibold text-white hover:bg-[#105d43] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c] disabled:opacity-50">{enterpriseManaged ? "Create watch" : "Solve this"}</button><button type="button" disabled={busy} onClick={onRefine} className="min-h-10 rounded-[9px] border border-[#ccd4ce] bg-white px-4 text-[14px] font-medium text-[#4f5952] hover:bg-[#f1f4f1] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c] disabled:opacity-50">{enterpriseManaged ? "Back to conversation" : "Refine the understanding"}</button></div>
+        <div className="mt-5 flex flex-wrap gap-2.5"><button type="button" disabled={busy || (cloudAsk && !summary.trim())} onClick={() => onConfirm(cloudAsk ? summary.trim() : undefined)} className="min-h-10 rounded-[9px] bg-[#176f51] px-5 text-[14px] font-semibold text-white hover:bg-[#105d43] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c] disabled:opacity-50">{cloudAsk ? "Create watch" : "Solve this"}</button><button type="button" disabled={busy} onClick={onRefine} className="min-h-10 rounded-[9px] border border-[#ccd4ce] bg-white px-4 text-[14px] font-medium text-[#4f5952] hover:bg-[#f1f4f1] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c] disabled:opacity-50">{cloudAsk ? "Back to conversation" : "Refine the understanding"}</button></div>
       </div>
     </section>
   );
@@ -241,8 +241,8 @@ function WatchCard({ session, busy, onStart, onStop, onReview, onGuidance }: { s
   );
 }
 
-function PresentationCard({ presentation, session, busy, enterpriseManaged, onKeep, onRevise, onStartWatching, onStopWatching, onReviewWatch, onWatchGuidance }: { presentation: AskPresentation; session: AskSessionView; busy: boolean; enterpriseManaged: boolean; onKeep: () => void; onRevise: () => void; onStartWatching: () => void; onStopWatching: () => void; onReviewWatch: () => void; onWatchGuidance: (guidance: string) => void }) {
-  return <section className="mt-6 sm:ml-[50px]"><div className="rounded-[14px] bg-[#eef5f1] p-5 ring-1 ring-[#c9d9d0]"><p className="text-[11px] font-semibold text-[#116849]">{enterpriseManaged ? "Watching for a fix" : "Answer · based on the current understanding"}</p><h2 className="mt-2 text-balance text-[23px] font-medium leading-[1.35] tracking-[-0.025em] text-[#202722]">{presentation.headline}</h2><p className="mt-3 max-w-[70ch] whitespace-pre-wrap text-[14px] leading-6 text-[#505a53]">{presentation.explanation}</p>{presentation.limitations.length > 0 && <div className="mt-4 border-t border-[#d5e1da] pt-4"><p className="text-[11px] font-semibold text-[#657169]">What this does not assume</p><ul className="mt-2 space-y-1.5 text-[13px] leading-5 text-[#5c655f]">{presentation.limitations.map((item) => <li key={item}>• {item}</li>)}</ul></div>}</div><WatchCard session={session} busy={busy} onStart={onStartWatching} onStop={onStopWatching} onReview={onReviewWatch} onGuidance={onWatchGuidance} />{presentation.artifact && <ArtifactCard artifact={presentation.artifact} route={presentation.route} kept={Boolean(session.artifactKeptId)} busy={busy} onKeep={onKeep} onRevise={onRevise} />}</section>;
+function PresentationCard({ presentation, session, busy, cloudAsk, onKeep, onRevise, onStartWatching, onStopWatching, onReviewWatch, onWatchGuidance }: { presentation: AskPresentation; session: AskSessionView; busy: boolean; cloudAsk: boolean; onKeep: () => void; onRevise: () => void; onStartWatching: () => void; onStopWatching: () => void; onReviewWatch: () => void; onWatchGuidance: (guidance: string) => void }) {
+  return <section className="mt-6 sm:ml-[50px]"><div className="rounded-[14px] bg-[#eef5f1] p-5 ring-1 ring-[#c9d9d0]"><p className="text-[11px] font-semibold text-[#116849]">{cloudAsk ? "Watching for a fix" : "Answer · based on the current understanding"}</p><h2 className="mt-2 text-balance text-[23px] font-medium leading-[1.35] tracking-[-0.025em] text-[#202722]">{presentation.headline}</h2><p className="mt-3 max-w-[70ch] whitespace-pre-wrap text-[14px] leading-6 text-[#505a53]">{presentation.explanation}</p>{presentation.limitations.length > 0 && <div className="mt-4 border-t border-[#d5e1da] pt-4"><p className="text-[11px] font-semibold text-[#657169]">What this does not assume</p><ul className="mt-2 space-y-1.5 text-[13px] leading-5 text-[#5c655f]">{presentation.limitations.map((item) => <li key={item}>• {item}</li>)}</ul></div>}</div><WatchCard session={session} busy={busy} onStart={onStartWatching} onStop={onStopWatching} onReview={onReviewWatch} onGuidance={onWatchGuidance} />{presentation.artifact && <ArtifactCard artifact={presentation.artifact} route={presentation.route} kept={Boolean(session.artifactKeptId)} busy={busy} onKeep={onKeep} onRevise={onRevise} />}</section>;
 }
 
 function Composer({ value, onChange, onSubmit, disabled, placeholder, autoFocus = false }: { value: string; onChange: (value: string) => void; onSubmit: () => void; disabled: boolean; placeholder: string; autoFocus?: boolean }) {
@@ -269,7 +269,8 @@ export function AskForFix({ initialText = "" }: { initialText?: string }) {
   const [draft, setDraft] = useState("");
   const [customAnswer, setCustomAnswer] = useState(false);
   const [revisionMode, setRevisionMode] = useState(false);
-  const [enterpriseManaged, setEnterpriseManaged] = useState(false);
+  const { policy } = useAppPolicy();
+  const cloudAsk = policy?.askBackend === "cloud";
   const initialApplied = useRef(false);
   const question = session?.currentQuestion ?? null;
   const isConsolidating = session?.phase === "consolidate" && !session.locked;
@@ -277,7 +278,6 @@ export function AskForFix({ initialText = "" }: { initialText?: string }) {
   const isInitialPrompt = !loading && !session?.messages.length;
   const showComposer = revisionMode || (!isAnswered && (!isConsolidating || customAnswer) && (question?.kind === "free_text" || customAnswer || !question));
 
-  useEffect(() => { void getBuildCapabilities().then((capabilities) => setEnterpriseManaged(capabilities.enterpriseManaged)); }, []);
 
   useEffect(() => { setCustomAnswer(false); setRevisionMode(false); setDraft(""); }, [session?.sessionId, session?.currentQuestionId, session?.phase]);
   useEffect(() => {
@@ -311,11 +311,11 @@ export function AskForFix({ initialText = "" }: { initialText?: string }) {
 
         {optimisticText && <div className="mt-7 flex justify-end"><div className="max-w-[min(78%,620px)] rounded-[16px_16px_4px_16px] bg-[#252b27] px-4 py-3 text-[15px] leading-6 text-white">{optimisticText}</div></div>}
 
-        {busy && <div className="mt-7 flex gap-3"><TurnMark current /><div><div className="inline-flex items-center gap-2 rounded-tile bg-recessed px-3 py-2 text-ui text-muted-ink"><span className="dystil-thinking-dots" aria-hidden="true"><i /><i /><i /></span><span>{enterpriseManaged ? "Clarifying your request..." : session?.phase === "present" || session?.locked ? "Building the answer" : "Looking through relevant work..."}</span></div><button type="button" onClick={() => void cancel()} className="ml-3 inline-flex items-center gap-1.5 text-ui-sm font-semibold text-marigold-text hover:underline"><Square size={10} fill="currentColor" />Stop</button></div></div>}
+        {busy && <div className="mt-7 flex gap-3"><TurnMark current /><div><div className="inline-flex items-center gap-2 rounded-tile bg-recessed px-3 py-2 text-ui text-muted-ink"><span className="dystil-thinking-dots" aria-hidden="true"><i /><i /><i /></span><span>{cloudAsk ? "Clarifying your request..." : session?.phase === "present" || session?.locked ? "Building the answer" : "Looking through relevant work..."}</span></div><button type="button" onClick={() => void cancel()} className="ml-3 inline-flex items-center gap-1.5 text-ui-sm font-semibold text-marigold-text hover:underline"><Square size={10} fill="currentColor" />Stop</button></div></div>}
 
         {!busy && question && <QuestionCard question={question} questionId={session?.currentQuestionId ?? null} questionNumber={session?.questionCount ?? 1} maxQuestions={session?.maxQuestions ?? 12} disabled={busy} onCustom={() => setCustomAnswer(true)} onSubmit={(text, event) => void submit(text, event)} />}
-        {!busy && isConsolidating && session && <UnderstandingCard understanding={session.understanding} busy={busy} enterpriseManaged={enterpriseManaged} onConfirm={(summary) => void confirm(summary)} onRefine={() => setCustomAnswer(true)} />}
-        {!busy && session?.presentation && <PresentationCard presentation={session.presentation} session={session} busy={busy} enterpriseManaged={enterpriseManaged} onKeep={() => void keepArtifact()} onRevise={() => setRevisionMode(true)} onStartWatching={() => void startWatching()} onStopWatching={() => void stopWatching()} onReviewWatch={() => void reviewWatch()} onWatchGuidance={(guidance) => void updateWatchGuidance(guidance)} />}
+        {!busy && isConsolidating && session && <UnderstandingCard understanding={session.understanding} busy={busy} cloudAsk={cloudAsk} onConfirm={(summary) => void confirm(summary)} onRefine={() => setCustomAnswer(true)} />}
+        {!busy && session?.presentation && <PresentationCard presentation={session.presentation} session={session} busy={busy} cloudAsk={cloudAsk} onKeep={() => void keepArtifact()} onRevise={() => setRevisionMode(true)} onStartWatching={() => void startWatching()} onStopWatching={() => void stopWatching()} onReviewWatch={() => void reviewWatch()} onWatchGuidance={(guidance) => void updateWatchGuidance(guidance)} />}
 
         {error && <div role="alert" className="mt-6 flex flex-wrap items-center gap-3 rounded-[12px] bg-[#f7eeeb] px-4 py-3 text-[13px] leading-5 text-[#753d33] ring-1 ring-[#e3c4bc]"><span className="min-w-0 flex-1">{error}</span>{session && <button type="button" disabled={busy} onClick={() => void retry()} className="min-h-8 rounded-[8px] bg-white px-3 font-semibold text-[#753d33] ring-1 ring-[#d8b6ad] hover:bg-[#fffaf8] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8b3f32]">Try again</button>}</div>}
       </div>

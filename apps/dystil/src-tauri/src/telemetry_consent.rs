@@ -49,7 +49,10 @@ pub fn resolve(settings: &SettingsStore, onboarding_completed: bool) -> Resoluti
     if crate::store::telemetry_disabled_by_env() {
         return Resolution::Denied;
     }
-    if cfg!(feature = "enterprise-client") {
+    if matches!(
+        crate::app_policy::current().telemetry_management,
+        crate::app_policy::Management::Organization
+    ) {
         // Organizational consent. Deliberately not gated on onboarding: managed
         // deployments have no per-user disclosure step to wait for.
         return Resolution::Granted;
@@ -111,7 +114,10 @@ mod tests {
     fn nothing_is_collected_before_onboarding_completes() {
         assert_eq!(
             resolve(&settings(true), false),
-            if cfg!(feature = "enterprise-client") {
+            if matches!(
+                crate::app_policy::current().telemetry_management,
+                crate::app_policy::Management::Organization
+            ) {
                 Resolution::Granted
             } else {
                 Resolution::WaitingForOnboarding
@@ -127,7 +133,10 @@ mod tests {
     #[test]
     fn user_can_disable_in_community_builds() {
         let resolution = resolve(&settings(false), true);
-        if cfg!(feature = "enterprise-client") {
+        if matches!(
+            crate::app_policy::current().telemetry_management,
+            crate::app_policy::Management::Organization
+        ) {
             // Organization-managed; the local setting does not apply.
             assert_eq!(resolution, Resolution::Granted);
         } else {

@@ -165,6 +165,10 @@ fn spawn(app: AppHandle) -> tauri::async_runtime::JoinHandle<()> {
 pub async fn reconcile(app: AppHandle) -> Result<(), String> {
     let settings = crate::store::SettingsStore::get(&app)?.unwrap_or_default();
     let permitted = settings.sync_consent.effective().segments
+        && matches!(
+            crate::app_policy::current().capture.sync,
+            crate::app_policy::SyncPolicy::Required
+        )
         && crate::auth::current_device_token().await?.is_some();
     let mut task = engine_task().lock().await;
     if permitted {

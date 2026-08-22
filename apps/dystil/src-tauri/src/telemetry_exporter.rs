@@ -593,10 +593,10 @@ fn resource_attributes(schema_version: u16, instance_id: &str) -> Vec<KeyValue> 
         ),
         string_attribute(
             schema::resource_attribute::EDITION,
-            if cfg!(feature = "enterprise-client") {
-                "enterprise"
-            } else {
-                "community"
+            match crate::app_policy::current().edition {
+                crate::app_policy::Edition::Community => "community",
+                crate::app_policy::Edition::Individual => "individual",
+                crate::app_policy::Edition::Enterprise => "enterprise",
             },
         ),
         string_attribute(schema::resource_attribute::OS_TYPE, std::env::consts::OS),
@@ -633,11 +633,17 @@ fn unix_nanos() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dystil_telemetry::{CaptureTriggerKind, Outcome, ReasonKind, TraceKind};
+    use dystil_telemetry::{
+        CaptureTriggerKind, ConsentDecision, Outcome, ReasonKind, TraceKind,
+        TELEMETRY_CONSENT_VERSION,
+    };
 
     #[test]
     fn encodes_only_aggregate_metrics_and_allowlisted_resource_attributes() {
         let telemetry = Telemetry::new();
+        telemetry.set_consent(ConsentDecision::Granted {
+            policy_version: TELEMETRY_CONSENT_VERSION,
+        });
         telemetry.record_capture_trigger(
             CaptureTriggerKind::Click,
             Outcome::Succeeded,
@@ -656,7 +662,20 @@ mod tests {
         let encoded = encode_metrics(snapshot.clone(), "ephemeral-instance");
         let decoded = ExportMetricsServiceRequest::decode(encoded.as_slice()).unwrap();
         let resource = &decoded.resource_metrics[0];
-        assert_eq!(resource.scope_metrics[0].metrics.len(), 2);
+        let names = resource.scope_metrics[0]
+            .metrics
+            .iter()
+            .map(|metric| metric.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            names,
+            std::collections::BTreeSet::from([
+                schema::metric::CAPTURE_TRIGGERS,
+                schema::metric::PROCESS_CPU_UTILIZATION,
+                schema::metric::PROCESS_CPU_BACKGROUND_AVERAGE,
+                schema::metric::PROCESS_CPU_BACKGROUND_MAX,
+            ])
+        );
         assert!(resource
             .resource
             .as_ref()

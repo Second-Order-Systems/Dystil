@@ -31,6 +31,7 @@ mod ai;
 mod ai_presets;
 mod ai_runtime;
 mod app_config;
+mod app_policy;
 mod ask_for_fix_commands;
 mod auth;
 mod automation_commands;
@@ -641,7 +642,10 @@ async fn main() {
     #[cfg(target_os = "macos")]
     let app = app.plugin(tauri_nspanel::init());
 
+    let app_policy_state = app_policy::AppPolicyState::new();
+    app_policy::install(app_policy_state.clone());
     let app = app.manage(recording_state)
+        .manage(app_policy_state)
         .manage(worth_fixing_commands::WorthFixingState::default())
         .manage(ask_for_fix_commands::AskForFixState::default())
         .invoke_handler(tauri_helper::tauri_collect_commands!())
@@ -655,12 +659,12 @@ async fn main() {
             let app_handle = app.handle();
             #[cfg(feature = "cloud-sync")]
             capture_state_reporter::start(app_handle.clone());
-            // Enterprise is capture + cloud Ask only.  Do not start the local
-            // inference/automation workers: their SQLite projections and AI
-            // runtime must remain inactive in that build.
-            #[cfg(not(feature = "enterprise-client"))]
-            {
+            // Hosted binaries compile local implementations for a future
+            // Individual policy, but Enterprise does not start their workers.
+            if matches!(app_policy::current().local_automation, app_policy::Availability::Enabled) {
                 automation_commands::start_manager(app_handle.clone());
+            }
+            if matches!(app_policy::current().local_worth_fixing, app_policy::Availability::Enabled) {
                 worth_fixing_engine::start(app_handle.clone());
             }
 
@@ -842,7 +846,6 @@ async fn main() {
                 let capture_active_arc = recording_state.capture_active.clone();
                 let is_starting_clone = recording_state.is_starting.clone();
                 let startup_pause_active = startup_pause_active;
-
                 std::thread::Builder::new()
                     .name("dystil-capture".to_string())
                     .spawn(move || {
@@ -896,7 +899,11 @@ async fn main() {
                             // Phase 2: Start capture unless a persisted privacy
                             // pause is active. The runtime still starts so local
                             // retrieval and settings remain available.
-                            let capture = if startup_pause_active {
+                            let policy_blocks_capture = matches!(
+                                app_policy::current().capture.availability,
+                                app_policy::Availability::Disabled
+                            );
+                            let capture = if startup_pause_active || policy_blocks_capture {
                                 None
                             } else {
                                 match capture_session::CaptureSession::start(&server, &config, true).await {
@@ -938,6 +945,15 @@ async fn main() {
                             }
                             is_starting_clone.store(false, std::sync::atomic::Ordering::SeqCst);
                             crate::recording::notify_recording_state_changed(&app_handle_clone);
+
+                            // Authentication can resolve a hosted assignment while
+                            // ServerCore is still starting. Reconcile once the server
+                            // is published so that transition can start its permitted
+                            // capture session without waiting for another profile
+                            // refresh. This is idempotent and respects timed pauses.
+                            if let Err(error) = app_policy::reconcile_runtime(&app_handle_clone).await {
+                                error!(%error, "failed to reconcile app policy after server startup");
+                            }
 
                             // Keep runtime alive as long as server exists
                             loop {

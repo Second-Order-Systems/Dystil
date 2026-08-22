@@ -6,6 +6,7 @@ import { DystilSessionProvider } from "@/components/auth/session-provider";
 import { Toaster } from "@/components/ui/toaster";
 import { DeeplinkHandler } from "@/components/deeplink-handler";
 import { SettingsProvider } from "@/lib/hooks/use-settings";
+import { AppPolicyProvider } from "@/lib/app-policy";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
@@ -21,7 +22,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
     };
   }, []);
   return (
-    <SettingsProvider>
+    <AppPolicyProvider><SettingsProvider>
       <PermissionMonitorProvider>
         {mounted ? (
           <>
@@ -31,6 +32,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
           </>
         ) : null}
       </PermissionMonitorProvider>
-    </SettingsProvider>
+    </SettingsProvider></AppPolicyProvider>
   );
 }

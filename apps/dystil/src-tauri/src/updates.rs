@@ -90,7 +90,10 @@ pub struct AppUpdateSettingsView {
 }
 
 fn effective_auto_update(app: &tauri::AppHandle) -> Result<bool, String> {
-    if cfg!(feature = "enterprise-client") {
+    if matches!(
+        crate::app_policy::current().update_management,
+        crate::app_policy::Management::Organization
+    ) {
         return Ok(true);
     }
     Ok(SettingsStore::get(app)?.unwrap_or_default().auto_update)
@@ -471,12 +474,14 @@ pub fn set_app_auto_update(
     app: tauri::AppHandle,
     enabled: bool,
 ) -> Result<AppUpdateSettingsView, String> {
+    if matches!(
+        crate::app_policy::current().update_management,
+        crate::app_policy::Management::Organization
+    ) {
+        return Err("Automatic updates are managed by your organization.".to_string());
+    }
     let mut settings = SettingsStore::get(&app)?.unwrap_or_default();
-    settings.auto_update = if cfg!(feature = "enterprise-client") {
-        true
-    } else {
-        enabled
-    };
+    settings.auto_update = enabled;
     settings.save(&app)?;
 
     #[cfg(all(
@@ -510,6 +515,12 @@ pub fn set_app_auto_update(
 #[tauri::command]
 #[specta::specta]
 pub async fn install_app_update(app: tauri::AppHandle) -> Result<(), String> {
+    if matches!(
+        crate::app_policy::current().manual_update,
+        crate::app_policy::Availability::Disabled
+    ) {
+        return Err("Manual updates are unavailable in this edition.".to_string());
+    }
     #[cfg(all(target_os = "windows", feature = "windows-store"))]
     {
         return check_for_store_updates(&app, true).await;

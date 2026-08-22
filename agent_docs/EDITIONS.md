@@ -1,18 +1,19 @@
 ---
 status: verified
 authority: ground-truth
-verified_against: e84d34c
-verified_on: 2026-08-08
+verified_against: working-tree
+verified_on: 2026-08-21
 ---
 
-> **Verified** against `e84d34c`. Claims cite a path plus a symbol name or verbatim
+> **Verified** against the working tree on 2026-08-21. Claims cite a path plus a symbol name or verbatim
 > quote. If a citation no longer resolves, this document is wrong.
 
 # Editions
 
-Editions are **Cargo features resolved at build time**, not runtime configuration.
-This is a deliberate structural choice: a community binary does not contain the
-disabled code paths or the endpoints they would call.
+`AppPolicy` is the source of product behavior. Edition selection is still build
+derived in this phase: Community for the default binary and Enterprise for
+`enterprise-client`; Individual is defined for the later authenticated hosted flow
+but is not selectable yet. Citation: `src-tauri/src/app_policy.rs :: current()`.
 
 ## The feature
 
@@ -30,10 +31,10 @@ passes `cargo_features: enterprise-client` and `publish_mode: enterprise`.
 
 | Behaviour | Where |
 |---|---|
-| Capture policy | `src-tauri/src/capture_policy.rs` — `cfg!(feature = "enterprise-client")` |
-| `enterprise_managed` capability flag | `src-tauri/src/build_capabilities.rs` |
-| Screenshot and segment capture defaults | `src-tauri/src/store.rs`, asserted in its tests as `cfg!(feature = "enterprise-client")` |
-| Consent requirements | `src-tauri/src/commands.rs` — enterprise builds require `consent.segments` and `consent.screenshots` |
+| Product behavior | `src-tauri/src/app_policy.rs :: AppPolicy` |
+| Capture policy | `src-tauri/src/capture_policy.rs :: product_capture_mode()` |
+| Screenshot and segment capture defaults | `src-tauri/src/store.rs :: SyncConsent::effective()` |
+| Consent requirements | `src-tauri/src/commands.rs :: set_sync_consent()` |
 
 ## Telemetry is not gated by this feature
 
@@ -74,10 +75,10 @@ off.
 
 | | Community (open source) | Enterprise |
 |---|---|---|
-| Core loop, fully local | yes | yes |
+| Local Worth Fixing / automation / Ready to use | yes | disabled |
 | Captured content transmitted | never | never |
 | Cloud endpoint compiled in | no | yes (`cloud-sync`) |
 | Telemetry endpoint in official builds | yes, disableable | yes, org-managed |
 | Telemetry in source builds | only if you set `DYSTIL_TELEMETRY_ENDPOINT` | same |
-| Screenshot + segment capture | off | available, consent-gated |
+| Screenshot + segment capture | user choice / consent | organization enabled / required |
 | Signed official builds | build it yourself | yes (`official-build`) |

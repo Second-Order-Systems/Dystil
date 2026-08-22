@@ -2,8 +2,10 @@ use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use tauri::{AppHandle, Manager};
 
 use crate::app_config::cloud_base_url as configured_cloud_base_url;
+use crate::app_policy::{AssignmentSource, EditionAssignment};
 
 const SECRET_KEY: &str = "auth:dystil:state";
 
@@ -52,6 +54,24 @@ struct AuthRecord {
     user: Option<DystilUserProfile>,
     device_token: Option<String>,
     pending_onboarding_sync: Option<PendingOnboardingSync>,
+    cached_edition_assignment: Option<CachedEditionAssignment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedEditionAssignment {
+    user_id: String,
+    assignment: EditionAssignment,
+    verified_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MeIdentity {
+    user_id: String,
+    email: Option<String>,
+    display_name: Option<String>,
+    org: Option<Value>,
+    #[serde(rename = "appPolicyAssignment")]
+    app_policy_assignment: EditionAssignment,
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,7 +168,10 @@ fn parse_user_org(value: &Value) -> Option<DystilUserOrg> {
     })
 }
 
-async fn store_session_token(token: String) -> Result<DystilAuthState, String> {
+async fn store_session_token(
+    app_handle: AppHandle,
+    token: String,
+) -> Result<DystilAuthState, String> {
     tracing::info!(
         token_length = token.len(),
         "[auth-flow][native] storing session token"
@@ -162,7 +185,7 @@ async fn store_session_token(token: String) -> Result<DystilAuthState, String> {
     tracing::info!("[auth-flow][native] session token persisted");
     // Bootstrap is best-effort during initial sign-in;
     // the frontend calls auth_fetch_profile separately after login.
-    match bootstrap_from_cloud().await {
+    match bootstrap_from_cloud(Some(&app_handle)).await {
         Ok(state) => {
             tracing::info!(
                 status = %state.status,
@@ -179,7 +202,7 @@ async fn store_session_token(token: String) -> Result<DystilAuthState, String> {
     }
 }
 
-async fn bootstrap_from_cloud() -> Result<DystilAuthState, String> {
+async fn bootstrap_from_cloud(app_handle: Option<&AppHandle>) -> Result<DystilAuthState, String> {
     tracing::info!("[auth-flow][native] bootstrap_from_cloud started");
     let mut record = read_record().await?;
     let session_token = record
@@ -194,12 +217,21 @@ async fn bootstrap_from_cloud() -> Result<DystilAuthState, String> {
         .map_err(|e| format!("failed to build http client: {e}"))?;
 
     let cloud_base = cloud_base_url()?;
-    let me = client
+    let me = match client
         .get(format!("{cloud_base}/me"))
         .header(AUTHORIZATION, format!("Bearer {}", session_token))
         .send()
         .await
-        .map_err(|e| format!("cloud /me request failed: {e}"))?;
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return use_cached_assignment(
+                &record,
+                app_handle,
+                format!("cloud /me request failed: {error}"),
+            )
+        }
+    };
 
     tracing::info!(
         status = %me.status(),
@@ -207,9 +239,15 @@ async fn bootstrap_from_cloud() -> Result<DystilAuthState, String> {
     );
 
     if me.status().as_u16() == 401 {
+        if let Some(app) = app_handle {
+            // Do not leave capture or a policy-owned worker running while the
+            // revoked session is being cleared from the native credential store.
+            stop_hosted_work(app).await;
+        }
         record.session = None;
         record.user = None;
         record.device_token = None;
+        record.cached_edition_assignment = None;
         write_record(&record).await?;
         tracing::warn!("[auth-flow][native] cloud /me returned 401; session cleared");
         return Ok(DystilAuthState {
@@ -223,32 +261,54 @@ async fn bootstrap_from_cloud() -> Result<DystilAuthState, String> {
 
     if !me.status().is_success() {
         let status = me.status();
-        let body = me.text().await.unwrap_or_default();
-        return Err(format!("cloud /me returned {}: {}", status, body));
+        if status.is_server_error() {
+            return use_cached_assignment(
+                &record,
+                app_handle,
+                format!("cloud /me returned {status}"),
+            );
+        }
+        return policy_load_error(app_handle, format!("cloud /me returned {status}"));
     }
 
-    let identity: serde_json::Value = me
-        .json()
-        .await
-        .map_err(|e| format!("cloud /me payload invalid: {e}"))?;
+    let identity: MeIdentity = match me.json().await {
+        Ok(identity) => identity,
+        Err(error) => {
+            return use_cached_assignment(
+                &record,
+                app_handle,
+                format!("cloud /me payload invalid: {error}"),
+            )
+        }
+    };
+
+    if let Err(error) = apply_assignment(
+        app_handle,
+        identity.app_policy_assignment.clone(),
+        AssignmentSource::Fresh,
+    ) {
+        return use_cached_assignment(&record, app_handle, error);
+    }
 
     record.user = Some(DystilUserProfile {
-        id: identity
-            .get("user_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        email: identity
-            .get("email")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        name: identity
-            .get("display_name")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+        id: identity.user_id.clone(),
+        email: identity.email,
+        name: identity.display_name,
         image: None,
-        org: identity.get("org").and_then(parse_user_org),
+        org: identity.org.as_ref().and_then(parse_user_org),
     });
+    record.cached_edition_assignment = Some(CachedEditionAssignment {
+        user_id: identity.user_id,
+        assignment: identity.app_policy_assignment,
+        verified_at: chrono::Utc::now().to_rfc3339(),
+    });
+
+    // Apply the complete policy before registering the device. This starts or
+    // stops only the local policy-owned work; capture is deferred harmlessly
+    // while ServerCore is still starting and reconciled again once it is ready.
+    if let Some(app) = app_handle {
+        crate::app_policy::reconcile_runtime(app).await?;
+    }
 
     if record.device_token.is_none() {
         tracing::info!("[auth-flow][native] device token missing; registering device");
@@ -298,6 +358,73 @@ async fn bootstrap_from_cloud() -> Result<DystilAuthState, String> {
     );
 
     Ok(auth_state_from_record(&record))
+}
+
+fn apply_assignment(
+    app_handle: Option<&AppHandle>,
+    assignment: EditionAssignment,
+    source: AssignmentSource,
+) -> Result<(), String> {
+    if let Some(app) = app_handle {
+        let _ = app;
+        crate::app_policy::apply_assignment(assignment, source)
+    } else {
+        crate::app_policy::state()
+            .ok_or_else(|| "app policy state is unavailable".to_string())?
+            .resolve(assignment, source)
+    }
+}
+
+fn use_cached_assignment(
+    record: &AuthRecord,
+    app_handle: Option<&AppHandle>,
+    failure: String,
+) -> Result<DystilAuthState, String> {
+    let user_id = record
+        .user
+        .as_ref()
+        .map(|user| user.id.as_str())
+        .filter(|id| !id.is_empty());
+    let cached = record
+        .cached_edition_assignment
+        .as_ref()
+        .filter(|cached| Some(cached.user_id.as_str()) == user_id);
+    if let Some(cached) = cached {
+        tracing::warn!("using same-user cached app policy after /me failure: {failure}");
+        apply_assignment(
+            app_handle,
+            cached.assignment.clone(),
+            AssignmentSource::Cached,
+        )?;
+        return Ok(auth_state_from_record(record));
+    }
+    crate::app_policy::mark_error();
+    if let Some(app) = app_handle {
+        let _ = crate::app_policy::publish_snapshot(app);
+    }
+    Err(failure)
+}
+
+fn policy_load_error(
+    app_handle: Option<&AppHandle>,
+    failure: String,
+) -> Result<DystilAuthState, String> {
+    crate::app_policy::mark_error();
+    if let Some(app) = app_handle {
+        let _ = crate::app_policy::publish_snapshot(app);
+    }
+    Err(failure)
+}
+
+async fn stop_hosted_work(app_handle: &AppHandle) {
+    #[cfg(feature = "enterprise-client")]
+    if let Some(recording) = app_handle.try_state::<crate::recording::RecordingState>() {
+        let _ = crate::recording::stop_capture(recording, app_handle.clone()).await;
+    }
+    crate::app_policy::clear_hosted();
+    if let Err(error) = crate::app_policy::reconcile_and_publish(app_handle).await {
+        tracing::warn!(%error, "failed to reconcile policy runtime while signing out");
+    }
 }
 
 async fn put_onboarding_data(
@@ -468,7 +595,7 @@ pub(crate) async fn clear_and_re_register_device_token() -> Result<bool, String>
     let mut record = read_record().await?;
     record.device_token = None;
     write_record(&record).await?;
-    match bootstrap_from_cloud().await {
+    match bootstrap_from_cloud(None).await {
         Ok(state) => Ok(state.device_token_present),
         Err(e) => {
             tracing::warn!("device token re-registration failed: {e}");
@@ -503,7 +630,8 @@ pub async fn auth_store_session(
     token: String,
 ) -> Result<DystilAuthState, String> {
     tracing::info!("[auth-flow][native] auth_store_session command invoked");
-    let state = store_session_token(token).await?;
+    let state = store_session_token(app_handle.clone(), token).await?;
+    crate::app_policy::reconcile_and_publish(&app_handle).await?;
     #[cfg(feature = "cloud-sync")]
     {
         if let Err(error) = crate::work_insights_engine::reconcile(app_handle).await {
@@ -519,9 +647,14 @@ pub async fn auth_store_session(
 #[tauri::command]
 #[specta::specta]
 pub async fn auth_clear_session(app_handle: tauri::AppHandle) -> Result<DystilAuthState, String> {
+    // Sign-out must stop capture and policy-owned work before credentials and
+    // assignment state are cleared.
+    stop_hosted_work(&app_handle).await;
     let mut record = read_record().await?;
     record.session = None;
     record.user = None;
+    record.device_token = None;
+    record.cached_edition_assignment = None;
     record.pending_onboarding_sync = None;
     write_record(&record).await?;
     let state = auth_state_from_record(&record);
@@ -556,7 +689,8 @@ pub async fn auth_clear_device_token(
 #[specta::specta]
 pub async fn auth_fetch_profile(app_handle: tauri::AppHandle) -> Result<DystilAuthState, String> {
     tracing::info!("[auth-flow][native] auth_fetch_profile command invoked");
-    let state = bootstrap_from_cloud().await?;
+    let state = bootstrap_from_cloud(Some(&app_handle)).await?;
+    crate::app_policy::reconcile_and_publish(&app_handle).await?;
     #[cfg(feature = "cloud-sync")]
     {
         if let Err(error) = crate::work_insights_engine::reconcile(app_handle).await {
@@ -572,7 +706,8 @@ pub async fn auth_fetch_profile(app_handle: tauri::AppHandle) -> Result<DystilAu
 #[tauri::command]
 #[specta::specta]
 pub async fn auth_register_device(app_handle: tauri::AppHandle) -> Result<DystilAuthState, String> {
-    let state = bootstrap_from_cloud().await?;
+    let state = bootstrap_from_cloud(Some(&app_handle)).await?;
+    crate::app_policy::reconcile_and_publish(&app_handle).await?;
     #[cfg(feature = "cloud-sync")]
     {
         if let Err(error) = crate::work_insights_engine::reconcile(app_handle).await {
@@ -588,6 +723,7 @@ pub async fn auth_register_device(app_handle: tauri::AppHandle) -> Result<Dystil
 #[tauri::command]
 #[specta::specta]
 pub async fn auth_sign_out(app_handle: tauri::AppHandle) -> Result<DystilAuthState, String> {
+    stop_hosted_work(&app_handle).await;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
@@ -641,6 +777,7 @@ mod tests {
             }),
             device_token: Some("device".to_string()),
             pending_onboarding_sync: None,
+            cached_edition_assignment: None,
         };
         let state = auth_state_from_record(&record);
         assert_eq!(state.status, "ready");

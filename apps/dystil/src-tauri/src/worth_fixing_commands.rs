@@ -46,57 +46,55 @@ pub struct WorthFixingState {
 
 impl WorthFixingState {
     pub(crate) async fn pool(&self, app: &AppHandle) -> Result<&SqlitePool, String> {
-        #[cfg(feature = "enterprise-client")]
-        {
+        if matches!(
+            crate::app_policy::current().local_worth_fixing,
+            crate::app_policy::Availability::Disabled
+        ) {
             let _ = (self, app);
             return Err("Local Worth Fixing is disabled in this enterprise build.".to_string());
         }
-        #[cfg(not(feature = "enterprise-client"))]
-        {
-            self.pool
-                .get_or_try_init(|| async {
-                    let data_dir =
-                        crate::log_files::get_data_dir(app).map_err(|error| error.to_string())?;
-                    let path = data_dir.join("worth-fixing.sqlite");
-                    let pool = open_insights_database(&path)
-                        .await
-                        .map_err(|error| error.to_string())?;
-                    interrupt_abandoned_skill_bundle_builds(&pool)
-                        .await
-                        .map_err(|error| error.to_string())?;
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        if path.exists() {
-                            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-                                .map_err(|error| error.to_string())?;
-                        }
+        self.pool
+            .get_or_try_init(|| async {
+                let data_dir =
+                    crate::log_files::get_data_dir(app).map_err(|error| error.to_string())?;
+                let path = data_dir.join("worth-fixing.sqlite");
+                let pool = open_insights_database(&path)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                interrupt_abandoned_skill_bundle_builds(&pool)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if path.exists() {
+                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                            .map_err(|error| error.to_string())?;
                     }
-                    Ok(pool)
-                })
-                .await
-        }
+                }
+                Ok(pool)
+            })
+            .await
     }
 }
 
 pub(crate) async fn provider_ready(state: &crate::recording::RecordingState) -> bool {
-    #[cfg(feature = "enterprise-client")]
-    {
+    if matches!(
+        crate::app_policy::current().local_ai,
+        crate::app_policy::Availability::Disabled
+    ) {
         let _ = state;
         return false;
     }
-    #[cfg(not(feature = "enterprise-client"))]
-    {
-        let server = state.server.lock().await;
-        let Some(server) = server.as_ref() else {
-            return false;
-        };
-        crate::ai_presets::active(&server.db.pool)
-            .await
-            .ok()
-            .flatten()
-            .is_some()
-    }
+    let server = state.server.lock().await;
+    let Some(server) = server.as_ref() else {
+        return false;
+    };
+    crate::ai_presets::active(&server.db.pool)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 #[derive(Debug, Clone, Serialize, specta::Type)]

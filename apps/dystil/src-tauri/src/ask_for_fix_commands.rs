@@ -16,6 +16,23 @@ use tokio::sync::{oneshot, Mutex};
 
 use crate::{recording::RecordingState, worth_fixing_commands::WorthFixingState};
 
+/// Route Ask commands to the cloud only when the selected product policy
+/// requires it. The cloud implementation itself remains absent from Community
+/// binaries; this is the single policy/code-availability boundary for Ask.
+macro_rules! route_cloud_ask {
+    ($request:expr) => {
+        if matches!(
+            crate::app_policy::current().ask_backend,
+            crate::app_policy::AskBackend::Cloud
+        ) {
+            #[cfg(feature = "enterprise-client")]
+            return $request.await;
+            #[cfg(not(feature = "enterprise-client"))]
+            return Err("Cloud Ask is unavailable in this build.".to_string());
+        }
+    };
+}
+
 #[derive(Default)]
 pub struct AskForFixState {
     inflight: Mutex<HashMap<String, oneshot::Sender<()>>>,
@@ -98,26 +115,19 @@ pub async fn ask_for_fix_latest(
     app: AppHandle,
     state: State<'_, WorthFixingState>,
 ) -> Result<Option<AskSessionView>, String> {
-    #[cfg(feature = "enterprise-client")]
-    {
-        let _ = (app, state);
-        return crate::enterprise_ask::latest().await;
-    }
-    #[cfg(not(feature = "enterprise-client"))]
-    {
-        let pool = state.pool(&app).await?;
-        let latest = latest_ask_for_fix_session(pool)
-            .await
-            .map_err(|error| error.to_string())?;
-        match latest {
-            Some(session) if session.status == "working" => {
-                recover_interrupted_ask_for_fix_turn(pool, &session.session_id)
-                    .await
-                    .map(Some)
-                    .map_err(|error| error.to_string())
-            }
-            other => Ok(other),
+    route_cloud_ask!(crate::enterprise_ask::latest());
+    let pool = state.pool(&app).await?;
+    let latest = latest_ask_for_fix_session(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    match latest {
+        Some(session) if session.status == "working" => {
+            recover_interrupted_ask_for_fix_turn(pool, &session.session_id)
+                .await
+                .map(Some)
+                .map_err(|error| error.to_string())
         }
+        other => Ok(other),
     }
 }
 
@@ -128,17 +138,10 @@ pub async fn ask_for_fix_get(
     state: State<'_, WorthFixingState>,
     session_id: String,
 ) -> Result<AskSessionView, String> {
-    #[cfg(feature = "enterprise-client")]
-    {
-        let _ = (app, state);
-        return crate::enterprise_ask::get(&session_id).await;
-    }
-    #[cfg(not(feature = "enterprise-client"))]
-    {
-        get_ask_for_fix_session(state.pool(&app).await?, &session_id)
-            .await
-            .map_err(|error| error.to_string())
-    }
+    route_cloud_ask!(crate::enterprise_ask::get(&session_id));
+    get_ask_for_fix_session(state.pool(&app).await?, &session_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -147,17 +150,10 @@ pub async fn ask_for_fix_create(
     app: AppHandle,
     state: State<'_, WorthFixingState>,
 ) -> Result<AskSessionView, String> {
-    #[cfg(feature = "enterprise-client")]
-    {
-        let _ = (app, state);
-        return crate::enterprise_ask::create().await;
-    }
-    #[cfg(not(feature = "enterprise-client"))]
-    {
-        create_ask_for_fix_session(state.pool(&app).await?)
-            .await
-            .map_err(|error| error.to_string())
-    }
+    route_cloud_ask!(crate::enterprise_ask::create());
+    create_ask_for_fix_session(state.pool(&app).await?)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -170,34 +166,27 @@ pub async fn ask_for_fix_submit(
     session_id: String,
     turn: AskUserTurn,
 ) -> Result<AskSessionView, String> {
-    #[cfg(feature = "enterprise-client")]
-    {
-        let _ = (app, ask_state, insights, recording);
-        return crate::enterprise_ask::submit(&session_id, turn).await;
-    }
-    #[cfg(not(feature = "enterprise-client"))]
-    {
-        let pool = insights.pool(&app).await?;
-        let session_for_run = session_id.clone();
-        run_cancellable(pool, &ask_state, &session_id, async move {
-            let current = get_ask_for_fix_session(pool, &session_for_run).await?;
-            if current.status == "working" {
-                recover_interrupted_ask_for_fix_turn(pool, &session_for_run).await?;
+    route_cloud_ask!(crate::enterprise_ask::submit(&session_id, turn));
+    let pool = insights.pool(&app).await?;
+    let session_for_run = session_id.clone();
+    run_cancellable(pool, &ask_state, &session_id, async move {
+        let current = get_ask_for_fix_session(pool, &session_for_run).await?;
+        if current.status == "working" {
+            recover_interrupted_ask_for_fix_turn(pool, &session_for_run).await?;
+        }
+        let event: AskInputEvent = turn.event.clone();
+        stage_ask_for_fix_turn(pool, &session_for_run, turn).await?;
+        let runtime = match runtime(&app, &recording).await {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                return record_runtime_error(pool, &session_for_run, &error)
+                    .await
+                    .map_err(dystil_insights::AskForFixError::InvalidState)
             }
-            let event: AskInputEvent = turn.event.clone();
-            stage_ask_for_fix_turn(pool, &session_for_run, turn).await?;
-            let runtime = match runtime(&app, &recording).await {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    return record_runtime_error(pool, &session_for_run, &error)
-                        .await
-                        .map_err(dystil_insights::AskForFixError::InvalidState);
-                }
-            };
-            run_staged_ask_for_fix(pool, runtime.as_ref(), &session_for_run, Some(event)).await
-        })
-        .await
-    }
+        };
+        run_staged_ask_for_fix(pool, runtime.as_ref(), &session_for_run, Some(event)).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -210,30 +199,23 @@ pub async fn ask_for_fix_confirm(
     session_id: String,
     summary: Option<String>,
 ) -> Result<AskSessionView, String> {
-    #[cfg(feature = "enterprise-client")]
-    {
-        let _ = (app, ask_state, insights, recording);
-        return crate::enterprise_ask::finalize(&session_id, summary).await;
-    }
-    #[cfg(not(feature = "enterprise-client"))]
-    {
-        let _ = summary;
-        let pool = insights.pool(&app).await?;
-        let session_for_run = session_id.clone();
-        run_cancellable(pool, &ask_state, &session_id, async move {
-            lock_ask_for_fix(pool, &session_for_run).await?;
-            let runtime = match runtime(&app, &recording).await {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    return record_runtime_error(pool, &session_for_run, &error)
-                        .await
-                        .map_err(dystil_insights::AskForFixError::InvalidState);
-                }
-            };
-            run_locked_ask_for_fix(pool, runtime.as_ref(), &session_for_run).await
-        })
-        .await
-    }
+    route_cloud_ask!(crate::enterprise_ask::finalize(&session_id, summary));
+    let _ = summary;
+    let pool = insights.pool(&app).await?;
+    let session_for_run = session_id.clone();
+    run_cancellable(pool, &ask_state, &session_id, async move {
+        lock_ask_for_fix(pool, &session_for_run).await?;
+        let runtime = match runtime(&app, &recording).await {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                return record_runtime_error(pool, &session_for_run, &error)
+                    .await
+                    .map_err(dystil_insights::AskForFixError::InvalidState);
+            }
+        };
+        run_locked_ask_for_fix(pool, runtime.as_ref(), &session_for_run).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -245,28 +227,21 @@ pub async fn ask_for_fix_retry(
     recording: State<'_, RecordingState>,
     session_id: String,
 ) -> Result<AskSessionView, String> {
-    #[cfg(feature = "enterprise-client")]
-    {
-        let _ = (app, ask_state, insights, recording);
-        return crate::enterprise_ask::get(&session_id).await;
-    }
-    #[cfg(not(feature = "enterprise-client"))]
-    {
-        let pool = insights.pool(&app).await?;
-        let session_for_run = session_id.clone();
-        run_cancellable(pool, &ask_state, &session_id, async move {
-            let runtime = match runtime(&app, &recording).await {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    return record_runtime_error(pool, &session_for_run, &error)
-                        .await
-                        .map_err(dystil_insights::AskForFixError::InvalidState);
-                }
-            };
-            retry_ask_for_fix(pool, runtime.as_ref(), &session_for_run).await
-        })
-        .await
-    }
+    route_cloud_ask!(crate::enterprise_ask::get(&session_id));
+    let pool = insights.pool(&app).await?;
+    let session_for_run = session_id.clone();
+    run_cancellable(pool, &ask_state, &session_id, async move {
+        let runtime = match runtime(&app, &recording).await {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                return record_runtime_error(pool, &session_for_run, &error)
+                    .await
+                    .map_err(dystil_insights::AskForFixError::InvalidState);
+            }
+        };
+        retry_ask_for_fix(pool, runtime.as_ref(), &session_for_run).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -277,20 +252,13 @@ pub async fn ask_for_fix_cancel(
     insights: State<'_, WorthFixingState>,
     session_id: String,
 ) -> Result<AskSessionView, String> {
-    #[cfg(feature = "enterprise-client")]
-    {
-        let _ = (app, ask_state, insights);
-        return crate::enterprise_ask::get(&session_id).await;
+    route_cloud_ask!(crate::enterprise_ask::get(&session_id));
+    if let Some(sender) = ask_state.inflight.lock().await.remove(&session_id) {
+        let _ = sender.send(());
     }
-    #[cfg(not(feature = "enterprise-client"))]
-    {
-        if let Some(sender) = ask_state.inflight.lock().await.remove(&session_id) {
-            let _ = sender.send(());
-        }
-        cancel_turn(insights.pool(&app).await?, &session_id)
-            .await
-            .map_err(|error| error.to_string())
-    }
+    cancel_turn(insights.pool(&app).await?, &session_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -300,20 +268,18 @@ pub async fn ask_for_fix_keep_artifact(
     state: State<'_, WorthFixingState>,
     session_id: String,
 ) -> Result<String, String> {
-    #[cfg(feature = "enterprise-client")]
-    {
-        let _ = (app, state, session_id);
+    if matches!(
+        crate::app_policy::current().ask_backend,
+        crate::app_policy::AskBackend::Cloud
+    ) {
         return Err(
             "Enterprise Ask requests are saved to cloud; they do not create local artifacts."
                 .to_string(),
         );
     }
-    #[cfg(not(feature = "enterprise-client"))]
-    {
-        keep_ask_for_fix_artifact(state.pool(&app).await?, &session_id)
-            .await
-            .map_err(|error| error.to_string())
-    }
+    keep_ask_for_fix_artifact(state.pool(&app).await?, &session_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -323,19 +289,17 @@ pub async fn ask_for_fix_start_watching(
     state: State<'_, WorthFixingState>,
     session_id: String,
 ) -> Result<AskSessionView, String> {
-    #[cfg(feature = "enterprise-client")]
-    {
-        let _ = (app, state, session_id);
+    if matches!(
+        crate::app_policy::current().ask_backend,
+        crate::app_policy::AskBackend::Cloud
+    ) {
         return Err(
             "Enterprise Ask creates its cloud watch when you confirm the summary.".to_string(),
         );
     }
-    #[cfg(not(feature = "enterprise-client"))]
-    {
-        start_ask_for_fix_watch(state.pool(&app).await?, &session_id)
-            .await
-            .map_err(|error| error.to_string())
-    }
+    start_ask_for_fix_watch(state.pool(&app).await?, &session_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -345,17 +309,15 @@ pub async fn ask_for_fix_stop_watching(
     state: State<'_, WorthFixingState>,
     session_id: String,
 ) -> Result<AskSessionView, String> {
-    #[cfg(feature = "enterprise-client")]
-    {
-        let _ = (app, state, session_id);
+    if matches!(
+        crate::app_policy::current().ask_backend,
+        crate::app_policy::AskBackend::Cloud
+    ) {
         return Err("Enterprise Ask requests are managed in Dystil Cloud.".to_string());
     }
-    #[cfg(not(feature = "enterprise-client"))]
-    {
-        stop_ask_for_fix_watch(state.pool(&app).await?, &session_id)
-            .await
-            .map_err(|error| error.to_string())
-    }
+    stop_ask_for_fix_watch(state.pool(&app).await?, &session_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -367,28 +329,26 @@ pub async fn ask_for_fix_review_watch(
     recording: State<'_, RecordingState>,
     session_id: String,
 ) -> Result<AskSessionView, String> {
-    #[cfg(feature = "enterprise-client")]
-    {
-        let _ = (app, ask_state, insights, recording, session_id);
+    if matches!(
+        crate::app_policy::current().ask_backend,
+        crate::app_policy::AskBackend::Cloud
+    ) {
         return Err("Enterprise Ask does not review local watches.".to_string());
     }
-    #[cfg(not(feature = "enterprise-client"))]
-    {
-        let pool = insights.pool(&app).await?;
-        let session_for_run = session_id.clone();
-        run_cancellable(pool, &ask_state, &session_id, async move {
-            let runtime = match runtime(&app, &recording).await {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    return record_runtime_error(pool, &session_for_run, &error)
-                        .await
-                        .map_err(dystil_insights::AskForFixError::InvalidState);
-                }
-            };
-            review_ask_for_fix_watch(pool, runtime.as_ref(), &session_for_run).await
-        })
-        .await
-    }
+    let pool = insights.pool(&app).await?;
+    let session_for_run = session_id.clone();
+    run_cancellable(pool, &ask_state, &session_id, async move {
+        let runtime = match runtime(&app, &recording).await {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                return record_runtime_error(pool, &session_for_run, &error)
+                    .await
+                    .map_err(dystil_insights::AskForFixError::InvalidState);
+            }
+        };
+        review_ask_for_fix_watch(pool, runtime.as_ref(), &session_for_run).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -399,15 +359,13 @@ pub async fn ask_for_fix_update_watch_guidance(
     session_id: String,
     guidance: String,
 ) -> Result<AskSessionView, String> {
-    #[cfg(feature = "enterprise-client")]
-    {
-        let _ = (app, state, session_id, guidance);
+    if matches!(
+        crate::app_policy::current().ask_backend,
+        crate::app_policy::AskBackend::Cloud
+    ) {
         return Err("Enterprise Ask does not use local watch guidance.".to_string());
     }
-    #[cfg(not(feature = "enterprise-client"))]
-    {
-        update_ask_for_fix_watch_guidance(state.pool(&app).await?, &session_id, &guidance)
-            .await
-            .map_err(|error| error.to_string())
-    }
+    update_ask_for_fix_watch_guidance(state.pool(&app).await?, &session_id, &guidance)
+        .await
+        .map_err(|error| error.to_string())
 }

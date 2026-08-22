@@ -1,11 +1,11 @@
 ---
 status: verified
 authority: ground-truth
-verified_against: e84d34c
-verified_on: 2026-08-08
+verified_against: working-tree
+verified_on: 2026-08-21
 ---
 
-> **Verified** against `e84d34c`. Claims cite a path plus a symbol name or verbatim
+> **Verified** against the working tree on 2026-08-21. Claims cite a path plus a symbol name or verbatim
 > quote. If a citation no longer resolves, this document is wrong.
 
 # Privacy and telemetry
@@ -56,7 +56,8 @@ precedence order:
 
 1. `DYSTIL_TELEMETRY=0` — wins over everything, including enterprise
    (`store.rs :: telemetry_disabled_by_env`)
-2. `enterprise-client` — organization-managed, forced on, no prompt or UI
+2. `AppPolicy.telemetry_management == Organization` — organization-managed,
+   forced on, no prompt or UI (`app_policy.rs :: AppPolicy`)
 3. Onboarding incomplete — withheld, so the in-app disclosure is always seen first
 4. Otherwise the user's setting, `SettingsStore::telemetry_enabled`, default `true`
 
@@ -92,9 +93,9 @@ and:
 Transport must be HTTPS outside a debug localhost build (`app_config.rs`).
 
 Enterprise builds show **no telemetry UI at all** — no toggle, no disclosure card,
-no prompt. Consent is organizational, agreed by an administrator. The UI hides on
-`BuildCapabilities.enterpriseManaged`, and `set_telemetry_enabled` rejects attempts
-to disable, mirroring `set_sync_consent`.
+no prompt. Consent is organizational, agreed by an administrator. The UI derives
+visibility from `lib/app-policy.tsx :: useAppPolicy`, and
+`commands.rs :: set_telemetry_enabled` rejects attempts to disable.
 
 ## Payload contract
 
@@ -103,7 +104,10 @@ Every exported attribute is a bounded enum or a number. There is no free-text fi
 `schema.rs :: registry_has_no_known_sensitive_attribute_keys` fails the build if a
 sensitive key is introduced.
 
-The `dystil.product.events` counter records only three fixed action values:
+The `dystil.product.events` counter records only fixed action values, including
+`app_policy_load_failed`; this is a count only, never an error message or browser
+data. Citation: `aggregate.rs :: ProductEventKind` and
+`app_policy.rs :: record_app_policy_load_failed`. Other action values are:
 `worth_fixing_finding_shown`, `skill_build_requested`, and
 `skill_install_requested`. Its source is `schema.rs :: metric::PRODUCT_EVENTS`,
 the aggregate values are `aggregate.rs :: ProductEventKind`, and

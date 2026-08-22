@@ -16,6 +16,7 @@ use dystil_insights::{
     WakeState,
 };
 use sqlx::{Row, SqlitePool};
+use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Manager};
 use tracing::{info, warn};
 
@@ -26,16 +27,45 @@ const SOURCE_NAMESPACE: &str = "local-capture";
 const LOOK_AHEAD_PER_SOURCE: i64 = 200;
 const MERGED_BATCH_LIMIT: usize = 200;
 
+fn engine_task() -> &'static Mutex<Option<tokio::sync::watch::Sender<()>>> {
+    static TASK: OnceLock<Mutex<Option<tokio::sync::watch::Sender<()>>>> = OnceLock::new();
+    TASK.get_or_init(|| Mutex::new(None))
+}
+
 pub(crate) fn start(app: AppHandle) {
+    let mut task = engine_task()
+        .lock()
+        .expect("worth fixing engine lock poisoned");
+    if task.is_some() {
+        return;
+    }
+    let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(());
+    *task = Some(stop_tx);
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}
+            _ = stop_rx.changed() => return,
+        }
         loop {
             if let Err(error) = tick(&app).await {
                 warn!(%error, "Worth Fixing background tick postponed");
             }
-            tokio::time::sleep(std::time::Duration::from_secs(15 * 60)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(15 * 60)) => {}
+                _ = stop_rx.changed() => break,
+            }
         }
     });
+}
+
+pub(crate) fn stop() {
+    if let Some(stop) = engine_task()
+        .lock()
+        .expect("worth fixing engine lock poisoned")
+        .take()
+    {
+        let _ = stop.send(());
+    }
 }
 
 fn admission_rules(app: &AppHandle) -> CaptureAdmissionRules {

@@ -18,6 +18,12 @@ const UI_NOTIFICATIONS_DISABLED: bool = true;
 /// than silently swallow pipe alerts when the store hiccups. Mirrors
 /// `display_changes_enabled` in `monitor_events.rs`.
 fn pipe_notifications_enabled(app: &AppHandle) -> bool {
+    if matches!(
+        crate::app_policy::current().notifications.preferences,
+        crate::app_policy::PreferenceControl::Fixed
+    ) {
+        return true;
+    }
     let settings = match SettingsStore::get(app) {
         Ok(Some(s)) => s,
         _ => return true,

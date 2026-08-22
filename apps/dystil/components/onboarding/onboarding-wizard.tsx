@@ -30,7 +30,7 @@ import { usePlatform } from "@/lib/hooks/use-platform";
 import { cn, unflattenObject } from "@/lib/utils";
 import { commands } from "@/lib/utils/tauri";
 import { getAuthState, subscribeAuthState, type DystilAuthState } from "@/lib/auth-store";
-import { getBuildCapabilities } from "@/lib/build-capabilities";
+import { useAppPolicy } from "@/lib/app-policy";
 import { Button } from "@/components/ui/button";
 import { ToastAction } from "@/components/ui/toast";
 import { toast } from "@/components/ui/use-toast";
@@ -193,12 +193,12 @@ function setUpManagedProvider(provider: ManagedProvider) {
   })();
 }
 
-function getOnboardingStepIds(showPermissionStep: boolean, enterpriseManaged: boolean) {
+function getOnboardingStepIds(showPermissionStep: boolean, localAiEnabled: boolean) {
   return [
     ...onboardingSteps.map((step) => step.id),
     EDUCATION_STEP_ID,
     ...(showPermissionStep ? [MACOS_PERMISSION_STEP_ID] : []),
-    ...(enterpriseManaged ? [] : [AI_SETUP_STEP_ID]),
+    ...(localAiEnabled ? [AI_SETUP_STEP_ID] : []),
   ];
 }
 
@@ -384,7 +384,7 @@ export function OnboardingWizard() {
   const [aiSetup, setAiSetup] = useState<{ choice: "codex" | "claude" | "local" } | null>(null);
   const [hasRestoredStoredStep, setHasRestoredStoredStep] = useState(false);
   const [authState, setAuthState] = useState<DystilAuthState>(() => getAuthState());
-  const [enterpriseManaged, setEnterpriseManaged] = useState(false);
+  const { policy } = useAppPolicy();
   const { apps: installedApps } = useInstalledApps();
   const { isMac, isLoading: isPlatformLoading } = usePlatform();
   const {
@@ -395,7 +395,7 @@ export function OnboardingWizard() {
   const router = useRouter();
 
   const showPermissionStep = isMac;
-  const stepIds = getOnboardingStepIds(showPermissionStep, enterpriseManaged);
+  const stepIds = getOnboardingStepIds(showPermissionStep, policy?.localAi === "enabled");
   const currentStepId = stepIds[currentStepIndex] ?? null;
   const isPermissionStep = currentStepId === MACOS_PERMISSION_STEP_ID;
   const isEducationStep = currentStepId === EDUCATION_STEP_ID;
@@ -405,7 +405,6 @@ export function OnboardingWizard() {
     ? currentStep.fields.filter((field) => isFieldVisible(field, answers))
     : [];
 
-  useEffect(() => { void getBuildCapabilities().then((capabilities) => setEnterpriseManaged(capabilities.enterpriseManaged)); }, []);
 
   useEffect(() => {
     setCurrentStepIndex((index) => Math.min(index, Math.max(stepIds.length - 1, 0)));
@@ -646,7 +645,7 @@ export function OnboardingWizard() {
                 >
                   {isPermissionStep ? (
                     <OnboardingPermissionsStep
-                      enterpriseManaged={enterpriseManaged}
+                      screenshotsOrganizationEnabled={policy?.capture.screenshots === "organizationEnabled"}
                       onReadyChange={setPermissionsReady}
                     />
                   ) : isAiSetupStep ? (

@@ -23,7 +23,8 @@ type TopBarProps = {
   onAsk: () => void;
   showAsk?: boolean;
   onSettings: () => void;
-  enterpriseManaged?: boolean;
+  teamInvitationEnabled?: boolean;
+  shortcutsEnabled?: boolean;
 };
 
 export function TopBar({
@@ -37,7 +38,8 @@ export function TopBar({
   onAsk,
   showAsk = true,
   onSettings,
-  enterpriseManaged = false,
+  teamInvitationEnabled = false,
+  shortcutsEnabled = false,
 }: TopBarProps) {
   return (
     <header className="flex h-[54px] shrink-0 items-center gap-[10px] px-[22px]">
@@ -66,7 +68,7 @@ export function TopBar({
 
       <div className="flex-1" />
 
-      {!enterpriseManaged && <button
+      {teamInvitationEnabled && <button
         type="button"
         onClick={onInvite}
         className="flex items-center gap-[7px] rounded-tile px-[13px] py-2 text-ui font-medium text-ink-2 transition-colors hover:bg-chrome"
@@ -75,7 +77,7 @@ export function TopBar({
         Invite your team
       </button>}
 
-      {!enterpriseManaged && <button
+      {shortcutsEnabled && <button
         type="button"
         onClick={onShortcuts}
         className="flex items-center gap-[7px] rounded-tile px-[13px] py-2 text-ui font-medium text-ink-2 transition-colors hover:bg-chrome"

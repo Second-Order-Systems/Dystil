@@ -6,7 +6,7 @@ import { homeDir, join } from "@tauri-apps/api/path";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { AppWindow, CalendarRange, Loader2, RotateCcw, Search, Trash2, X } from "lucide-react";
 import { ChipRow, PrivacyCard, TextAction } from "../page-primitives";
-import { getBuildCapabilities } from "@/lib/build-capabilities";
+import { useAppPolicy } from "@/lib/app-policy";
 
 const DYSTIL_SOURCE_URL = "https://github.com/Second-Order-Systems/Dystil";
 
@@ -249,14 +249,8 @@ export function Privacy({ onOpenSettings }: { onOpenSettings: () => void }) {
   // Managed deployments handle telemetry through the organization agreement,
   // so this page says nothing about it. Community builds disclose it here and
   // offer the switch.
-  const [enterpriseManaged, setEnterpriseManaged] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    getBuildCapabilities()
-      .then((capabilities) => { if (!cancelled) setEnterpriseManaged(capabilities.enterpriseManaged); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
+  const { policy } = useAppPolicy();
+  const cloudAsk = policy?.askBackend === "cloud";
 
   const allSources = visibility?.sources ?? [];
   const enabledSources = allSources.filter((source) => source.enabled);
@@ -270,10 +264,10 @@ export function Privacy({ onOpenSettings }: { onOpenSettings: () => void }) {
         ? "No apps or sites have been captured this month yet."
         : `${sourceCount.toLocaleString()} ${sourceCount === 1 ? "source" : "sources"} seen this month, ordered by where your captured work happened most.`;
 
-  return <div className="mx-auto max-w-[1124px] pb-10"><h1 className="text-[29px] font-medium tracking-[-0.02em] text-[#1a1c20]">{enterpriseManaged ? "How your data is handled" : "What stays on this computer"}</h1><p className="mt-[10px] max-w-[680px] text-[18px] leading-[1.65] text-[#60636b]">{enterpriseManaged ? "Dystil keeps its local capture on this computer and syncs approved enterprise capture to your organization’s Dystil Cloud." : "Everything Dystil has read is in one folder on this machine, and there is no copy of it to ask for. The only thing that leaves is anonymous usage counts, which you can turn off."}</p><div className="mt-[18px] rounded-[12px] bg-[#f3f8f5] px-[18px] py-[14px] text-[17px] leading-[1.55] text-[#60636b]">This page is the whole picture in one place. Anything you want to change is one click away in <button type="button" className="text-[#0f6e56]" onClick={onOpenSettings}>Settings</button>.</div>
-    <PrivacyCard accent title={enterpriseManaged ? "What is synced" : "What never leaves"}>{enterpriseManaged ? <>Approved enterprise capture and the requests you create in Ask for a fix are shared with your organization’s Dystil Cloud.<br />Local capture also remains in <span className="text-[#1a1c20]">~/.dystil</span>.</> : <>Everything Dystil reads about your work, and everything it has worked out from it.<br />Where it lives: <span className="text-[#1a1c20]">~/.dystil</span></>}<div className="mt-[14px] flex gap-5"><TextAction onClick={() => void openDystilFolder()}>Open that folder</TextAction><TextAction onClick={() => void openSourceCode()}>Read the code that does this</TextAction></div></PrivacyCard>
+  return <div className="mx-auto max-w-[1124px] pb-10"><h1 className="text-[29px] font-medium tracking-[-0.02em] text-[#1a1c20]">{cloudAsk ? "How your data is handled" : "What stays on this computer"}</h1><p className="mt-[10px] max-w-[680px] text-[18px] leading-[1.65] text-[#60636b]">{cloudAsk ? "Dystil keeps its local capture on this computer and syncs approved enterprise capture to your organization’s Dystil Cloud." : "Everything Dystil has read is in one folder on this machine, and there is no copy of it to ask for. The only thing that leaves is anonymous usage counts, which you can turn off."}</p><div className="mt-[18px] rounded-[12px] bg-[#f3f8f5] px-[18px] py-[14px] text-[17px] leading-[1.55] text-[#60636b]">This page is the whole picture in one place. Anything you want to change is one click away in <button type="button" className="text-[#0f6e56]" onClick={onOpenSettings}>Settings</button>.</div>
+    <PrivacyCard accent title={cloudAsk ? "What is synced" : "What never leaves"}>{cloudAsk ? <>Approved enterprise capture and the requests you create in Ask for a fix are shared with your organization’s Dystil Cloud.<br />Local capture also remains in <span className="text-[#1a1c20]">~/.dystil</span>.</> : <>Everything Dystil reads about your work, and everything it has worked out from it.<br />Where it lives: <span className="text-[#1a1c20]">~/.dystil</span></>}<div className="mt-[14px] flex gap-5"><TextAction onClick={() => void openDystilFolder()}>Open that folder</TextAction><TextAction onClick={() => void openSourceCode()}>Read the code that does this</TextAction></div></PrivacyCard>
     <PrivacyCard title="Never read, and there is no switch for it">No job needs these, and getting them wrong would matter too much. They are skipped in the code, not in a setting.<ChipRow items={["Passwords and credentials", "Banking and payments", "Health", "Dating and faith apps", "Private browsing windows"]} /></PrivacyCard>
-    {!enterpriseManaged && <PrivacyCard title="The one thing that does leave" action={<TextAction onClick={onOpenSettings}>Turn it off in Settings</TextAction>}>
+    {!cloudAsk && <PrivacyCard title="The one thing that does leave" action={<TextAction onClick={onOpenSettings}>Turn it off in Settings</TextAction>}>
       Anonymous counts of how Dystil is working — how often capture ran, whether it succeeded, how long things took. It is on by default and nothing is sent until you have finished setting up.<br />
       Never included: anything Dystil read, window titles, app names, URLs, file paths, prompts, or model replies.
       <ChipRow items={["Counts and timings", "Success and failure", "App version and platform"]} />

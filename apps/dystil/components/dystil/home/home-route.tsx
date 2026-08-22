@@ -15,7 +15,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useHome } from "@/lib/home/provider";
 import type { CorrectionReason } from "@/lib/home/types";
-import { getBuildCapabilities } from "@/lib/build-capabilities";
+import { useAppPolicy } from "@/lib/app-policy";
 import { NothingWaiting } from "./nothing-waiting";
 import { ThePile } from "./the-pile";
 
@@ -37,13 +37,13 @@ export function HomeRoute() {
   // Distinguishes "nothing waiting" from "you just cleared it" — the second
   // is a completion moment and has to be earned within this session.
   const [justCleared, setJustCleared] = useState(false);
-  const [enterpriseManaged, setEnterpriseManaged] = useState<boolean | null>(null);
-  useEffect(() => { void getBuildCapabilities().then((capabilities) => setEnterpriseManaged(capabilities.enterpriseManaged)); }, []);
+  const { policy } = useAppPolicy();
+  const localWorthFixingEnabled = policy?.localWorthFixing === "enabled";
   useEffect(() => {
-    if (enterpriseManaged) router.replace("/home/ask");
-  }, [enterpriseManaged, router]);
+    if (policy && !localWorthFixingEnabled) router.replace("/home/ask");
+  }, [localWorthFixingEnabled, policy, router]);
 
-  if (enterpriseManaged) return null;
+  if (!policy || !localWorthFixingEnabled) return null;
 
   const currentId = queue[0];
   const item = items.find((candidate) => candidate.id === currentId);

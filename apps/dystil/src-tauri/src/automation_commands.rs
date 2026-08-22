@@ -91,6 +91,10 @@ fn running_tasks() -> &'static Mutex<HashMap<String, tokio::task::AbortHandle>> 
     static TASKS: OnceLock<Mutex<HashMap<String, tokio::task::AbortHandle>>> = OnceLock::new();
     TASKS.get_or_init(|| Mutex::new(HashMap::new()))
 }
+fn manager_task() -> &'static Mutex<Option<tokio::sync::watch::Sender<()>>> {
+    static TASK: OnceLock<Mutex<Option<tokio::sync::watch::Sender<()>>>> = OnceLock::new();
+    TASK.get_or_init(|| Mutex::new(None))
+}
 
 async fn pool(state: &RecordingState) -> Result<sqlx::SqlitePool, String> {
     let pool = ai::capture_pool(state).await?;
@@ -101,11 +105,12 @@ async fn pool(state: &RecordingState) -> Result<sqlx::SqlitePool, String> {
 }
 
 fn require_local_automation() -> Result<(), String> {
-    #[cfg(feature = "enterprise-client")]
-    {
+    if matches!(
+        crate::app_policy::current().local_automation,
+        crate::app_policy::Availability::Disabled
+    ) {
         return Err("Local automations are disabled in this enterprise build.".to_string());
     }
-    #[cfg(not(feature = "enterprise-client"))]
     Ok(())
 }
 
@@ -664,14 +669,35 @@ async fn poll_once(app: &AppHandle) -> Result<(), String> {
 }
 
 pub(crate) fn start_manager(app: AppHandle) {
+    let mut task = manager_task()
+        .lock()
+        .expect("automation manager lock poisoned");
+    if task.is_some() {
+        return;
+    }
+    let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(());
+    *task = Some(stop_tx);
     tauri::async_runtime::spawn(async move {
         loop {
             if let Err(error) = poll_once(&app).await {
                 tracing::debug!(%error,"automation manager waiting for local database");
             }
-            tokio::time::sleep(Duration::from_secs(15)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(15)) => {}
+                _ = stop_rx.changed() => break,
+            }
         }
     });
+}
+
+pub(crate) fn stop_manager() {
+    if let Some(stop) = manager_task()
+        .lock()
+        .expect("automation manager lock poisoned")
+        .take()
+    {
+        let _ = stop.send(());
+    }
 }
 
 #[tauri::command]
