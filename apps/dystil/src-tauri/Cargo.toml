@@ -2,7 +2,7 @@
 
 [package]
 name = "dystil-app"
-version = "0.0.10"
+version = "0.0.11"
 description = "Dystil your work."
 authors = ["jayhsiai"]
 license = ""
