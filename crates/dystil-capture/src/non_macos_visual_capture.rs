@@ -15,9 +15,9 @@ use crate::{CaptureError, VisualProvider, VisualRequest, VisualSnapshot};
 
 /// Trigger-driven screenshot provider for Windows and Linux.
 ///
-/// The provider owns every connected `SafeMonitor`. On Windows this retains
-/// Dystil's WGC session between accepted FullCapture triggers; on Linux
-/// `SafeMonitor::capture_image()` keeps its existing per-frame behavior.
+/// The provider owns every connected `SafeMonitor`. Windows uses one-shot
+/// capture by default; persistent WGC is an explicit diagnostic opt-in. On
+/// Linux `SafeMonitor::capture_image()` keeps its existing per-frame behavior.
 ///
 /// A reliably mapped trigger/focus captures one monitor. If routing metadata
 /// is absent or uses a coordinate space that does not match the capture API,
@@ -166,7 +166,40 @@ impl VisualProvider for DystilFullCaptureVisualProvider {
         &self,
         request: &VisualRequest,
     ) -> Result<Vec<VisualSnapshot>, CaptureError> {
-        let monitors = self.monitors_for(request).await?;
+        #[cfg(feature = "debug-capture")]
+        let selection_started = std::time::Instant::now();
+        let monitors = match self.monitors_for(request).await {
+            Ok(monitors) => {
+                #[cfg(feature = "debug-capture")]
+                crate::debug_capture::record_image_phase(
+                    "monitor_selection",
+                    request.trigger.as_str(),
+                    selection_started,
+                    request.context.application.as_deref(),
+                    request.context.monitor_id,
+                    None,
+                    None,
+                    None,
+                    "succeeded",
+                );
+                monitors
+            }
+            Err(error) => {
+                #[cfg(feature = "debug-capture")]
+                crate::debug_capture::record_image_phase(
+                    "monitor_selection",
+                    request.trigger.as_str(),
+                    selection_started,
+                    request.context.application.as_deref(),
+                    request.context.monitor_id,
+                    None,
+                    None,
+                    None,
+                    "failed",
+                );
+                return Err(error);
+            }
+        };
         let attempted = monitors.len();
         let mut snapshots = Vec::with_capacity(attempted);
         let mut failures = Vec::new();
@@ -176,8 +209,22 @@ impl VisualProvider for DystilFullCaptureVisualProvider {
         for monitor in monitors {
             let monitor_id = monitor.id();
             let device_name = monitor.name().to_string();
+            #[cfg(feature = "debug-capture")]
+            let acquisition_started = std::time::Instant::now();
             match capture_monitor_image(&monitor).await {
                 Ok(image) => {
+                    #[cfg(feature = "debug-capture")]
+                    crate::debug_capture::record_image_phase(
+                        "screenshot_acquisition",
+                        request.trigger.as_str(),
+                        acquisition_started,
+                        request.context.application.as_deref(),
+                        Some(monitor_id),
+                        Some(image.width()),
+                        Some(image.height()),
+                        Some(u64::from(image.width()) * u64::from(image.height()) * 4),
+                        "succeeded",
+                    );
                     info!(
                         monitor_id,
                         device_name,
@@ -193,6 +240,18 @@ impl VisualProvider for DystilFullCaptureVisualProvider {
                     });
                 }
                 Err(error) => {
+                    #[cfg(feature = "debug-capture")]
+                    crate::debug_capture::record_image_phase(
+                        "screenshot_acquisition",
+                        request.trigger.as_str(),
+                        acquisition_started,
+                        request.context.application.as_deref(),
+                        Some(monitor_id),
+                        Some(monitor.width()),
+                        Some(monitor.height()),
+                        None,
+                        "failed",
+                    );
                     warn!(
                         monitor_id,
                         device_name,

@@ -22,7 +22,10 @@ struct AxCaptureDiagnostics {
 }
 
 const SNAPSHOT_QUALITY: u8 = 80;
-const SNAPSHOT_MAX_WIDTH: u32 = 1920;
+// Stored screenshots provide visual context alongside UIA text; they are not
+// the primary OCR source. 1280px is sufficient for layout and controls while
+// substantially reducing CPU resize/JPEG work and disk use.
+const SNAPSHOT_MAX_WIDTH: u32 = 1280;
 
 /// Dystil-owned persistence for capture observations.
 ///
@@ -88,16 +91,26 @@ impl CaptureStore for DystilCaptureStore {
                 let writer = self.snapshot_writer.clone();
                 let image = visual.image.clone();
                 let captured_at = visual.captured_at;
+                let trigger = observation.trigger.as_str().to_string();
+                let app_name = observation.context.application.clone();
                 let monitor_id = visual
                     .monitor_id
                     .or(observation.context.monitor_id)
                     .unwrap_or(0);
-                tokio::task::spawn_blocking(move || writer.write(&image, captured_at, monitor_id))
-                    .await
-                    .map_err(|error| CaptureError::ImageStore(error.to_string()))?
-                    .map_err(CaptureError::ImageStore)?
-                    .to_string_lossy()
-                    .into_owned()
+                tokio::task::spawn_blocking(move || {
+                    writer.write(
+                        &image,
+                        captured_at,
+                        monitor_id,
+                        &trigger,
+                        app_name.as_deref(),
+                    )
+                })
+                .await
+                .map_err(|error| CaptureError::ImageStore(error.to_string()))?
+                .map_err(CaptureError::ImageStore)?
+                .to_string_lossy()
+                .into_owned()
             }
             None => String::new(),
         };
@@ -152,6 +165,8 @@ impl CaptureStore for DystilCaptureStore {
 
         // Keep the values aligned with DatabaseManager::insert_snapshot_frame_with_ocr
         // for the AX-only Dystil path. The existing frames triggers maintain FTS.
+        #[cfg(feature = "debug-capture")]
+        let sqlite_started = std::time::Instant::now();
         let result = sqlx::query(
             "INSERT INTO frames (\
                 timestamp, device_name, snapshot_path, app_name, window_name, browser_url, \
@@ -177,8 +192,30 @@ impl CaptureStore for DystilCaptureStore {
         .bind(content_hash)
         .bind(simhash)
         .execute(&self.pool)
-        .await
-        .map_err(|error| CaptureError::Store(error.to_string()))?;
+        .await;
+        #[cfg(feature = "debug-capture")]
+        crate::debug_capture::record_image_phase(
+            "sqlite_insert",
+            observation.trigger.as_str(),
+            sqlite_started,
+            observation.context.application.as_deref(),
+            observation.context.monitor_id,
+            observation
+                .visual
+                .as_ref()
+                .map(|visual| visual.image.width()),
+            observation
+                .visual
+                .as_ref()
+                .map(|visual| visual.image.height()),
+            None,
+            if result.is_ok() {
+                "succeeded"
+            } else {
+                "failed"
+            },
+        );
+        let result = result.map_err(|error| CaptureError::Store(error.to_string()))?;
 
         let frame_id = result.last_insert_rowid();
 
@@ -321,36 +358,109 @@ impl DystilSnapshotWriter {
         image: &DynamicImage,
         captured_at: DateTime<Utc>,
         monitor_id: u32,
+        trigger: &str,
+        app_name: Option<&str>,
     ) -> Result<PathBuf, String> {
+        #[cfg(feature = "debug-capture")]
+        let directory_started = std::time::Instant::now();
         let date_dir = self
             .base_dir
             .join(captured_at.format("%Y-%m-%d").to_string());
         fs::create_dir_all(&date_dir).map_err(|error| error.to_string())?;
+        #[cfg(feature = "debug-capture")]
+        crate::debug_capture::record_image_phase(
+            "snapshot_directory",
+            trigger,
+            directory_started,
+            app_name,
+            Some(monitor_id),
+            Some(image.width()),
+            Some(image.height()),
+            None,
+            "succeeded",
+        );
 
         let path = date_dir.join(format!(
             "{}_m{}.jpg",
             captured_at.timestamp_millis(),
             monitor_id
         ));
+        #[cfg(feature = "debug-capture")]
+        let resize_started = std::time::Instant::now();
+        let was_resized = image.width() > SNAPSHOT_MAX_WIDTH;
         let resized;
-        let image = if image.width() > SNAPSHOT_MAX_WIDTH {
+        let image = if was_resized {
             resized = image.resize(SNAPSHOT_MAX_WIDTH, u32::MAX, FilterType::Triangle);
             &resized
         } else {
             image
         };
+        #[cfg(feature = "debug-capture")]
+        crate::debug_capture::record_image_phase(
+            "snapshot_resize",
+            trigger,
+            resize_started,
+            app_name,
+            Some(monitor_id),
+            Some(image.width()),
+            Some(image.height()),
+            Some(u64::from(image.width()) * u64::from(image.height()) * 4),
+            if was_resized { "succeeded" } else { "skipped" },
+        );
 
         let file = fs::File::create(&path).map_err(|error| error.to_string())?;
         let mut writer = BufWriter::new(file);
+        #[cfg(feature = "debug-capture")]
+        let encode_started = std::time::Instant::now();
         let mut encoder = JpegEncoder::new_with_quality(&mut writer, SNAPSHOT_QUALITY);
         encoder
             .encode_image(image)
             .map_err(|error| error.to_string())?;
+        #[cfg(feature = "debug-capture")]
+        crate::debug_capture::record_image_phase(
+            "jpeg_encode",
+            trigger,
+            encode_started,
+            app_name,
+            Some(monitor_id),
+            Some(image.width()),
+            Some(image.height()),
+            None,
+            "succeeded",
+        );
+        #[cfg(feature = "debug-capture")]
+        let flush_started = std::time::Instant::now();
         writer.flush().map_err(|error| error.to_string())?;
+        #[cfg(feature = "debug-capture")]
+        crate::debug_capture::record_image_phase(
+            "snapshot_flush",
+            trigger,
+            flush_started,
+            app_name,
+            Some(monitor_id),
+            Some(image.width()),
+            Some(image.height()),
+            None,
+            "succeeded",
+        );
+        #[cfg(feature = "debug-capture")]
+        let sync_started = std::time::Instant::now();
         writer
             .get_ref()
             .sync_all()
             .map_err(|error| error.to_string())?;
+        #[cfg(feature = "debug-capture")]
+        crate::debug_capture::record_image_phase(
+            "snapshot_sync_all",
+            trigger,
+            sync_started,
+            app_name,
+            Some(monitor_id),
+            Some(image.width()),
+            Some(image.height()),
+            path.metadata().ok().map(|metadata| metadata.len()),
+            "succeeded",
+        );
         Ok(path)
     }
 }
@@ -600,11 +710,19 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let writer = DystilSnapshotWriter::new(temp.path());
         let large = DynamicImage::new_rgb8(2560, 1440);
-        let large_path = writer.write(&large, Utc::now(), 1).unwrap();
-        assert_eq!(image::open(large_path).unwrap().dimensions(), (1920, 1080));
+        let large_path = writer
+            .write(&large, Utc::now(), 1, "test", Some("test-app"))
+            .unwrap();
+        assert_eq!(image::open(large_path).unwrap().dimensions(), (1280, 720));
         let small = DynamicImage::new_rgb8(1000, 700);
         let small_path = writer
-            .write(&small, Utc::now() + chrono::Duration::milliseconds(1), 2)
+            .write(
+                &small,
+                Utc::now() + chrono::Duration::milliseconds(1),
+                2,
+                "test",
+                Some("test-app"),
+            )
             .unwrap();
         assert_eq!(image::open(small_path).unwrap().dimensions(), (1000, 700));
     }
