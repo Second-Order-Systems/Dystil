@@ -8,6 +8,11 @@
  * warm grey so it never competes with the primary action in the top bar.
  */
 
+import { listen } from "@tauri-apps/api/event";
+import { useEffect, useState } from "react";
+
+import { commands } from "@/lib/utils/tauri";
+
 type Job = {
   fixName: string;
   state: "running" | "done" | "failed";
@@ -23,8 +28,40 @@ type StatusStripProps = {
   cloudAsk?: boolean;
 };
 
+function useCaptureActive() {
+  const [active, setActive] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    let unlisten: (() => void) | undefined;
+    const load = async () => {
+      try {
+        const result = await commands.getWhenItRunsSettings();
+        if (alive && result.status === "ok") setActive(result.data.captureRunning && !result.data.capturePaused);
+      } catch {
+        if (alive) setActive(false);
+      }
+    };
+
+    void load();
+    void listen("recording-status-changed", () => void load())
+      .then((dispose) => {
+        if (alive) unlisten = dispose;
+        else dispose();
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
+
+  return active;
+}
+
 export function StatusStrip({ job, onPrivacy, onStopJob, onOpenResult, cloudAsk = false }: StatusStripProps) {
   const running = job?.state === "running";
+  const captureActive = useCaptureActive();
 
   return (
     <footer className="relative flex h-[34px] shrink-0 items-center gap-2 border-t border-line-2b bg-chrome px-3">
@@ -36,9 +73,9 @@ export function StatusStrip({ job, onPrivacy, onStopJob, onOpenResult, cloudAsk 
       ) : null}
 
       {/* Static text, not a button. */}
-      <span className="relative flex h-[6px] w-[6px] items-center justify-center">
-        <span className="absolute h-[6px] w-[6px] animate-halo rounded-full bg-green-mid" />
-        <span className="relative h-[6px] w-[6px] rounded-full bg-green-mid" />
+      <span className="relative flex h-[8px] w-[8px] items-center justify-center" aria-label={captureActive ? "Capture is on" : "Capture is off"} role="status">
+        {captureActive && <span className="absolute h-[8px] w-[8px] animate-halo rounded-full bg-[#18a66f]" />}
+        <span className={`relative h-[8px] w-[8px] rounded-full ${captureActive ? "bg-[#18a66f]" : "bg-[#d43838]"}`} />
       </span>
       {!cloudAsk && <>
         <span className="text-meta font-semibold text-ink-2">Watching, locally</span>

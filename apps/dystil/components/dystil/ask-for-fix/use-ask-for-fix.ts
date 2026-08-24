@@ -46,7 +46,7 @@ function sessionError(session: AskSessionView) {
   return readableError(`${session.lastErrorCode}: ${session.lastErrorDetail ?? ""}`);
 }
 
-export function useAskForFix() {
+export function useAskForFix({ fresh = false, sessionId }: { fresh?: boolean; sessionId?: string } = {}) {
   const [session, setSession] = useState<AskSessionView | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -54,9 +54,19 @@ export function useAskForFix() {
   const [optimisticText, setOptimisticText] = useState<string | null>(null);
 
   useEffect(() => {
+    if (fresh) {
+      setSession(null);
+      setBusy(false);
+      setError(null);
+      setOptimisticText(null);
+      setLoading(false);
+      return;
+    }
     let alive = true;
-    void commands
-      .askForFixLatest()
+    const loadSession = sessionId
+      ? commands.askForFixGet(sessionId)
+      : commands.askForFixLatest();
+    void loadSession
       .then(unwrap)
       .then((latest) => {
         if (alive) {
@@ -73,7 +83,7 @@ export function useAskForFix() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [fresh, sessionId]);
 
   const ensureSession = useCallback(async () => {
     if (session) return session;

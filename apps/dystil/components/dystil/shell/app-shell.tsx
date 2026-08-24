@@ -9,7 +9,6 @@
  */
 
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect } from "react";
 import { useAppPolicy } from "@/lib/app-policy";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useHome } from "@/lib/home/provider";
@@ -23,11 +22,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { isMac } = usePlatform();
   const { policy } = useAppPolicy();
   const localWorkEnabled = policy?.localWorthFixing === "enabled";
-  useEffect(() => {
-    if (policy && !localWorkEnabled && (pathname === "/home" || pathname.startsWith("/home/ready") || pathname.startsWith("/home/all"))) {
-      router.replace("/home/ask");
-    }
-  }, [localWorkEnabled, pathname, policy, router]);
   const go = (path: string) => router.push(path);
 
   // The pill is a way back to the pile, so it is pointless while you are
@@ -57,8 +51,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         onQueue={() => go("/home")}
         onInvite={() => go("/home/settings?tab=Invite your team")}
         onShortcuts={() => go("/home/ready")}
-        onAsk={() => go("/home/ask")}
-        showAsk={!pathname.startsWith("/home/ask")}
+        onAsk={() => go("/home/chat")}
+        showAsk={localWorkEnabled && !pathname.startsWith("/home/chat")}
         onSettings={() => go("/home/settings")}
         teamInvitationEnabled={policy?.teamInvitation === "enabled"}
         shortcutsEnabled={policy?.readyToUse === "enabled"}

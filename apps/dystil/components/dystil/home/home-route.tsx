@@ -11,15 +11,16 @@
  * above a "0 left" counter.
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useHome } from "@/lib/home/provider";
 import type { CorrectionReason } from "@/lib/home/types";
 import { useAppPolicy } from "@/lib/app-policy";
 import { NothingWaiting } from "./nothing-waiting";
 import { ThePile } from "./the-pile";
+import { AskForFix } from "@/components/dystil/pages/ask-for-fix";
 
-export function HomeRoute() {
+export function HomeRoute({ initialText = "" }: { initialText?: string }) {
   const router = useRouter();
   const {
     items,
@@ -39,11 +40,8 @@ export function HomeRoute() {
   const [justCleared, setJustCleared] = useState(false);
   const { policy } = useAppPolicy();
   const localWorthFixingEnabled = policy?.localWorthFixing === "enabled";
-  useEffect(() => {
-    if (policy && !localWorthFixingEnabled) router.replace("/home/ask");
-  }, [localWorthFixingEnabled, policy, router]);
-
-  if (!policy || !localWorthFixingEnabled) return null;
+  if (!policy) return null;
+  if (!localWorthFixingEnabled) return <div className="px-10 py-8"><AskForFix initialText={initialText} fresh /></div>;
 
   const currentId = queue[0];
   const item = items.find((candidate) => candidate.id === currentId);
@@ -57,7 +55,7 @@ export function HomeRoute() {
         justCleared={justCleared}
         settledCount={originalTotal}
         shortcuts={shortcuts}
-        onAsk={(text) => router.push(`/home/ask?initial=${encodeURIComponent(text.trim())}`)}
+        onAsk={(text) => router.push(`/home/chat?initial=${encodeURIComponent(text.trim())}`)}
         onAllShortcuts={() => router.push("/home/ready")}
         onRestore={() => {
           setJustCleared(false);

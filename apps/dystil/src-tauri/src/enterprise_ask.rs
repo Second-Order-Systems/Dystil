@@ -3,7 +3,7 @@
 //! The desktop has no enterprise AI key. Its registered device credential
 //! authenticates requests to the cloud conversation service.
 
-use dystil_insights::{AskSessionView, AskUserTurn};
+use dystil_insights::{AskSessionHistoryItem, AskSessionView, AskUserTurn};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -84,6 +84,10 @@ async fn get_json<T: DeserializeOwned>(path: &str) -> Result<T, String> {
 
 pub(crate) async fn latest() -> Result<Option<AskSessionView>, String> {
     get_json("/v1/ask/conversations/latest").await
+}
+
+pub(crate) async fn list() -> Result<Vec<AskSessionHistoryItem>, String> {
+    get_json("/v1/ask/conversations").await
 }
 
 pub(crate) async fn get(session_id: &str) -> Result<AskSessionView, String> {

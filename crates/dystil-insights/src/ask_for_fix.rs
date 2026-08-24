@@ -352,6 +352,19 @@ pub struct AskSessionView {
     pub updated_at: String,
 }
 
+/// A deliberately small, read-only index for the Ask-for-fix history surface.
+/// The full transcript is fetched only after a person chooses an item.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AskSessionHistoryItem {
+    pub session_id: String,
+    pub title: String,
+    pub phase: AskPhase,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct PromptMessage {
     role: &'static str,
@@ -1105,6 +1118,36 @@ pub async fn latest_ask_for_fix_session(
         Some(id) => Ok(Some(get_ask_for_fix_session(pool, &id).await?)),
         None => Ok(None),
     }
+}
+
+pub async fn list_ask_for_fix_sessions(
+    pool: &SqlitePool,
+) -> AskForFixResult<Vec<AskSessionHistoryItem>> {
+    let rows = sqlx::query(
+        "SELECT s.session_id, s.phase, s.status, s.created_at, s.updated_at,
+                COALESCE((
+                    SELECT m.text FROM ask_messages m
+                    WHERE m.session_id = s.session_id AND m.role = 'user'
+                    ORDER BY m.ordinal ASC LIMIT 1
+                ), 'Untitled request') AS title
+         FROM ask_sessions s
+         ORDER BY s.updated_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(InsightsError::from)?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(AskSessionHistoryItem {
+                session_id: row.get("session_id"),
+                title: row.get("title"),
+                phase: AskPhase::parse(row.get("phase"))?,
+                status: row.get("status"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+            })
+        })
+        .collect()
 }
 
 async fn watch_for_session(
