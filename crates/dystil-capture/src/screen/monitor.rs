@@ -14,6 +14,34 @@ use tracing;
 static CACHED_MONITOR_DESCRIPTIONS: Lazy<RwLock<Vec<String>>> =
     Lazy::new(|| RwLock::new(Vec::new()));
 
+/// Persistent Windows Graphics Capture is opt-in. The default one-shot path
+/// releases capture resources between accepted triggers, avoiding a live
+/// recorder consuming CPU and memory while the user is idle.
+#[cfg(target_os = "windows")]
+static PERSISTENT_WGC_ENABLED: Lazy<bool> = Lazy::new(|| {
+    std::env::var("DYSTIL_PERSISTENT_WGC")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "on" | "yes"))
+});
+
+#[cfg(target_os = "windows")]
+static ONE_SHOT_WGC_NOTICE: std::sync::Once = std::sync::Once::new();
+
+#[cfg(target_os = "windows")]
+fn persistent_wgc_enabled_by_env() -> bool {
+    if *PERSISTENT_WGC_ENABLED {
+        true
+    } else {
+        ONE_SHOT_WGC_NOTICE.call_once(|| {
+            tracing::info!(
+                "using one-shot screenshot capture; set DYSTIL_PERSISTENT_WGC=1 to opt into persistent WGC"
+            );
+        });
+        false
+    }
+}
+
 /// macOS display capture is mediated by WindowServer/replayd. Serializing these
 /// calls avoids concurrent multi-monitor spikes while preserving capture order.
 #[cfg(target_os = "macos")]
@@ -391,14 +419,20 @@ impl SafeMonitor {
         Ok(image)
     }
 
-    // Non-macOS: Use persistent WGC capture on Windows to avoid orange border flash.
-    // Falls back to per-frame xcap capture if persistent session fails.
+    // Windows uses one-shot xcap capture by default. Persistent WGC remains an
+    // explicit opt-in for diagnosing capture-border behavior.
     #[cfg(not(target_os = "macos"))]
     pub async fn capture_image(&self) -> Result<DynamicImage> {
         let monitor_id = self.monitor_id;
 
         #[cfg(target_os = "windows")]
         {
+            if !persistent_wgc_enabled_by_env() {
+                return tokio::task::spawn_blocking(move || Self::per_frame_capture(monitor_id))
+                    .await
+                    .map_err(|e| anyhow::anyhow!("capture task panicked: {}", e))?;
+            }
+
             let persistent = self.persistent_capture.clone();
             let persistent_disabled = self.persistent_capture_disabled.clone();
             let persistent_failures = self.persistent_capture_failures.clone();
