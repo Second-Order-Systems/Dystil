@@ -79,6 +79,10 @@ impl CaptureStore for DystilCaptureStore {
         &self,
         observation: CaptureObservation,
     ) -> Result<StoredCapture, CaptureError> {
+        #[cfg(feature = "debug-capture")]
+        let diagnostic_rss_before = crate::debug_capture::process_rss_bytes();
+        #[cfg(feature = "debug-capture")]
+        let diagnostic_started = std::time::Instant::now();
         let snapshot_path = match observation.visual.as_ref() {
             Some(visual) => {
                 let writer = self.snapshot_writer.clone();
@@ -98,12 +102,15 @@ impl CaptureStore for DystilCaptureStore {
             None => String::new(),
         };
 
+        #[cfg(feature = "debug-capture")]
+        let normalization_started = std::time::Instant::now();
         let accessibility = observation.accessibility.as_ref();
         let accessibility_text = accessibility
             .map(|snapshot| snapshot.text.trim())
             .filter(|text| !text.is_empty())
             .map(sanitize_text);
         let sanitized_nodes = accessibility.map(|snapshot| sanitize_nodes(&snapshot.nodes));
+        let text_source = accessibility_text.as_ref().map(|_| "accessibility");
         let ax_capture_diagnostics_json = accessibility
             .map(|snapshot| AxCaptureDiagnostics {
                 node_count: snapshot.node_count,
@@ -115,7 +122,6 @@ impl CaptureStore for DystilCaptureStore {
             .map(|diagnostics| serde_json::to_string(&diagnostics))
             .transpose()
             .map_err(|error| CaptureError::Store(error.to_string()))?;
-        let text_source = accessibility_text.as_ref().map(|_| "accessibility");
         let content_hash = accessibility.map(|snapshot| snapshot.content_hash as i64);
         let simhash = accessibility.map(|snapshot| snapshot.simhash as i64);
         let device_name = sanitize_text(
@@ -141,6 +147,8 @@ impl CaptureStore for DystilCaptureStore {
             .document_path
             .as_deref()
             .map(sanitize_text);
+        #[cfg(feature = "debug-capture")]
+        let normalization_duration = normalization_started.elapsed();
 
         // Keep the values aligned with DatabaseManager::insert_snapshot_frame_with_ocr
         // for the AX-only Dystil path. The existing frames triggers maintain FTS.
@@ -246,6 +254,47 @@ impl CaptureStore for DystilCaptureStore {
                 .await;
             });
         }
+        #[cfg(feature = "debug-capture")]
+        crate::debug_capture::record_persistence(
+            frame_id,
+            observation.trigger.as_str(),
+            diagnostic_started,
+            normalization_duration,
+            accessibility_text.as_deref().map(str::len).unwrap_or(0),
+            if snapshot_path.is_empty() {
+                0
+            } else {
+                std::fs::metadata(&snapshot_path)
+                    .map(|metadata| metadata.len())
+                    .unwrap_or(0)
+            },
+        );
+        #[cfg(feature = "debug-capture")]
+        crate::debug_capture::record_capture_phase(
+            "sqlite_persistence",
+            observation.trigger.as_str(),
+            diagnostic_started,
+            observation.context.application.as_deref(),
+            observation
+                .accessibility
+                .as_ref()
+                .map(|snapshot| snapshot.node_count),
+            accessibility_text.as_deref().map(str::len),
+            observation
+                .accessibility
+                .as_ref()
+                .map(|snapshot| snapshot.truncated),
+            observation
+                .accessibility
+                .as_ref()
+                .map(|snapshot| match snapshot.truncation_reason {
+                    crate::AccessibilityTruncationReason::None => "none",
+                    crate::AccessibilityTruncationReason::Timeout => "timeout",
+                    crate::AccessibilityTruncationReason::MaxNodes => "max_nodes",
+                }),
+            diagnostic_rss_before,
+            crate::debug_capture::process_rss_bytes(),
+        );
         Ok(StoredCapture {
             // SQLite returns the row ID from the connection used by this exact
             // statement, so this remains correct with a pooled connection.

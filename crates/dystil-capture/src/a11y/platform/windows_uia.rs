@@ -34,7 +34,7 @@ use windows::Win32::UI::Accessibility::{
     UIA_PROPERTY_ID,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+    DispatchMessageW, GetClassNameW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
     MsgWaitForMultipleObjects, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, QS_ALLINPUT,
 };
 
@@ -263,7 +263,7 @@ impl UiaContext {
         hwnd: HWND,
         max_elements: usize,
     ) -> Option<AccessibilityNode> {
-        self.capture_window_tree_bounded(hwnd, max_elements, DEFAULT_TREE_CAPTURE_TIMEOUT)
+        self.capture_window_tree_bounded(hwnd, max_elements, DEFAULT_TREE_CAPTURE_TIMEOUT, false)
             .map(|captured| captured.root)
     }
 
@@ -276,10 +276,18 @@ impl UiaContext {
         hwnd: HWND,
         max_elements: usize,
         timeout: Duration,
+        prefer_incremental_chromium_walk: bool,
     ) -> Option<CapturedTree> {
         let deadline = Instant::now() + timeout;
 
-        if needs_walker_fallback(hwnd) {
+        // Chromium's cached-subtree provider can block for seconds while it
+        // materializes thousands of virtual nodes. Its incremental Control
+        // View path checks the shared deadline between provider calls, so use
+        // it from the first browser walk rather than learning that fact after
+        // one unbounded cached call.
+        if (prefer_incremental_chromium_walk && is_chromium_window(hwnd))
+            || needs_walker_fallback(hwnd)
+        {
             let mut walker_budget = TreeBudget::timed(max_elements, deadline);
             if let Some(root) = self.capture_window_tree_walker(hwnd, &mut walker_budget) {
                 return Some(CapturedTree {
@@ -641,6 +649,15 @@ impl UiaContext {
     }
 }
 
+fn is_chromium_window(hwnd: HWND) -> bool {
+    unsafe {
+        let mut class_name = [0u16; 64];
+        let len = GetClassNameW(hwnd, &mut class_name);
+        len > 0
+            && String::from_utf16_lossy(&class_name[..len as usize]).starts_with("Chrome_WidgetWin")
+    }
+}
+
 // ============================================================================
 // Focus Changed Event Handler (COM implementation)
 // ============================================================================
@@ -785,10 +802,11 @@ pub fn run_uia_thread(
 
     // Capture initial focused window (no input has happened yet, so input_too_recent is a no-op)
     let initial_hwnd = unsafe { GetForegroundWindow() };
-    if !initial_hwnd.is_invalid() {
+    if config.capture_tree && !initial_hwnd.is_invalid() {
         capture_and_send(
             &uia,
             initial_hwnd,
+            "initial",
             &config,
             &tree_tx,
             &focused_element,
@@ -823,13 +841,14 @@ pub fn run_uia_thread(
             continue;
         }
 
-        if was_lock_paused && config.capture_tree {
+        if was_lock_paused && config.capture_tree && config.capture_background_trees {
             was_lock_paused = false;
             let hwnd = unsafe { GetForegroundWindow() };
             if !hwnd.is_invalid() {
                 capture_and_send(
                     &uia,
                     hwnd,
+                    "unlock",
                     &config,
                     &tree_tx,
                     &focused_element,
@@ -851,7 +870,7 @@ pub fn run_uia_thread(
         let skip_capture = input_too_recent(&config, start_time, &last_input_at_ms);
 
         // Check for pending focus change (debounced)
-        if config.capture_tree && !skip_capture {
+        if config.capture_tree && config.capture_background_trees && !skip_capture {
             let should_capture = {
                 let pending = pending_focus.lock();
                 if let Some(ref pf) = *pending {
@@ -870,6 +889,7 @@ pub fn run_uia_thread(
                     capture_and_send(
                         &uia,
                         hwnd,
+                        "focus",
                         &config,
                         &tree_tx,
                         &focused_element,
@@ -887,6 +907,7 @@ pub fn run_uia_thread(
                     capture_and_send(
                         &uia,
                         hwnd,
+                        "periodic",
                         &config,
                         &tree_tx,
                         &focused_element,
@@ -951,7 +972,7 @@ fn compute_next_timeout(
 ) -> u64 {
     let mut min_ms: u64 = 1000; // safety ceiling
 
-    if !config.capture_tree {
+    if !config.capture_tree || !config.capture_background_trees {
         return min_ms;
     }
 
@@ -982,6 +1003,7 @@ fn compute_next_timeout(
 fn capture_and_send(
     uia: &UiaContext,
     hwnd: HWND,
+    _reason: &'static str,
     config: &UiCaptureConfig,
     tree_tx: &Sender<WindowTreeSnapshot>,
     focused_element: &Arc<Mutex<Option<ElementContext>>>,
@@ -1001,6 +1023,18 @@ fn capture_and_send(
     // Check exclusions before making UIA tree calls. Some apps expose slow or
     // buggy providers, so the guard needs to happen before ElementFromHandle.
     if !config.should_capture_target(&app_name, window_title.as_deref()) {
+        #[cfg(feature = "debug-capture")]
+        crate::debug_capture::record_background_tree_attempt(
+            _reason,
+            "filtered",
+            capture_start,
+            Some(&app_name),
+            window_title.as_deref(),
+            None,
+            None,
+            None,
+            None,
+        );
         return;
     }
 
@@ -1011,6 +1045,7 @@ fn capture_and_send(
         hwnd,
         config.tree_max_elements,
         PERIODIC_TREE_WALK_TIMEOUT,
+        false,
     ) {
         Some(captured) => {
             if captured.truncation != TruncationReason::None {
@@ -1019,15 +1054,32 @@ fn capture_and_send(
                     app_name, captured.truncation
                 );
             }
-            captured.root
+            captured
         }
         None => {
             trace!("Failed to capture tree for hwnd {:?}", hwnd.0);
+            #[cfg(feature = "debug-capture")]
+            crate::debug_capture::record_background_tree_attempt(
+                _reason,
+                "failed",
+                capture_start,
+                Some(&app_name),
+                window_title.as_deref(),
+                None,
+                None,
+                None,
+                None,
+            );
             return;
         }
     };
+    #[cfg(feature = "debug-capture")]
+    let truncation_reason = format!("{:?}", root.truncation).to_ascii_lowercase();
+    let root = root.root;
 
     let element_count = root.node_count();
+    #[cfg(feature = "debug-capture")]
+    let max_depth = root.max_depth();
 
     // Compute tree hash for diffing
     let tree_hash = compute_tree_hash(&root);
@@ -1040,6 +1092,18 @@ fn capture_and_send(
             "Tree unchanged for {} (hash: {}), skipping",
             app_name,
             tree_hash
+        );
+        #[cfg(feature = "debug-capture")]
+        crate::debug_capture::record_background_tree_attempt(
+            _reason,
+            "unchanged",
+            capture_start,
+            Some(&app_name),
+            window_title.as_deref(),
+            Some(element_count),
+            Some(max_depth),
+            Some(tree_hash),
+            Some(&truncation_reason),
         );
         return;
     }
@@ -1064,6 +1128,26 @@ fn capture_and_send(
         app_name, element_count, capture_ms, tree_hash
     );
 
+    #[cfg(feature = "debug-capture")]
+    {
+        let send_outcome = if tree_tx.try_send(snapshot).is_ok() {
+            "sent"
+        } else {
+            "channel_full"
+        };
+        crate::debug_capture::record_background_tree_attempt(
+            _reason,
+            send_outcome,
+            capture_start,
+            Some(&app_name),
+            window_title.as_deref(),
+            Some(element_count),
+            Some(max_depth),
+            Some(tree_hash),
+            Some(&truncation_reason),
+        );
+    }
+    #[cfg(not(feature = "debug-capture"))]
     let _ = tree_tx.try_send(snapshot);
 
     // Also update the focused element
@@ -1805,6 +1889,7 @@ mod tests {
             capture_and_send(
                 &uia,
                 hwnd,
+                "test",
                 &config,
                 &tree_tx,
                 &focused_element,

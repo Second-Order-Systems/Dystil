@@ -18,7 +18,7 @@ use tracing::{debug, error, warn};
 
 use super::windows_uia::{self, ClickElementRequest};
 
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
     GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY,
@@ -33,11 +33,35 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetClassNameW, GetForegroundWindow, GetMessageW,
     GetWindowTextW, GetWindowThreadProcessId, PostThreadMessageW, SetTimer, SetWindowsHookExW,
-    TranslateMessage, UnhookWindowsHookEx, EVENT_SYSTEM_FOREGROUND, HC_ACTION, HHOOK,
-    KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT,
-    WINEVENT_SKIPOWNPROCESS, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_XBUTTONDOWN,
+    TranslateMessage, UnhookWindowsHookEx, WindowFromPoint, EVENT_SYSTEM_FOREGROUND, HC_ACTION,
+    HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL,
+    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+    WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WM_TIMER, WM_XBUTTONDOWN,
 };
+
+#[cfg(feature = "debug-capture")]
+struct HookTiming {
+    message: u32,
+    started: Instant,
+}
+
+#[cfg(feature = "debug-capture")]
+impl HookTiming {
+    fn new(message: u32) -> Self {
+        Self {
+            message,
+            started: Instant::now(),
+        }
+    }
+}
+
+#[cfg(feature = "debug-capture")]
+impl Drop for HookTiming {
+    fn drop(&mut self) {
+        crate::debug_capture::record_message_pump_sample(self.message, self.started.elapsed());
+    }
+}
 
 /// Lower the current thread's OS priority so user input threads (mouse/keyboard hook,
 /// foreground app) get scheduled preferentially. Called from a11y extraction threads
@@ -467,8 +491,17 @@ fn run_native_hooks(
         let mut msg = MSG::default();
         while !stop.load(Ordering::Relaxed) {
             if GetMessageW(&mut msg, HWND::default(), 0, 0).as_bool() {
+                #[cfg(feature = "debug-capture")]
+                let message_started = Instant::now();
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
+                #[cfg(feature = "debug-capture")]
+                if msg.message != WM_TIMER {
+                    crate::debug_capture::record_message_pump_sample(
+                        msg.message,
+                        message_started.elapsed(),
+                    );
+                }
             }
 
             // Check for text buffer flush (runs on timer tick and after every message)
@@ -579,6 +612,8 @@ fn flush_text_buffer(state: &mut HookState) {
 }
 
 unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    #[cfg(feature = "debug-capture")]
+    let _timing = HookTiming::new(wparam.0 as u32);
     if code == HC_ACTION as i32 {
         let kb_struct = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
         let vk_code = kb_struct.vkCode as u16;
@@ -619,7 +654,7 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
 
                 // try_lock when prioritize_input_latency is set, mirroring mouse_hook_proc:
                 // avoid stalling the OS message queue if these locks are contended.
-                let (app_name, window_title) = if s.config.prioritize_input_latency {
+                let cached_context = if s.config.prioritize_input_latency {
                     (
                         s.current_app.try_lock().map(|g| g.clone()).unwrap_or(None),
                         s.current_window
@@ -632,6 +667,11 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
                         s.current_app.lock().clone(),
                         s.current_window.lock().clone(),
                     )
+                };
+                let (app_name, window_title) = if s.config.precise_click_window_context {
+                    foreground_click_context().unwrap_or(cached_context)
+                } else {
+                    cached_context
                 };
 
                 // Check exclusions
@@ -742,7 +782,31 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
     })
 }
 
+/// Reads the current foreground app/title for a click without doing UIA work.
+/// This is deliberately cheap enough for the low-level mouse hook.
+fn foreground_click_context() -> Option<(Option<String>, Option<String>)> {
+    unsafe { window_context_for_hwnd(GetForegroundWindow()) }
+}
+
+fn window_context_at_point(x: i32, y: i32) -> Option<(Option<String>, Option<String>)> {
+    unsafe { window_context_for_hwnd(WindowFromPoint(POINT { x, y })) }
+}
+
+unsafe fn window_context_for_hwnd(hwnd: HWND) -> Option<(Option<String>, Option<String>)> {
+    if hwnd.0.is_null() || is_transient_shell_window(hwnd) {
+        return None;
+    }
+    let mut title_buf = [0u16; 512];
+    let len = GetWindowTextW(hwnd, &mut title_buf);
+    let title = (len > 0).then(|| String::from_utf16_lossy(&title_buf[..len as usize]));
+    let mut pid = 0;
+    GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    Some((Some(get_effective_app_name(hwnd, pid)), title))
+}
+
 unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    #[cfg(feature = "debug-capture")]
+    let _timing = HookTiming::new(wparam.0 as u32);
     if code == HC_ACTION as i32 {
         let mouse_struct = &*(lparam.0 as *const MSLLHOOKSTRUCT);
         let x = mouse_struct.pt.x;
@@ -817,7 +881,7 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
                 let timestamp = Utc::now();
                 let t = s.start.elapsed().as_millis() as u64;
 
-                let (app_name, window_title) = if s.config.prioritize_input_latency {
+                let cached_context = if s.config.prioritize_input_latency {
                     (
                         s.current_app.try_lock().map(|g| g.clone()).unwrap_or(None),
                         s.current_window
@@ -830,6 +894,16 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
                         s.current_app.lock().clone(),
                         s.current_window.lock().clone(),
                     )
+                };
+                let (app_name, window_title) = if s.config.precise_click_window_context {
+                    // A foreground event can lag behind the low-level mouse hook.
+                    // The pointer target is the best attribution for this
+                    // candidate-only accuracy experiment.
+                    window_context_at_point(x, y)
+                        .or_else(foreground_click_context)
+                        .unwrap_or(cached_context)
+                } else {
+                    cached_context
                 };
 
                 // Check exclusions

@@ -7,6 +7,14 @@ pub struct CaptureTriggerMessage {
     pub trigger: CaptureTrigger,
     pub context: CaptureContext,
     pub correlation_id: Option<u64>,
+    /// Additional persisted UI rows represented by this one aggregate trigger.
+    pub additional_correlation_ids: Vec<u64>,
+    /// Candidate-only compact activity span to link to the settled frame.
+    pub activity_span_id: Option<i64>,
+    /// Aggregate wheel movement carried from the recorder into the candidate
+    /// settled-state policy. Other triggers leave these at zero.
+    pub activity_delta_x: i64,
+    pub activity_delta_y: i64,
 }
 
 impl CaptureTriggerMessage {
@@ -15,6 +23,10 @@ impl CaptureTriggerMessage {
             trigger,
             context,
             correlation_id: None,
+            additional_correlation_ids: Vec::new(),
+            activity_span_id: None,
+            activity_delta_x: 0,
+            activity_delta_y: 0,
         }
     }
 
@@ -27,6 +39,10 @@ impl CaptureTriggerMessage {
             trigger,
             context,
             correlation_id: Some(correlation_id),
+            additional_correlation_ids: Vec::new(),
+            activity_span_id: None,
+            activity_delta_x: 0,
+            activity_delta_y: 0,
         }
     }
 

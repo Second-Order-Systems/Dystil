@@ -48,6 +48,19 @@ pub struct UiCaptureConfig {
     /// Capture full accessibility tree of focused window
     pub capture_tree: bool,
 
+    /// Run full-tree refreshes after focus changes and on the periodic timer.
+    /// Click `ElementFromPoint` enrichment is intentionally independent.
+    /// The one startup tree remains enabled independently. This stays enabled by
+    /// default to preserve the established behavior.
+    #[serde(default = "default_capture_background_trees")]
+    pub capture_background_trees: bool,
+
+    /// Resolve click ownership from the window beneath the pointer. This is
+    /// disabled by default so candidate harness behavior cannot alter the
+    /// production recorder before an explicit rollout decision.
+    #[serde(default)]
+    pub precise_click_window_context: bool,
+
     /// Debounce time before capturing tree after focus change (ms)
     pub tree_debounce_ms: u64,
 
@@ -190,6 +203,8 @@ impl Default for UiCaptureConfig {
             capture_context: true,
             capture_mouse_move: false, // High volume
             capture_tree: true,
+            capture_background_trees: true,
+            precise_click_window_context: false,
             tree_debounce_ms: 300,
             tree_max_elements: 10000,
             tree_capture_interval_ms: 2000,
@@ -237,6 +252,10 @@ impl Default for UiCaptureConfig {
             pause_extraction_on_input_ms: 150,
         }
     }
+}
+
+const fn default_capture_background_trees() -> bool {
+    true
 }
 
 impl UiCaptureConfig {
@@ -426,6 +445,7 @@ mod tests {
         assert!(config.enabled);
         assert!(config.capture_clicks);
         assert!(config.capture_window_focus);
+        assert!(config.capture_background_trees);
         assert!(!config.capture_keystrokes); // Should be off by default
         assert!(config.capture_clipboard_content); // On by default
     }

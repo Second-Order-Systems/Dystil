@@ -62,6 +62,10 @@ pub struct CaptureCoordinator {
     // Serializing visual acquisition prevents parallel one-shot sessions. A
     // later adapter can let compatible callers join the same in-flight result.
     visual_gate: Mutex<()>,
+    // The local visible/relevant candidate can reuse exact unchanged surface
+    // states even after the normal rapid-dedup horizon. Production keeps the
+    // existing conservative behavior until an explicit rollout decision.
+    reuse_exact_surface_states: bool,
 }
 
 impl CaptureCoordinator {
@@ -83,7 +87,13 @@ impl CaptureCoordinator {
             fingerprint_gate: Arc::new(tokio::sync::Semaphore::new(1)),
             commit_gate: Mutex::new(()),
             visual_gate: Mutex::new(()),
+            reuse_exact_surface_states: false,
         }
+    }
+
+    pub fn with_exact_surface_reuse(mut self) -> Self {
+        self.reuse_exact_surface_states = true;
+        self
     }
 
     /// Attach a bounded, consent-gated metrics recorder. The default recorder
@@ -420,6 +430,10 @@ impl CaptureCoordinator {
         let key = WindowKey::from_context(&observation.context);
         let fingerprint = ContextFingerprint::from_context(&observation.context);
         let now = Instant::now();
+        #[cfg(feature = "debug-capture")]
+        let reuse_rss_before = crate::debug_capture::process_rss_bytes();
+        #[cfg(feature = "debug-capture")]
+        let reuse_started = Instant::now();
         let mut dedup = self.dedup.lock().await;
         if let Some(previous) = dedup.entries.get(&key) {
             let same_context = previous.context == fingerprint;
@@ -431,18 +445,61 @@ impl CaptureCoordinator {
                     <= SIMHASH_DISTANCE_THRESHOLD;
             let exact_typing_duplicate =
                 matches!(observation.trigger, CaptureTrigger::TypingPause) && exact;
-            if !is_forced_checkpoint(&observation.trigger)
+            let exact_surface_reuse =
+                self.reuse_exact_surface_states && exact && !snapshot.truncated;
+            let force_new_frame = is_forced_checkpoint(&observation.trigger)
+                && !(self.reuse_exact_surface_states
+                    && matches!(
+                        observation.trigger,
+                        CaptureTrigger::AppSwitch | CaptureTrigger::WindowFocus
+                    ));
+            if !force_new_frame
                 && same_context
-                && ((heartbeat && exact)
+                && (exact_surface_reuse
+                    || (heartbeat && exact)
                     || (rapid && exact)
                     || exact_typing_duplicate
                     || (rapid && fuzzy && allows_fuzzy_dedup(&observation.trigger)))
             {
+                #[cfg(feature = "debug-capture")]
+                crate::debug_capture::record_capture_phase(
+                    "hash_reuse_decision",
+                    observation.trigger.as_str(),
+                    reuse_started,
+                    snapshot.context.application.as_deref(),
+                    Some(snapshot.node_count),
+                    Some(snapshot.text.len()),
+                    Some(snapshot.truncated),
+                    Some(match snapshot.truncation_reason {
+                        crate::AccessibilityTruncationReason::None => "none",
+                        crate::AccessibilityTruncationReason::Timeout => "timeout",
+                        crate::AccessibilityTruncationReason::MaxNodes => "max_nodes",
+                    }),
+                    reuse_rss_before,
+                    crate::debug_capture::process_rss_bytes(),
+                );
                 return Ok(PersistDecision::Reused(previous.stored.clone()));
             }
         }
 
         let stored = self.store.persist(observation.clone()).await?;
+        #[cfg(feature = "debug-capture")]
+        crate::debug_capture::record_capture_phase(
+            "hash_reuse_decision",
+            observation.trigger.as_str(),
+            reuse_started,
+            snapshot.context.application.as_deref(),
+            Some(snapshot.node_count),
+            Some(snapshot.text.len()),
+            Some(snapshot.truncated),
+            Some(match snapshot.truncation_reason {
+                crate::AccessibilityTruncationReason::None => "none",
+                crate::AccessibilityTruncationReason::Timeout => "timeout",
+                crate::AccessibilityTruncationReason::MaxNodes => "max_nodes",
+            }),
+            reuse_rss_before,
+            crate::debug_capture::process_rss_bytes(),
+        );
         remember_entry(&mut dedup, key, fingerprint, snapshot, stored.clone(), now);
         Ok(PersistDecision::Persisted(stored))
     }

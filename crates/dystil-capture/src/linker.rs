@@ -185,6 +185,10 @@ fn bounded_insert<T>(entries: &mut HashMap<u64, (T, Instant)>, id: u64, value: (
 }
 
 async fn apply_update(pool: &SqlitePool, row_id: i64, frame_id: i64) {
+    #[cfg(feature = "debug-capture")]
+    let rss_before = crate::debug_capture::process_rss_bytes();
+    #[cfg(feature = "debug-capture")]
+    let started = std::time::Instant::now();
     if let Err(error) =
         sqlx::query("UPDATE ui_events SET frame_id = ?1 WHERE id = ?2 AND frame_id IS NULL")
             .bind(frame_id)
@@ -194,6 +198,19 @@ async fn apply_update(pool: &SqlitePool, row_id: i64, frame_id: i64) {
     {
         warn!(%error, row_id, frame_id, "Dystil frame linker update failed");
     }
+    #[cfg(feature = "debug-capture")]
+    crate::debug_capture::record_capture_phase(
+        "ui_event_activity_linking",
+        "link",
+        started,
+        None,
+        None,
+        None,
+        None,
+        None,
+        rss_before,
+        crate::debug_capture::process_rss_bytes(),
+    );
 }
 
 #[cfg(test)]

@@ -184,6 +184,11 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         // Safety: single-threaded access guaranteed by walker thread design
         let uia = unsafe { self.ensure_init()? };
 
+        #[cfg(feature = "debug-capture")]
+        let metadata_rss_before = crate::debug_capture::process_rss_bytes();
+        #[cfg(feature = "debug-capture")]
+        let metadata_started = Instant::now();
+
         // Get the focused window
         let hwnd = unsafe { GetForegroundWindow() };
         if hwnd == HWND::default() {
@@ -260,6 +265,20 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             return Ok(TreeWalkResult::Skipped(SkipReason::NotInIncludeList));
         }
 
+        #[cfg(feature = "debug-capture")]
+        crate::debug_capture::record_capture_phase(
+            "foreground_metadata",
+            "unknown",
+            metadata_started,
+            Some(&app_name),
+            None,
+            None,
+            None,
+            None,
+            metadata_rss_before,
+            crate::debug_capture::process_rss_bytes(),
+        );
+
         debug!(app = %app_name, pid, title = %window_name, "a11y: capturing window tree");
 
         // Use adaptive budget overrides when set
@@ -275,11 +294,39 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         // Electron often require the per-element TreeWalker fallback, which is
         // bounded by the remaining wall-clock budget inside the traversal.
         let remaining_budget = effective_timeout.saturating_sub(start.elapsed());
-        let captured =
-            match uia.capture_window_tree_bounded(hwnd, effective_max_nodes, remaining_budget) {
-                Some(captured) => captured,
-                None => return Ok(TreeWalkResult::NotFound),
-            };
+        #[cfg(feature = "debug-capture")]
+        let uia_rss_before = crate::debug_capture::process_rss_bytes();
+        #[cfg(feature = "debug-capture")]
+        let uia_started = Instant::now();
+        let captured = match uia.capture_window_tree_bounded(
+            hwnd,
+            effective_max_nodes,
+            remaining_budget,
+            self.config.prefer_incremental_chromium_walk,
+        ) {
+            Some(captured) => captured,
+            None => return Ok(TreeWalkResult::NotFound),
+        };
+        #[cfg(feature = "debug-capture")]
+        crate::debug_capture::record_capture_phase(
+            "uia_provider_tree",
+            "unknown",
+            uia_started,
+            Some(&app_name),
+            Some(captured.root.node_count()),
+            None,
+            Some(!matches!(
+                captured.truncation,
+                super::TruncationReason::None
+            )),
+            Some(match captured.truncation {
+                super::TruncationReason::None => "none",
+                super::TruncationReason::Timeout => "timeout",
+                super::TruncationReason::MaxNodes => "max_nodes",
+            }),
+            uia_rss_before,
+            crate::debug_capture::process_rss_bytes(),
+        );
         let root = captured.root;
         let truncation_reason = captured.truncation;
 

@@ -447,6 +447,10 @@ pub struct TreeWalkerConfig {
     /// Per-walk override for `walk_timeout` (set by adaptive budget, takes precedence).
     pub walk_timeout_override: Option<Duration>,
 
+    /// Use the incremental Chromium UIA walker from the first browser walk.
+    /// Candidate-only: production retains its existing cached-subtree path.
+    pub prefer_incremental_chromium_walk: bool,
+
     /// Capture per-line geometry for multi-line text nodes (paragraphs).
     /// Disable to skip the extra parameterized AX calls and fall back to
     /// paragraph-only bbox capture (the pre-2026-05 behavior).
@@ -485,6 +489,7 @@ impl Default for TreeWalkerConfig {
             ignore_incognito_windows: true,
             max_nodes_override: None,
             walk_timeout_override: None,
+            prefer_incremental_chromium_walk: false,
             enable_line_bounds: true,
             line_bounds_max_calls_per_node: 30,
             line_bounds_max_calls_per_frame: 300,

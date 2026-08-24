@@ -1,4 +1,4 @@
-use crate::a11y::{EventData, UiEvent};
+use crate::a11y::{ElementContext, EventData, UiEvent};
 use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
 
@@ -132,6 +132,71 @@ impl UiEventRecord {
         record.element_automation_id = clean(record.element_automation_id);
         record
     }
+
+    /// Applies the precise `ElementFromPoint` result to its already-recorded
+    /// physical click. The native hook's app/window/timing remain intact.
+    pub fn apply_element_context(&mut self, element: &ElementContext) {
+        self.element_role = clean(Some(element.role.clone()));
+        self.element_name = clean(element.name.clone());
+        self.element_value = clean(element.value.clone());
+        self.element_description = clean(element.description.clone());
+        self.element_automation_id = clean(element.automation_id.clone());
+        self.element_bounds = element.bounds.as_ref().map(|bounds| {
+            serde_json::json!({
+                "x": bounds.x,
+                "y": bounds.y,
+                "width": bounds.width,
+                "height": bounds.height
+            })
+            .to_string()
+        });
+    }
+}
+
+/// Updates a physical click that was already flushed before its asynchronous
+/// UIA target arrived. The exact timestamp/coordinates are copied from the
+/// original request, so this never joins an unrelated nearby click.
+pub async fn enrich_persisted_physical_click(
+    pool: &SqlitePool,
+    session_id: &str,
+    event: &UiEvent,
+) -> Result<bool, sqlx::Error> {
+    let (x, y, element) = match (&event.data, event.element.as_ref()) {
+        (
+            EventData::Click {
+                x,
+                y,
+                click_count: 0,
+                ..
+            },
+            Some(element),
+        ) => (*x, *y, element),
+        _ => return Ok(false),
+    };
+    let mut enrichment = UiEventRecord::from_native(event.clone(), session_id.to_string());
+    enrichment.apply_element_context(element);
+    let result = sqlx::query(
+        "UPDATE ui_events SET \
+            element_role=?1, element_name=?2, element_value=?3, element_description=?4, \
+            element_automation_id=?5, element_bounds=?6 \
+         WHERE id = (SELECT id FROM ui_events \
+             WHERE session_id=?7 AND timestamp=?8 AND event_type='click' \
+               AND x=?9 AND y=?10 AND click_count > 0 \
+             ORDER BY id DESC LIMIT 1)",
+    )
+    .bind(enrichment.element_role)
+    .bind(enrichment.element_name)
+    .bind(enrichment.element_value)
+    .bind(enrichment.element_description)
+    .bind(enrichment.element_automation_id)
+    .bind(enrichment.element_bounds)
+    .bind(session_id)
+    .bind(event.timestamp.to_rfc3339())
+    .bind(x)
+    .bind(y)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
 }
 
 pub async fn insert_ui_event_batch(
@@ -154,4 +219,73 @@ pub async fn insert_ui_event_batch(
     }
     tx.commit().await?;
     Ok(ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::a11y::ElementContext;
+
+    #[tokio::test]
+    async fn delayed_enrichment_updates_the_matching_flushed_physical_click() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE ui_events (\
+                id INTEGER PRIMARY KEY, session_id TEXT, timestamp TEXT, event_type TEXT, \
+                x INTEGER, y INTEGER, click_count INTEGER, element_role TEXT, \
+                element_name TEXT, element_value TEXT, element_description TEXT, \
+                element_automation_id TEXT, element_bounds TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let timestamp = Utc::now();
+        sqlx::query(
+            "INSERT INTO ui_events (session_id, timestamp, event_type, x, y, click_count) \
+             VALUES ('session', ?1, 'click', 44, 55, 1)",
+        )
+        .bind(timestamp.to_rfc3339())
+        .execute(&pool)
+        .await
+        .unwrap();
+        let enrichment = UiEvent {
+            id: None,
+            timestamp,
+            relative_ms: 0,
+            data: EventData::Click {
+                x: 44,
+                y: 55,
+                button: 0,
+                click_count: 0,
+                modifiers: 0,
+            },
+            app_name: None,
+            window_title: None,
+            browser_url: None,
+            element: Some(ElementContext {
+                role: "Button".into(),
+                name: Some("Send".into()),
+                value: None,
+                description: None,
+                automation_id: Some("send-button".into()),
+                bounds: None,
+            }),
+            frame_id: None,
+        };
+
+        assert!(
+            enrich_persisted_physical_click(&pool, "session", &enrichment)
+                .await
+                .unwrap()
+        );
+        let row =
+            sqlx::query("SELECT element_role, element_name, element_automation_id FROM ui_events")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        use sqlx::Row;
+        assert_eq!(row.get::<String, _>("element_role"), "Button");
+        assert_eq!(row.get::<String, _>("element_name"), "Send");
+        assert_eq!(row.get::<String, _>("element_automation_id"), "send-button");
+    }
 }

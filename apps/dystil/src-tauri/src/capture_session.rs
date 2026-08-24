@@ -237,6 +237,13 @@ impl CaptureSession {
                     .parse()
                     .unwrap_or_default(),
                 pause_extraction_on_input_ms: config.pause_extraction_on_input_ms,
+                merge_click_enrichment: false,
+                settled_state_scheduler: false,
+                scroll_stop_delay_ms: 300,
+                // Production remains the frozen baseline until the candidate
+                // has passed matched real-app validation.
+                capture_background_trees: true,
+                precise_click_window_context: false,
             };
             match start_dystil_ui_recording(
                 server.db.pool.clone(),
