@@ -19,6 +19,16 @@ struct TauriEngineHost {
     app: AppHandle,
 }
 
+fn resolve_local_sync_permissions(
+    consent: crate::store::SyncConsent,
+    image_sync_disabled: bool,
+) -> LocalSyncPermissions {
+    LocalSyncPermissions {
+        segments: consent.segments,
+        screenshots: consent.screenshots && !image_sync_disabled,
+    }
+}
+
 #[async_trait]
 impl EngineHost for TauriEngineHost {
     async fn device_token(&self) -> Result<Option<String>, String> {
@@ -59,10 +69,13 @@ impl EngineHost for TauriEngineHost {
     async fn local_sync_permissions(&self) -> Result<LocalSyncPermissions, String> {
         let settings = crate::store::SettingsStore::get(&self.app)?.unwrap_or_default();
         let consent = settings.sync_consent.effective();
-        Ok(LocalSyncPermissions {
-            segments: consent.segments,
-            screenshots: consent.screenshots,
-        })
+        let image_sync_disabled = crate::store::image_sync_disabled_by_env();
+        if image_sync_disabled {
+            tracing::info!(
+                "dystil-sync: image sync disabled by DYSTIL_IMAGE_SYNC; segment sync remains enabled"
+            );
+        }
+        Ok(resolve_local_sync_permissions(consent, image_sync_disabled))
     }
 
     async fn app_version(&self) -> Result<Option<String>, String> {
@@ -182,4 +195,37 @@ pub async fn reconcile(app: AppHandle) -> Result<(), String> {
         handle.abort();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_override_disables_only_screenshot_sync() {
+        let permissions = resolve_local_sync_permissions(
+            crate::store::SyncConsent {
+                segments: true,
+                screenshots: true,
+            },
+            true,
+        );
+
+        assert!(permissions.segments);
+        assert!(!permissions.screenshots);
+    }
+
+    #[test]
+    fn image_sync_remains_enabled_without_override() {
+        let permissions = resolve_local_sync_permissions(
+            crate::store::SyncConsent {
+                segments: true,
+                screenshots: true,
+            },
+            false,
+        );
+
+        assert!(permissions.segments);
+        assert!(permissions.screenshots);
+    }
 }

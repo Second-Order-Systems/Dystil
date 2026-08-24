@@ -88,6 +88,7 @@ function capturePhaseSummary(records) {
     rss_delta_bytes: rssDelta,
     node_count: numberSummary(values("node_count")),
     text_bytes: numberSummary(values("text_bytes")),
+    output_bytes: numberSummary(values("output_bytes")),
     truncations: records.filter((record) => record.truncated).length,
     truncation_reasons: countBy(records.filter((record) => record.truncation_reason), (record) => record.truncation_reason),
   };
@@ -211,6 +212,7 @@ export function aggregateRun({ manifest, events, captures, process, markers, fra
   const captureResults = captures.filter((record) => record.kind === "capture_result");
   const accessibility = captures.filter((record) => record.kind === "accessibility_attempt");
   const capturePhases = captures.filter((record) => record.kind === "capture_phase");
+  const imagePhases = captures.filter((record) => record.kind === "image_phase");
   const background = captures.filter((record) => record.kind === "background_tree_attempt");
   const persistence = captures.filter((record) => record.kind === "persistence_result");
   const browserFrames = frames.filter((frame) => /(chrome|msedge|edge|firefox)/i.test(frame.app_name ?? ""));
@@ -301,6 +303,7 @@ export function aggregateRun({ manifest, events, captures, process, markers, fra
       normalization_duration_ms: numberSummary(persistence.map((record) => Number(record.normalization_duration_ms))),
       snapshot_bytes: persistence.reduce((sum, record) => sum + Number(record.snapshot_bytes ?? 0), 0),
       phase_metrics: capturePhaseMetrics(capturePhases),
+      image_phase_metrics: capturePhaseMetrics(imagePhases),
     },
     idle: {
       heartbeat_requests: idleRequests.length,
@@ -368,6 +371,9 @@ export function renderMarkdown(report) {
       `| ${app} | ${phase} | ${summary.attempts} | ${summary.duration_ms.total?.toFixed(2) ?? "n/a"} | ${summary.duration_ms.p50?.toFixed(2) ?? "n/a"} |`,
     ),
   );
+  const imagePhaseRows = Object.entries(report.capture.image_phase_metrics.by_phase).map(([phase, summary]) =>
+    `| ${phase} | ${summary.attempts} | ${summary.duration_ms.total?.toFixed(2) ?? "n/a"} | ${summary.duration_ms.p50?.toFixed(2) ?? "n/a"} | ${summary.duration_ms.p95?.toFixed(2) ?? "n/a"} | ${summary.duration_ms.max?.toFixed(2) ?? "n/a"} |`,
+  );
   const lines = [
     "# Dystil capture baseline report",
     "",
@@ -406,6 +412,12 @@ export function renderMarkdown(report) {
     "| Phase | Attempts | Total ms | P50 ms | Peak RSS after phase |",
     "|---|---:|---:|---:|---:|",
     ...(phaseRows.length ? phaseRows : ["| No phase diagnostics | 0 | n/a | n/a | n/a |"]),
+    "",
+    "## Image pipeline attribution",
+    "",
+    "| Phase | Attempts | Total ms | P50 ms | P95 ms | Max ms |",
+    "|---|---:|---:|---:|---:|---:|",
+    ...(imagePhaseRows.length ? imagePhaseRows : ["| No image phase diagnostics | 0 | n/a | n/a | n/a | n/a |"]),
     "",
     "## Phase attribution by application",
     "",
@@ -457,7 +469,7 @@ export function renderMarkdown(report) {
     "",
     "## Locality declaration",
     "",
-    `The harness manifest declares remote writes=${report.run.remote_writes} and uploads=${report.run.uploads}. The standalone harness contains no sync engine wiring.`,
+    `The run manifest declares remote writes=${report.run.remote_writes} and uploads=${report.run.uploads}. Profiling records remain local and are not added to the capture database.`,
     "",
   ];
   return lines.join("\n");
@@ -487,7 +499,7 @@ async function readExpectedFacts(runDir) {
 }
 
 function readDatabase(runDir, manifest) {
-  const database = new Database(join(runDir, "db.sqlite"), { readonly: true });
+  const database = new Database(manifest.database_path ?? join(runDir, "db.sqlite"), { readonly: true });
   const frames = database.query(`
     SELECT id, timestamp, app_name, window_name, browser_url, document_path,
            capture_trigger, LENGTH(COALESCE(frame_text, '')) AS text_bytes,

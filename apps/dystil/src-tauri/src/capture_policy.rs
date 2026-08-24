@@ -3,10 +3,11 @@ use dystil_capture::CaptureMode;
 /// Product-owned capture policy. Organization-enabled screenshots use
 /// `FullCapture`; user-choice policies honor `disable_vision`.
 pub fn product_capture_mode(disable_vision: bool) -> CaptureMode {
-    if matches!(
-        crate::app_policy::current().capture.screenshots,
-        crate::app_policy::ScreenshotPolicy::UserChoice
-    ) && disable_vision
+    if crate::store::screenshot_capture_disabled_by_env()
+        || matches!(
+            crate::app_policy::current().capture.screenshots,
+            crate::app_policy::ScreenshotPolicy::UserChoice
+        ) && disable_vision
     {
         CaptureMode::TextOnly
     } else {

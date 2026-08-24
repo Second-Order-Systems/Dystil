@@ -12,6 +12,9 @@ use dystil_capture::a11y::tree::TreeWalkerConfig;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
+#[cfg(feature = "capture-profiling")]
+use sysinfo::{ProcessExt, SystemExt};
+
 use dystil_capture::{
     accessibility_provider::DystilAccessibilityProvider,
     capture_loop::{DystilAxCaptureConfig, DystilAxCaptureHandle},
@@ -68,6 +71,23 @@ pub struct CaptureSession {
     redactor_load_task: Option<tokio::task::JoinHandle<()>>,
     // Own the trigger bus independently of Dystil's legacy visual loop.
     _capture_trigger_bus: TriggerBus<CaptureTriggerMessage>,
+    #[cfg(feature = "capture-profiling")]
+    capture_profiling: Option<CaptureProfiling>,
+}
+
+#[cfg(feature = "capture-profiling")]
+struct CaptureProfiling {
+    _session: dystil_capture::debug_capture::DebugCaptureSession,
+    stop_tx: tokio::sync::watch::Sender<bool>,
+    sampler: tokio::task::JoinHandle<()>,
+}
+
+#[cfg(feature = "capture-profiling")]
+impl CaptureProfiling {
+    async fn stop(self) {
+        let _ = self.stop_tx.send(true);
+        let _ = self.sampler.await;
+    }
 }
 
 impl CaptureSession {
@@ -85,9 +105,17 @@ impl CaptureSession {
     ) -> Result<Self, String> {
         info!("Starting capture session");
 
+        #[cfg(feature = "capture-profiling")]
+        let capture_profiling = start_capture_profiling(server).await;
+
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
         let capture_mode = crate::capture_policy::product_capture_mode(config.disable_vision);
         info!(?capture_mode, "applying code-owned capture policy");
+        if crate::store::screenshot_capture_disabled_by_env() {
+            info!(
+                "local screenshot capture disabled by DYSTIL_SCREENSHOT_CAPTURE; accessibility and event capture remain enabled"
+            );
+        }
 
         let capture_trigger_bus = TriggerBus::<CaptureTriggerMessage>::new(TRIGGER_CHANNEL_BUFFER);
         let linker_runtime = DystilLinkerRuntime::start(server.db.pool.clone());
@@ -279,6 +307,8 @@ impl CaptureSession {
             redaction_worker,
             redactor_load_task,
             _capture_trigger_bus: capture_trigger_bus,
+            #[cfg(feature = "capture-profiling")]
+            capture_profiling,
         })
     }
 
@@ -334,8 +364,109 @@ impl CaptureSession {
             worker.shutdown().await;
         }
 
+        #[cfg(feature = "capture-profiling")]
+        if let Some(profiling) = self.capture_profiling.take() {
+            profiling.stop().await;
+        }
+
         info!("Capture session stopped");
     }
+}
+
+#[cfg(feature = "capture-profiling")]
+async fn start_capture_profiling(server: &ServerCore) -> Option<CaptureProfiling> {
+    let output_root = std::env::var_os("DYSTIL_CAPTURE_PROFILE_DIR")?;
+    let output_root = std::path::PathBuf::from(output_root);
+    let run_id = format!("enterprise-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+    let run_dir = output_root.join(&run_id);
+    let baseline_frame_id = sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(id), 0) FROM frames")
+        .fetch_one(&server.db.pool)
+        .await
+        .unwrap_or_default();
+    let baseline_event_id =
+        sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(id), 0) FROM ui_events")
+            .fetch_one(&server.db.pool)
+            .await
+            .unwrap_or_default();
+    let session = match dystil_capture::debug_capture::DebugCaptureSession::start(
+        dystil_capture::debug_capture::DebugCaptureConfig {
+            run_dir: run_dir.clone(),
+            run_id,
+            policy: "enterprise-app".to_string(),
+            measurement_mode: "profiling".to_string(),
+            baseline_frame_id,
+            baseline_event_id,
+            remote_writes: cfg!(feature = "cloud-sync"),
+            uploads: cfg!(feature = "cloud-sync"),
+            database_path: Some(server.data_dir.join("db.sqlite")),
+        },
+    ) {
+        Ok(session) => session,
+        Err(error) => {
+            warn!(%error, "capture profiling could not start");
+            return None;
+        }
+    };
+
+    let database_path = server.data_dir.join("db.sqlite");
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let sampler = tokio::spawn(sample_profile_process(database_path, stop_rx));
+    info!(profile_dir = %run_dir.display(), "capture profiling started");
+    Some(CaptureProfiling {
+        _session: session,
+        stop_tx,
+        sampler,
+    })
+}
+
+#[cfg(feature = "capture-profiling")]
+async fn sample_profile_process(
+    database_path: std::path::PathBuf,
+    mut stop_rx: tokio::sync::watch::Receiver<bool>,
+) {
+    let Ok(pid) = sysinfo::get_current_pid() else {
+        return;
+    };
+    let mut system = sysinfo::System::new();
+    let mut tick = tokio::time::interval(Duration::from_millis(200));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            changed = stop_rx.changed() => {
+                if changed.is_err() || *stop_rx.borrow() {
+                    break;
+                }
+            }
+            _ = tick.tick() => {
+                system.refresh_process(pid);
+                if let Some(process) = system.process(pid) {
+                    dystil_capture::debug_capture::record_process_sample(
+                        process.cpu_usage(),
+                        process.memory(),
+                        profile_sqlite_bytes(&database_path),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "capture-profiling")]
+fn profile_sqlite_bytes(database_path: &std::path::Path) -> u64 {
+    let mut total = database_path
+        .metadata()
+        .map(|value| value.len())
+        .unwrap_or(0);
+    let path = database_path.to_string_lossy();
+    for suffix in ["-wal", "-shm"] {
+        total = total.saturating_add(
+            std::path::PathBuf::from(format!("{path}{suffix}"))
+                .metadata()
+                .map(|value| value.len())
+                .unwrap_or(0),
+        );
+    }
+    total
 }
 
 #[cfg(target_os = "macos")]
