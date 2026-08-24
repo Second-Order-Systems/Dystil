@@ -17,7 +17,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.0.11"
+version = "0.0.12"
 authors = ["Second Order Systems <udit@2os.ai>"]
 description = "Dystil — finds the work you repeat and builds the thing that does it. Local-first desktop app."
 repository = "https://github.com/Second-Order-Systems/Dystil"
