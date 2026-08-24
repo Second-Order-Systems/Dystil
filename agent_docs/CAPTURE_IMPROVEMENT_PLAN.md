@@ -1,3 +1,7 @@
+---
+status: unreviewed
+---
+
 # Windows capture improvement plan
 
 This branch contains the validated pre-semantic capture work only. The later
