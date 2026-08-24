@@ -511,6 +511,8 @@ impl CaptureCoordinator {
     ) -> Result<PersistDecision, CaptureError> {
         let visual = observation.visual.as_ref().expect("checked by caller");
         let visual_key = VisualKey::from_observation(&observation);
+        #[cfg(feature = "debug-capture")]
+        let fingerprint_started = Instant::now();
         let fingerprint = if let (Some(deadline), Ok(permit)) = (
             fingerprint_deadline,
             Arc::clone(&self.fingerprint_gate).try_acquire_owned(),
@@ -543,6 +545,22 @@ impl CaptureCoordinator {
         } else {
             None
         };
+        #[cfg(feature = "debug-capture")]
+        crate::debug_capture::record_image_phase(
+            "visual_fingerprint",
+            observation.trigger.as_str(),
+            fingerprint_started,
+            observation.context.application.as_deref(),
+            visual.monitor_id.or(observation.context.monitor_id),
+            Some(visual.image.width()),
+            Some(visual.image.height()),
+            None,
+            if fingerprint.is_some() {
+                "succeeded"
+            } else {
+                "skipped"
+            },
+        );
 
         let _commit = self.commit_gate.lock().await;
         let context = ContextFingerprint::from_context(&observation.context);
@@ -632,8 +650,11 @@ const DEDUP_RAPID_HORIZON: Duration = Duration::from_secs(10);
 const SIMHASH_DISTANCE_THRESHOLD: u32 = 2;
 const MAX_DEDUP_WINDOWS: usize = 128;
 const MAX_VISUAL_MONITORS: usize = 8;
-const VISUAL_MAX_WIDTH: u32 = 960;
-const VISUAL_MAX_HEIGHT: u32 = 540;
+// The visual fingerprint is only a change detector. Keep it deliberately
+// small: UIA retains readable text, while the image signature only decides
+// whether a materially different screen needs a new stored context image.
+const VISUAL_MAX_WIDTH: u32 = 320;
+const VISUAL_MAX_HEIGHT: u32 = 180;
 const VISUAL_PIXEL_DELTA: u8 = 12;
 const VISUAL_CHANGED_PIXEL_RATIO: f64 = 0.0005;
 const VISUAL_MEAN_ABSOLUTE_DELTA: f64 = 0.10;
@@ -1596,7 +1617,10 @@ mod change_detection_tests {
         let dark = visual_fingerprint(&dark);
         let bright = visual_fingerprint(&bright);
 
-        assert_eq!((dark.width, dark.height), (960, 540));
+        assert_eq!(
+            (dark.width, dark.height),
+            (VISUAL_MAX_WIDTH, VISUAL_MAX_HEIGHT)
+        );
         assert!(dark.pixels.len() <= (VISUAL_MAX_WIDTH * VISUAL_MAX_HEIGHT) as usize);
         assert!(!compare_visual_fingerprints(&dark, &bright).near_identical);
         assert!(compare_visual_fingerprints(&dark, &dark).near_identical);
