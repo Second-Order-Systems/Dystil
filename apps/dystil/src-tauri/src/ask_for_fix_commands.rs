@@ -5,11 +5,12 @@ use std::collections::HashMap;
 use dystil_ai::{AiRuntime, AiRuntimeError, AiRuntimeErrorCode};
 use dystil_insights::{
     cancel_ask_for_fix_turn as cancel_turn, create_ask_for_fix_session, get_ask_for_fix_session,
-    keep_ask_for_fix_artifact, latest_ask_for_fix_session, lock_ask_for_fix,
-    recover_interrupted_ask_for_fix_turn, retry_ask_for_fix, review_ask_for_fix_watch,
-    run_locked_ask_for_fix, run_staged_ask_for_fix, set_ask_for_fix_error, stage_ask_for_fix_turn,
-    start_ask_for_fix_watch, stop_ask_for_fix_watch, update_ask_for_fix_watch_guidance,
-    AskInputEvent, AskSessionView, AskUserTurn,
+    keep_ask_for_fix_artifact, latest_ask_for_fix_session, list_ask_for_fix_sessions,
+    lock_ask_for_fix, recover_interrupted_ask_for_fix_turn, retry_ask_for_fix,
+    review_ask_for_fix_watch, run_locked_ask_for_fix, run_staged_ask_for_fix,
+    set_ask_for_fix_error, stage_ask_for_fix_turn, start_ask_for_fix_watch, stop_ask_for_fix_watch,
+    update_ask_for_fix_watch_guidance, AskInputEvent, AskSessionHistoryItem, AskSessionView,
+    AskUserTurn,
 };
 use tauri::{AppHandle, State};
 use tokio::sync::{oneshot, Mutex};
@@ -129,6 +130,18 @@ pub async fn ask_for_fix_latest(
         }
         other => Ok(other),
     }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn ask_for_fix_list(
+    app: AppHandle,
+    state: State<'_, WorthFixingState>,
+) -> Result<Vec<AskSessionHistoryItem>, String> {
+    route_cloud_ask!(crate::enterprise_ask::list());
+    list_ask_for_fix_sessions(state.pool(&app).await?)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

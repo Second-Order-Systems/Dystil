@@ -1240,7 +1240,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "dystil-ai"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "async-trait",
  "dystil-redact",
@@ -1254,7 +1254,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-automation"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1272,7 +1272,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-capture"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -1325,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-engine"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "async-trait",
  "dystil-sync",
@@ -1337,7 +1337,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-insights"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1358,7 +1358,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-mcp"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "chrono",
  "dystil-retrieval",
@@ -1372,7 +1372,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-protocol"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "chrono",
  "hex",
@@ -1383,7 +1383,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-redact"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1405,7 +1405,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-retrieval"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "chrono",
  "clap",
@@ -1420,7 +1420,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-storage"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "serde",
  "serde_json",
@@ -1433,7 +1433,7 @@ dependencies = [
 
 [[package]]
 name = "dystil-sync"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "chrono",
  "clap",
@@ -1456,11 +1456,11 @@ dependencies = [
 
 [[package]]
 name = "dystil-telemetry"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "dystil-work-index"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "chrono",
  "clap",

@@ -246,6 +246,14 @@ async askForFixLatest() : Promise<Result<AskSessionView | null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async askForFixList() : Promise<Result<AskSessionHistoryItem[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_list") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async askForFixRetry(sessionId: string) : Promise<Result<AskSessionView, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("ask_for_fix_retry", { sessionId }) };
@@ -1771,6 +1779,11 @@ export type AskPresentation = { route: AskPresentationRoute; headline: string; e
 export type AskPresentationRoute = "answer_now" | "something_now_more_later" | "cannot_see" | "needs_more_than_one_person"
 export type AskQuestion = { kind: AskQuestionKind; text: string; helper: string; options: AskOption[]; minSelections: number; maxSelections: number }
 export type AskQuestionKind = "free_text" | "single_select" | "multi_select" | "compare"
+/**
+ * A deliberately small, read-only index for the Ask-for-fix history surface.
+ * The full transcript is fetched only after a person chooses an item.
+ */
+export type AskSessionHistoryItem = { sessionId: string; title: string; phase: AskPhase; status: string; createdAt: string; updatedAt: string }
 export type AskSessionView = { sessionId: string; phase: AskPhase; status: string; questionCount: number; maxQuestions: number; messages: AskMessageView[]; understanding: AskUnderstanding; currentQuestionId: string | null; currentQuestion: AskQuestion | null; presentation: AskPresentation | null; locked: boolean; lastErrorCode: string | null; lastErrorDetail: string | null; provider: string | null; model: string | null; cachedInputTokens: number; artifactKeptId: string | null; watch: AskWatchView | null; createdAt: string; updatedAt: string }
 export type AskUnderstanding = { synthesis: string; grounding: string[]; inferences: string[]; preservedBoundary: string; uncertainty: string[]; solutionTarget: string }
 export type AskUserTurn = {

@@ -1,15 +1,20 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
+import { useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
-import { AskForFix } from "@/components/dystil/pages/ask-for-fix";
+import { useAppPolicy } from "@/lib/app-policy";
 
-/** Not yet redesigned — no written handoff for this screen. */
+/** Keeps existing Ask links working while conversations live at /home/chat. */
 export default function AskPage() {
+  const router = useRouter();
   const searchParams = useSearchParams();
-  return (
-    <div className="px-10 py-8">
-      <AskForFix initialText={searchParams.get("initial") ?? ""} />
-    </div>
-  );
+  const { policy } = useAppPolicy();
+  const initial = searchParams.get("initial");
+  useEffect(() => {
+    if (!policy) return;
+    const target = policy.askBackend === "cloud" ? "/home" : "/home/chat";
+    router.replace(initial ? `${target}?initial=${encodeURIComponent(initial)}` : target);
+  }, [initial, policy, router]);
+  return null;
 }

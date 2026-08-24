@@ -17,8 +17,10 @@ const mockCommands = vi.hoisted(() => ({
   askForFixReviewWatch: vi.fn(),
   askForFixUpdateWatchGuidance: vi.fn(),
 }));
+const mockRouter = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
 
 vi.mock("@/lib/utils/tauri", () => ({ commands: mockCommands }));
+vi.mock("next/navigation", () => ({ useRouter: () => mockRouter }));
 
 function session(overrides: Partial<AskSessionView> = {}): AskSessionView {
   return {
@@ -101,7 +103,21 @@ describe("AskForFix", () => {
     });
   });
 
-  it("renders Dystil's causal understanding and locks it only on confirmation", async () => {
+  it("moves a new conversation onto its own chat route", async () => {
+    const submitted = session({
+      messages: [{ messageId: "u1", role: "user", text: "I rebuild a report every Friday.", event: null, createdAt: "now" }],
+    });
+    mockCommands.askForFixSubmit.mockResolvedValue({ status: "ok", data: submitted });
+
+    render(<AskForFix fresh />);
+    const composer = await screen.findByPlaceholderText(/Describe the problem/);
+    fireEvent.change(composer, { target: { value: "I rebuild a report every Friday." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
+
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith("/home/chat?session=afs_test"));
+  });
+
+  it("shows a concise confirmation and locks it only on confirmation", async () => {
     const consolidation = session({
       phase: "consolidate",
       messages: [{ messageId: "a1", role: "assistant", text: "I have a working model.", event: null, createdAt: "now" }],
@@ -119,10 +135,10 @@ describe("AskForFix", () => {
 
     render(<AskForFix />);
     expect(await screen.findByText(/reconstructing its context/i)).toBeInTheDocument();
-    expect(screen.getByText("The user's final judgement")).toBeInTheDocument();
-    expect(screen.getByText("Whether source layouts stay stable")).toBeInTheDocument();
+    expect(screen.getByText("Dystil is ready to solve this workflow.")).toBeInTheDocument();
+    expect(screen.getByText(/reusable solution you can keep and use again/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Solve this" }));
-    await waitFor(() => expect(mockCommands.askForFixConfirm).toHaveBeenCalledWith("afs_test"));
+    await waitFor(() => expect(mockCommands.askForFixConfirm).toHaveBeenCalledWith("afs_test", null));
   });
 
   it("supports bounded multi-select and compare renderers with a free-text escape", async () => {

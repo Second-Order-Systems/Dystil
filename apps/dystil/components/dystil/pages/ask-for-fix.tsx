@@ -1,31 +1,28 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, Copy, Eye, RotateCcw, Square } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowUp, Check, Copy, Eye, History, House, RotateCcw, Square, X } from "lucide-react";
 
 import type {
   AskArtifact,
   AskInputEvent,
   AskPresentation,
   AskQuestion,
+  AskSessionHistoryItem,
   AskSessionView,
   AskUnderstanding,
 } from "@/lib/utils/tauri";
+import { commands } from "@/lib/utils/tauri";
 import { useAskForFix } from "@/components/dystil/ask-for-fix/use-ask-for-fix";
 import { useAppPolicy } from "@/lib/app-policy";
 import { Droplet } from "@/components/dystil/primitives/droplet";
-import {
-  SegmentedTrack,
-  type SegmentState,
-} from "@/components/dystil/primitives/segmented-track";
 
 const examples = [
   "Every Friday I rebuild the same client report from scattered files.",
   "I keep copying the same customer details between two apps.",
   "Our final review catches the same avoidable mistakes every time.",
 ];
-
-const phaseNames = ["Understand", "Follow up", "Consolidate", "Present"] as const;
 
 /**
  * Dystil's turns are marked with the droplet rather than an avatar bubble —
@@ -44,23 +41,51 @@ function TurnMark({ current = false }: { current?: boolean }) {
   );
 }
 
-/**
- * The four-phase machine is kept; only its presentation changes. The phases
- * map onto the segmented track, the app's one device for "progress through a
- * finite thing".
- */
-function PhaseRail({ session }: { session: AskSessionView | null }) {
-  const current = session
-    ? phaseNames.findIndex((name) => name.toLowerCase().replace(" ", "_") === session.phase)
-    : 0;
-  const segments: SegmentState[] = phaseNames.map((_, index) =>
-    index < current ? "settled" : index === current ? "active" : "waiting",
-  );
+function historyDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "Earlier"
+    : new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(date);
+}
+
+function historyItemFromSession(session: AskSessionView): AskSessionHistoryItem {
+  const firstUserMessage = session.messages.find((message) => message.role === "user")?.text;
+  return {
+    sessionId: session.sessionId,
+    title: firstUserMessage || "Untitled request",
+    phase: session.phase,
+    status: session.status,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+  };
+}
+
+function HistoryPanel({
+  open,
+  items,
+  loading,
+  error,
+  onClose,
+  onSelect,
+}: {
+  open: boolean;
+  items: AskSessionHistoryItem[];
+  loading: boolean;
+  error: string | null;
+  onClose: () => void;
+  onSelect: (item: AskSessionHistoryItem) => void;
+}) {
+  if (!open) return null;
   return (
-    <SegmentedTrack
-      segments={segments}
-      label={`Phase ${current + 1} of ${phaseNames.length}: ${phaseNames[current] ?? phaseNames[0]}`}
-    />
+    <aside aria-label="Previous chats" className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[480px] flex-col border-l border-[#d9dfda] bg-[#fbfcfa] shadow-[-18px_0_42px_rgba(31,42,34,0.13)]">
+      <header className="flex items-center justify-between border-b border-[#e1e6e1] px-5 py-5">
+        <div><h2 className="font-display text-[24px] font-normal tracking-[-0.025em] text-ink">Previous chats</h2><p className="mt-1 text-[13px] text-muted-ink">Read earlier conversations without changing them.</p></div>
+        <button type="button" onClick={onClose} className="grid h-9 w-9 place-items-center rounded-full text-ink-3 transition-colors hover:bg-chrome hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c]" aria-label="Close previous chats"><X size={18} /></button>
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {loading ? <p className="px-5 py-7 text-[14px] text-muted-ink">Loading conversations…</p> : error ? <p role="alert" className="m-5 rounded-[12px] bg-[#f7eeeb] px-4 py-3 text-[13px] leading-5 text-[#753d33]">{error}</p> : items.length === 0 ? <p className="px-5 py-7 text-[14px] leading-6 text-muted-ink">Your earlier conversations will appear here.</p> : <div className="divide-y divide-[#e5e9e5]">{items.map((item) => <button key={item.sessionId} type="button" onClick={() => onSelect(item)} className="w-full px-5 py-4 text-left transition-colors hover:bg-[#f2f5f2] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#16805c]"><p className="line-clamp-2 text-[14px] font-medium leading-5 text-ink">{item.title}</p><p className="mt-1.5 text-[12px] text-muted-ink">{historyDate(item.updatedAt)} · {item.status === "answered" ? "Complete" : "In progress"}</p></button>)}</div>}
+      </div>
+    </aside>
   );
 }
 
@@ -170,26 +195,14 @@ function QuestionCard({
 }
 
 function UnderstandingCard({ understanding, busy, cloudAsk, onConfirm, onRefine }: { understanding: AskUnderstanding; busy: boolean; cloudAsk: boolean; onConfirm: (summary?: string) => void; onRefine: () => void }) {
-  const [summary, setSummary] = useState(understanding.synthesis);
-  useEffect(() => setSummary(understanding.synthesis), [understanding.synthesis]);
-  const fields = [
-    ["Grounded in", understanding.grounding.length ? understanding.grounding.join(" · ") : "Your description so far"],
-    ["What I infer", understanding.inferences.length ? understanding.inferences.join(" · ") : "No material inference"],
-    ["Preserve", understanding.preservedBoundary],
-    ["Solution target", understanding.solutionTarget],
-  ];
+  const summary = understanding.synthesis.trim() || understanding.solutionTarget;
   return (
-    <section className="mt-6 overflow-hidden rounded-[16px] bg-[#fbfdfb] shadow-[0_18px_46px_rgba(27,48,35,0.10)] ring-1 ring-[#a9c9b9]">
-      <div className="flex flex-wrap items-center justify-between gap-2 bg-[#f0f6f2] px-5 py-3 text-[12px]"><span className="font-semibold text-[#116849]">Dystil&apos;s working understanding</span><span className="text-[#738078]">Synthesized from this conversation</span></div>
-      <div className="p-5 sm:p-6">
-        <p className="text-[11px] font-semibold text-[#647269]">My read</p>
-        {cloudAsk ? <textarea value={summary} maxLength={1600} onChange={(event) => setSummary(event.target.value)} className="mt-2 min-h-24 w-full max-w-[66ch] resize-y rounded-[10px] border border-[#cbd5ce] bg-white px-3 py-2 text-[16px] font-medium leading-6 tracking-[-0.015em] text-[#1f2722] outline-none focus:border-[#16805c] focus:ring-2 focus:ring-[#16805c]/20" aria-label="Request summary" /> : <h2 className="mt-2 max-w-[66ch] text-balance text-[22px] font-medium leading-[1.38] tracking-[-0.025em] text-[#1f2722]">{understanding.synthesis}</h2>}
-        <div className="mt-5 grid border-y border-[#dfe6e1] sm:grid-cols-2">
-          {fields.map(([label, value], index) => <div key={label} className={`min-w-0 py-4 ${index % 2 === 1 ? "sm:border-l sm:border-[#dfe6e1] sm:pl-5" : "sm:pr-5"} ${index > 1 ? "border-t border-[#dfe6e1]" : index === 1 ? "border-t border-[#dfe6e1] sm:border-t-0" : ""}`}><p className="text-[11px] text-[#7b857e]">{label}</p><p className="mt-1.5 break-words text-[13px] font-medium leading-5 text-[#313934]">{value || "Not yet specified"}</p></div>)}
-        </div>
-        <div className="mt-4 rounded-[10px] bg-[#eef0ed] px-4 py-3 text-[13px] leading-5 text-[#5f6761]"><span className="font-semibold text-[#3f4742]">Still uncertain: </span>{understanding.uncertainty.length ? understanding.uncertainty.join(" · ") : "Nothing material."}</div>
-        <div className="mt-5 flex flex-wrap gap-2.5"><button type="button" disabled={busy || (cloudAsk && !summary.trim())} onClick={() => onConfirm(cloudAsk ? summary.trim() : undefined)} className="min-h-10 rounded-[9px] bg-[#176f51] px-5 text-[14px] font-semibold text-white hover:bg-[#105d43] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c] disabled:opacity-50">{cloudAsk ? "Create watch" : "Solve this"}</button><button type="button" disabled={busy} onClick={onRefine} className="min-h-10 rounded-[9px] border border-[#ccd4ce] bg-white px-4 text-[14px] font-medium text-[#4f5952] hover:bg-[#f1f4f1] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c] disabled:opacity-50">{cloudAsk ? "Back to conversation" : "Refine the understanding"}</button></div>
-      </div>
+    <section className="mt-6 rounded-[16px] bg-[#eef5f1] p-6 shadow-[0_16px_38px_rgba(27,48,35,0.10)] ring-1 ring-[#c9d9d0] sm:p-7">
+      <p className="text-[12px] font-semibold text-[#116849]">Ready when you are</p>
+      <h2 className="mt-2 max-w-[28ch] text-balance text-[26px] font-medium leading-[1.28] tracking-[-0.025em] text-[#202722]">{cloudAsk ? "Dystil will watch for this workflow." : "Dystil is ready to solve this workflow."}</h2>
+      <p className="mt-4 max-w-[66ch] text-[15px] font-medium leading-6 text-[#303a33]">{summary}</p>
+      {cloudAsk ? <p className="mt-3 max-w-[66ch] text-[14px] leading-6 text-[#59665e]">When it finds a complete, repeatable example, Dystil will come back with a Skill or agent that solves it. If it has not found one after a week, it will check in.</p> : <p className="mt-3 max-w-[66ch] text-[14px] leading-6 text-[#59665e]">Dystil will turn this into a reusable solution you can keep and use again.</p>}
+      <div className="mt-6 flex flex-wrap gap-2.5"><button type="button" disabled={busy || !summary} onClick={() => onConfirm()} className="min-h-10 rounded-[9px] bg-[#176f51] px-5 text-[14px] font-semibold text-white hover:bg-[#105d43] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c] disabled:opacity-50">{cloudAsk ? "Start watching" : "Solve this"}</button><button type="button" disabled={busy} onClick={onRefine} className="min-h-10 rounded-[9px] border border-[#ccd4ce] bg-white px-4 text-[14px] font-medium text-[#4f5952] hover:bg-[#f1f4f1] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c] disabled:opacity-50">{cloudAsk ? "Keep clarifying" : "Refine this"}</button></div>
     </section>
   );
 }
@@ -264,19 +277,26 @@ function Composer({ value, onChange, onSubmit, disabled, placeholder, autoFocus 
   );
 }
 
-export function AskForFix({ initialText = "" }: { initialText?: string }) {
-  const { session, loading, busy, error, optimisticText, submit, confirm, retry, cancel, keepArtifact, startWatching, stopWatching, reviewWatch, updateWatchGuidance, startNew } = useAskForFix();
+export function AskForFix({ initialText = "", fresh = false, sessionId, readOnly = false }: { initialText?: string; fresh?: boolean; sessionId?: string; readOnly?: boolean }) {
+  const { session, loading, busy, error, optimisticText, submit, confirm, retry, cancel, keepArtifact, startWatching, stopWatching, reviewWatch, updateWatchGuidance } = useAskForFix({ fresh, sessionId });
+  const router = useRouter();
   const [draft, setDraft] = useState("");
   const [customAnswer, setCustomAnswer] = useState(false);
   const [revisionMode, setRevisionMode] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyItems, setHistoryItems] = useState<AskSessionHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const { policy } = useAppPolicy();
   const cloudAsk = policy?.askBackend === "cloud";
   const initialApplied = useRef(false);
-  const question = session?.currentQuestion ?? null;
-  const isConsolidating = session?.phase === "consolidate" && !session.locked;
-  const isAnswered = session?.status === "answered" && Boolean(session.presentation);
-  const isInitialPrompt = !loading && !session?.messages.length;
-  const showComposer = revisionMode || (!isAnswered && (!isConsolidating || customAnswer) && (question?.kind === "free_text" || customAnswer || !question));
+  const viewedSession = session;
+  const viewingHistory = readOnly;
+  const question = viewingHistory ? null : session?.currentQuestion ?? null;
+  const isConsolidating = !viewingHistory && session?.phase === "consolidate" && !session.locked;
+  const isAnswered = !viewingHistory && session?.status === "answered" && Boolean(session.presentation);
+  const isInitialPrompt = !loading && !viewedSession?.messages.length;
+  const showComposer = !viewingHistory && (revisionMode || (!isAnswered && (!isConsolidating || customAnswer) && (question?.kind === "free_text" || customAnswer || !question)));
 
 
   useEffect(() => { setCustomAnswer(false); setRevisionMode(false); setDraft(""); }, [session?.sessionId, session?.currentQuestionId, session?.phase]);
@@ -285,6 +305,11 @@ export function AskForFix({ initialText = "" }: { initialText?: string }) {
     initialApplied.current = true;
     setDraft(initialText.trim().slice(0, 1600));
   }, [initialText, loading, session?.messages.length]);
+  useEffect(() => {
+    if (fresh && !busy && session?.sessionId && session.messages.length > 0) {
+      router.replace(`/home/chat?session=${encodeURIComponent(session.sessionId)}`);
+    }
+  }, [busy, fresh, router, session?.messages.length, session?.sessionId]);
 
   const sendDraft = () => {
     if (!draft.trim()) return;
@@ -299,29 +324,53 @@ export function AskForFix({ initialText = "" }: { initialText?: string }) {
     void submit(text, event);
   };
 
+  const openHistory = () => {
+    setHistoryOpen(true);
+    setHistoryLoading(true);
+    setHistoryError(null);
+    void commands.askForFixList().then((result) => {
+      if (result.status === "error") throw new Error(result.error);
+      const current = session ? historyItemFromSession(session) : null;
+      setHistoryItems(current && !result.data.some((item) => item.sessionId === current.sessionId) ? [current, ...result.data] : result.data);
+    }).catch((failure) => {
+      if (session) {
+        setHistoryItems([historyItemFromSession(session)]);
+        setHistoryError(null);
+        return;
+      }
+      setHistoryError(failure instanceof Error ? failure.message : "Dystil could not load previous conversations.");
+    }).finally(() => setHistoryLoading(false));
+  };
+
+  const selectHistory = (item: AskSessionHistoryItem) => {
+    setHistoryOpen(false);
+    router.push(`/home/chat?session=${encodeURIComponent(item.sessionId)}&view=1`);
+  };
+
   return (
     <div className="mx-auto flex min-h-[calc(100vh-112px)] max-w-[900px] flex-col pb-8">
       <header className="flex flex-wrap items-start justify-between gap-5 pb-5">
         {isInitialPrompt ? <div className="flex gap-3"><TurnMark current /><div><h1 className="max-w-[650px] text-pretty font-display text-display-sm font-normal text-ink">What problem keeps stealing your attention?</h1><p className="mt-2 max-w-[64ch] text-body-lg text-muted-ink">It can be repetitive work, a slow handoff, a confusing process, or something you cannot quite name yet. Start messy.</p></div></div> : <div />}
-        <div className="flex flex-col items-end gap-3"><PhaseRail session={session} />{session && <button type="button" disabled={busy} onClick={() => void startNew()} className="rounded-strip px-[10px] py-[5px] text-meta font-semibold text-ink-3 transition-colors hover:bg-chrome hover:text-ink disabled:opacity-50"><RotateCcw size={13} />Start over</button>}</div>
+        <button type="button" onClick={openHistory} className="inline-flex min-h-9 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-ink-3 transition-colors hover:bg-chrome hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c]"><History size={15} />Previous chats</button>
       </header>
 
       <div className={`${isInitialPrompt ? "" : "flex-1 py-7"}`} aria-live="polite">
-        {loading ? <div className="flex gap-3"><TurnMark /><div className="space-y-2 pt-1"><div className="h-4 w-24 animate-pulse rounded bg-line-2" /><div className="h-5 max-w-md animate-pulse rounded bg-line-3" /></div></div> : session?.messages.length ? <ConversationMessages session={session} /> : null}
+        {loading ? <div className="flex gap-3"><TurnMark /><div className="space-y-2 pt-1"><div className="h-4 w-24 animate-pulse rounded bg-line-2" /><div className="h-5 max-w-md animate-pulse rounded bg-line-3" /></div></div> : viewedSession?.messages.length ? <ConversationMessages session={viewedSession} /> : null}
 
-        {optimisticText && <div className="mt-7 flex justify-end"><div className="max-w-[min(78%,620px)] rounded-[16px_16px_4px_16px] bg-[#252b27] px-4 py-3 text-[15px] leading-6 text-white">{optimisticText}</div></div>}
+        {!viewingHistory && optimisticText && <div className="mt-7 flex justify-end"><div className="max-w-[min(78%,620px)] rounded-[16px_16px_4px_16px] bg-[#252b27] px-4 py-3 text-[15px] leading-6 text-white">{optimisticText}</div></div>}
 
-        {busy && <div className="mt-7 flex gap-3"><TurnMark current /><div><div className="inline-flex items-center gap-2 rounded-tile bg-recessed px-3 py-2 text-ui text-muted-ink"><span className="dystil-thinking-dots" aria-hidden="true"><i /><i /><i /></span><span>{cloudAsk ? "Clarifying your request..." : session?.phase === "present" || session?.locked ? "Building the answer" : "Looking through relevant work..."}</span></div><button type="button" onClick={() => void cancel()} className="ml-3 inline-flex items-center gap-1.5 text-ui-sm font-semibold text-marigold-text hover:underline"><Square size={10} fill="currentColor" />Stop</button></div></div>}
+        {!viewingHistory && busy && <div className="mt-7 flex gap-3"><TurnMark current /><div><div className="inline-flex items-center gap-2 rounded-tile bg-recessed px-3 py-2 text-ui text-muted-ink"><span className="dystil-thinking-dots" aria-hidden="true"><i /><i /><i /></span><span>{cloudAsk ? "Clarifying your request..." : session?.phase === "present" || session?.locked ? "Building the answer" : "Looking through relevant work..."}</span></div><button type="button" onClick={() => void cancel()} className="ml-3 inline-flex items-center gap-1.5 text-ui-sm font-semibold text-marigold-text hover:underline"><Square size={10} fill="currentColor" />Stop</button></div></div>}
 
         {!busy && question && <QuestionCard question={question} questionId={session?.currentQuestionId ?? null} questionNumber={session?.questionCount ?? 1} maxQuestions={session?.maxQuestions ?? 12} disabled={busy} onCustom={() => setCustomAnswer(true)} onSubmit={(text, event) => void submit(text, event)} />}
         {!busy && isConsolidating && session && <UnderstandingCard understanding={session.understanding} busy={busy} cloudAsk={cloudAsk} onConfirm={(summary) => void confirm(summary)} onRefine={() => setCustomAnswer(true)} />}
-        {!busy && session?.presentation && <PresentationCard presentation={session.presentation} session={session} busy={busy} cloudAsk={cloudAsk} onKeep={() => void keepArtifact()} onRevise={() => setRevisionMode(true)} onStartWatching={() => void startWatching()} onStopWatching={() => void stopWatching()} onReviewWatch={() => void reviewWatch()} onWatchGuidance={(guidance) => void updateWatchGuidance(guidance)} />}
+        {!viewingHistory && !busy && session?.presentation && <PresentationCard presentation={session.presentation} session={session} busy={busy} cloudAsk={cloudAsk} onKeep={() => void keepArtifact()} onRevise={() => setRevisionMode(true)} onStartWatching={() => void startWatching()} onStopWatching={() => void stopWatching()} onReviewWatch={() => void reviewWatch()} onWatchGuidance={(guidance) => void updateWatchGuidance(guidance)} />}
 
-        {error && <div role="alert" className="mt-6 flex flex-wrap items-center gap-3 rounded-[12px] bg-[#f7eeeb] px-4 py-3 text-[13px] leading-5 text-[#753d33] ring-1 ring-[#e3c4bc]"><span className="min-w-0 flex-1">{error}</span>{session && <button type="button" disabled={busy} onClick={() => void retry()} className="min-h-8 rounded-[8px] bg-white px-3 font-semibold text-[#753d33] ring-1 ring-[#d8b6ad] hover:bg-[#fffaf8] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8b3f32]">Try again</button>}</div>}
+        {!viewingHistory && error && <div role="alert" className="mt-6 flex flex-wrap items-center gap-3 rounded-[12px] bg-[#f7eeeb] px-4 py-3 text-[13px] leading-5 text-[#753d33] ring-1 ring-[#e3c4bc]"><span className="min-w-0 flex-1">{error}</span>{session && <button type="button" disabled={busy} onClick={() => void retry()} className="min-h-8 rounded-[8px] bg-white px-3 font-semibold text-[#753d33] ring-1 ring-[#d8b6ad] hover:bg-[#fffaf8] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8b3f32]">Try again</button>}</div>}
       </div>
 
-      {!loading && !busy && showComposer && <div className="sticky bottom-0 z-10 w-full max-w-[620px] pt-2 pb-2"><Composer value={draft} onChange={setDraft} onSubmit={sendDraft} disabled={busy} autoFocus={customAnswer || revisionMode} placeholder={revisionMode ? "What should Dystil change in this answer?" : isConsolidating ? "What did Dystil misunderstand or miss?" : question ? "Answer in your own words…" : "Describe the problem, where it happens, and why it is annoying…"} />{!session?.messages.length && <div className="mt-4 flex flex-wrap gap-2">{examples.map((example) => <button key={example} type="button" onClick={() => setDraft(example)} className="rounded-full border border-[#d2d8d3] bg-[#fbfcfa] px-3 py-1.5 text-[12px] text-[#616a64] hover:border-[#9fb9aa] hover:text-[#116849] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c]">{example}</button>)}</div>}</div>}
-      {isAnswered && <div className="flex justify-center border-t border-[#e0e4e0] pt-5"><button type="button" disabled={busy} onClick={() => void startNew()} className="inline-flex min-h-9 items-center gap-2 rounded-[9px] border border-[#cbd3cd] bg-white px-4 text-[13px] font-medium text-[#4e5851] hover:bg-[#f0f3f0] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c]"><RotateCcw size={14} />Ask about another problem</button></div>}
+      {!loading && !busy && showComposer && <div className={`sticky bottom-0 z-10 w-full max-w-[620px] pt-2 pb-2 ${isInitialPrompt ? "" : "mx-auto"}`}><Composer value={draft} onChange={setDraft} onSubmit={sendDraft} disabled={busy} autoFocus={customAnswer || revisionMode} placeholder={revisionMode ? "What should Dystil change in this answer?" : isConsolidating ? "What did Dystil misunderstand or miss?" : question ? "Answer in your own words…" : "Describe the problem, where it happens, and why it is annoying…"} />{!session?.messages.length && <div className="mt-4 flex flex-wrap gap-2">{examples.map((example) => <button key={example} type="button" onClick={() => setDraft(example)} className="rounded-full border border-[#d2d8d3] bg-[#fbfcfa] px-3 py-1.5 text-[12px] text-[#616a64] hover:border-[#9fb9aa] hover:text-[#116849] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c]">{example}</button>)}</div>}</div>}
+      {isAnswered && <div className="flex flex-wrap justify-center gap-2 border-t border-[#e0e4e0] pt-5"><button type="button" onClick={() => router.push("/home")} className="inline-flex min-h-9 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[#4e5851] hover:bg-[#f0f3f0] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c]"><House size={14} />Back to Home</button><button type="button" disabled={busy} onClick={() => router.push(cloudAsk ? "/home" : "/home/chat")} className="inline-flex min-h-9 items-center gap-2 rounded-[9px] border border-[#cbd3cd] bg-white px-4 text-[13px] font-medium text-[#4e5851] hover:bg-[#f0f3f0] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16805c]"><RotateCcw size={14} />Ask about another problem</button></div>}
+      <HistoryPanel open={historyOpen} items={historyItems} loading={historyLoading} error={historyError} onClose={() => setHistoryOpen(false)} onSelect={selectHistory} />
     </div>
   );
 }
