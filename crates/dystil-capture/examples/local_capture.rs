@@ -233,6 +233,9 @@ async fn run(args: Args) -> Result<()> {
                     measurement_mode: args.measurement_mode.clone(),
                     baseline_frame_id: baseline.frame_id,
                     baseline_event_id: baseline.event_id,
+                    remote_writes: false,
+                    uploads: false,
+                    database_path: Some(database_path.clone()),
                 },
             )
             .map_err(anyhow::Error::msg)?,

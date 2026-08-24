@@ -7,7 +7,8 @@ param(
     [int]$IdleSeconds = 70,
     [switch]$DryRun,
     [switch]$OpenReport,
-    [switch]$KeepFixtureApps
+    [switch]$KeepFixtureApps,
+    [string]$ExternalRunDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,7 +16,11 @@ $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptRoot '..\..\..')
 $binaryPath = Join-Path $repoRoot 'target\debug\examples\local_capture.exe'
 $reportPath = Join-Path $scriptRoot 'capture-report.mjs'
-$runRoot = Join-Path $repoRoot ('target\capture-fixture-' + $Policy + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$runRoot = if ($ExternalRunDir) {
+    (Resolve-Path -LiteralPath $ExternalRunDir).Path
+} else {
+    Join-Path $repoRoot ('target\capture-fixture-' + $Policy + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+}
 $stopFile = Join-Path $runRoot 'stop.signal'
 $actionsPath = Join-Path $runRoot 'fixture-actions.jsonl'
 $stdoutPath = Join-Path $runRoot 'capture.stdout.log'
@@ -508,12 +513,10 @@ function Exercise-GmailSearchAndFilter([System.Diagnostics.Process]$edge) {
     # Close the real Gmail filter form and restore the normal inbox before
     # thread traversal. The opened form remains a captured expansion state.
     [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
-    Start-Sleep -Milliseconds 500
-    Click-Element $search 'gmail_search_filter.clear_search'
-    [System.Windows.Forms.SendKeys]::SendWait('^a')
-    [System.Windows.Forms.SendKeys]::SendWait('{BACKSPACE}')
-    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-    Start-Sleep -Seconds 3
+    # Gmail may rebuild the search box after closing its popup, leaving the
+    # old UIA element with zero bounds. Navigating back through Edge's stable
+    # address bar is more reliable than clicking that stale element.
+    Navigate-Edge $edge 'https://mail.google.com/mail/u/0/#inbox' 'gmail_search_filter.restore_inbox' 3
     Write-Action 'gmail_search_filter' 'completed' @{ query = 'in:inbox'; filter_form = 'Show search options' }
     Add-Marker 'end' 'gmail_search_filter'
 }
@@ -709,7 +712,7 @@ function Assert-Run {
     if ($failures.Count -gt 0) { throw ('Fixture validation failed: ' + ($failures -join '; ')) }
 }
 
-if (-not (Test-Path -LiteralPath $binaryPath)) {
+if (-not $ExternalRunDir -and -not (Test-Path -LiteralPath $binaryPath)) {
     throw "Capture binary missing: $binaryPath. Build it with cargo build -p dystil-capture --example local_capture --features native,debug-capture"
 }
 
@@ -720,14 +723,18 @@ if ($DryRun) {
     exit 0
 }
 
-New-Item -ItemType Directory -Path $runRoot | Out-Null
-New-Item -ItemType File -Path $actionsPath | Out-Null
+if (-not $ExternalRunDir) {
+    New-Item -ItemType Directory -Path $runRoot | Out-Null
+}
+New-Item -ItemType File -Path $actionsPath -Force | Out-Null
 $capture = $null
 $fixtureEdgeHandle = [IntPtr]::Zero
 $fixtureExplorerHandle = [IntPtr]::Zero
 $fixtureNotepadHandle = [IntPtr]::Zero
 try {
-    $capture = Start-Process -FilePath $binaryPath -ArgumentList @('--text-only', '--capture-scroll', '--diagnostics', '--policy', $Policy, '--measurement-mode', $MeasurementMode, '--stop-file', $stopFile, '--data-dir', $runRoot) -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    if (-not $ExternalRunDir) {
+        $capture = Start-Process -FilePath $binaryPath -ArgumentList @('--text-only', '--capture-scroll', '--diagnostics', '--policy', $Policy, '--measurement-mode', $MeasurementMode, '--stop-file', $stopFile, '--data-dir', $runRoot) -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    }
     for ($attempt = 0; $attempt -lt 80 -and -not (Test-Path -LiteralPath (Join-Path $runRoot 'run.json')); $attempt += 1) { Start-Sleep -Milliseconds 250 }
     if (-not (Test-Path -LiteralPath (Join-Path $runRoot 'run.json'))) { throw 'Capture harness did not initialize.' }
 
@@ -807,13 +814,17 @@ try {
     Start-Sleep -Seconds 3
     Save-ExpectedFacts
 
-    New-Item -ItemType File -Path $stopFile | Out-Null
-    $capture.WaitForExit(15000)
-    if (-not $capture.HasExited) { throw 'Capture harness did not stop after the fixture.' }
+    if ($capture) {
+        New-Item -ItemType File -Path $stopFile | Out-Null
+        $capture.WaitForExit(15000)
+        if (-not $capture.HasExited) { throw 'Capture harness did not stop after the fixture.' }
+    }
     & bun $reportPath analyze --run-dir $runRoot
     if ($LASTEXITCODE -ne 0) { throw 'Report generation failed.' }
-    Assert-Run
-    Write-Host "Fixture passed. Report: $(Join-Path $runRoot 'comparison.md')" -ForegroundColor Green
+    if (-not $ExternalRunDir) {
+        Assert-Run
+    }
+    Write-Host "Fixture completed. Report: $(Join-Path $runRoot 'comparison.md')" -ForegroundColor Green
     if ($OpenReport) { Start-Process (Join-Path $runRoot 'comparison.md') }
 } catch {
     Write-Action 'fixture' 'failed' @{ message = $_.Exception.Message }

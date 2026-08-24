@@ -228,7 +228,7 @@ impl DystilSync {
         let image_stats = if self.local_permissions.screenshots {
             self.sync_images(&client, &effective_config.policy).await?
         } else {
-            tracing::info!("dystil-sync: local screenshot consent disabled; skipping image sync");
+            tracing::info!("dystil-sync: screenshot sync disabled; skipping image sync");
             ImageSyncStats::default()
         };
         let image_duration_ms = image_started.elapsed().as_millis() as u64;

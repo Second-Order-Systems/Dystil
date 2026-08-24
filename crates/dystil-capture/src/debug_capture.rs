@@ -36,6 +36,9 @@ pub struct DebugCaptureConfig {
     pub measurement_mode: String,
     pub baseline_frame_id: i64,
     pub baseline_event_id: i64,
+    pub remote_writes: bool,
+    pub uploads: bool,
+    pub database_path: Option<PathBuf>,
 }
 
 pub struct DebugCaptureSession {
@@ -83,10 +86,11 @@ impl DebugCaptureSession {
             "policy": config.policy,
             "measurement_mode": config.measurement_mode,
             "created_at": Utc::now(),
-            "remote_writes": false,
-            "uploads": false
-            ,"baseline_frame_id": config.baseline_frame_id
-            ,"baseline_event_id": config.baseline_event_id
+            "remote_writes": config.remote_writes,
+            "uploads": config.uploads,
+            "database_path": config.database_path,
+            "baseline_frame_id": config.baseline_frame_id,
+            "baseline_event_id": config.baseline_event_id
         });
         fs::write(
             config.run_dir.join("run.json"),
@@ -515,6 +519,38 @@ pub fn record_capture_phase(
             "rss_before_bytes": rss_before,
             "rss_after_bytes": rss_after,
             "rss_delta_bytes": rss_after.zip(rss_before).map(|(after, before)| after as i128 - before as i128)
+        }),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn record_image_phase(
+    phase: &str,
+    trigger: &str,
+    started: Instant,
+    app_name: Option<&str>,
+    monitor_id: Option<u32>,
+    width: Option<u32>,
+    height: Option<u32>,
+    output_bytes: Option<u64>,
+    outcome: &str,
+) {
+    let Some(sink) = active() else {
+        return;
+    };
+    sink.write(
+        Stream::Capture,
+        json!({
+            "kind": "image_phase",
+            "phase": phase,
+            "trigger": trigger,
+            "duration_us": started.elapsed().as_micros().min(u64::MAX as u128) as u64,
+            "app_name": app_name,
+            "monitor_id": monitor_id,
+            "width": width,
+            "height": height,
+            "output_bytes": output_bytes,
+            "outcome": outcome
         }),
     );
 }

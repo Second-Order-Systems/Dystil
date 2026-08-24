@@ -696,18 +696,34 @@ pub struct SyncConsent {
     pub screenshots: bool,
 }
 
+fn env_value_is_disabled(value: Option<&str>) -> bool {
+    value
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|value| matches!(value.as_str(), "0" | "false" | "off" | "no"))
+}
+
+/// Whether the `DYSTIL_IMAGE_SYNC` environment variable explicitly disables
+/// screenshot processing and upload. Local screenshot capture is unaffected.
+/// Accepts `0`, `false`, `off`, and `no`, case-insensitively.
+pub fn image_sync_disabled_by_env() -> bool {
+    env_value_is_disabled(std::env::var("DYSTIL_IMAGE_SYNC").ok().as_deref())
+}
+
+/// Whether the `DYSTIL_SCREENSHOT_CAPTURE` environment variable explicitly
+/// disables local screenshot acquisition. Accessibility and event capture are
+/// unaffected. Accepts `0`, `false`, `off`, and `no`, case-insensitively.
+pub fn screenshot_capture_disabled_by_env() -> bool {
+    env_value_is_disabled(std::env::var("DYSTIL_SCREENSHOT_CAPTURE").ok().as_deref())
+}
+
 /// Whether the `DYSTIL_TELEMETRY` environment variable explicitly disables
 /// telemetry. Accepts `0`, `false`, `off`, and `no`, case-insensitively.
 ///
 /// Read at runtime rather than compile time so an operator can disable
 /// telemetry on a machine they did not build.
 pub fn telemetry_disabled_by_env() -> bool {
-    std::env::var("DYSTIL_TELEMETRY")
-        .map(|value| {
-            let value = value.trim().to_ascii_lowercase();
-            matches!(value.as_str(), "0" | "false" | "off" | "no")
-        })
-        .unwrap_or(false)
+    env_value_is_disabled(std::env::var("DYSTIL_TELEMETRY").ok().as_deref())
 }
 
 impl SettingsStore {
@@ -1366,6 +1382,17 @@ mod tests {
         }
         .validate()
         .is_ok());
+    }
+
+    #[test]
+    fn runtime_disable_values_are_parsed_conservatively() {
+        for value in ["0", "false", "FALSE", " off ", "No"] {
+            assert!(env_value_is_disabled(Some(value)), "value: {value}");
+        }
+        for value in ["", "1", "true", "on", "yes", "unexpected"] {
+            assert!(!env_value_is_disabled(Some(value)), "value: {value}");
+        }
+        assert!(!env_value_is_disabled(None));
     }
 
     #[test]

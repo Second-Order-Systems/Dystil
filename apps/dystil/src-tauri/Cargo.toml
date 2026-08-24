@@ -253,6 +253,7 @@ workspace-auth = ["cloud-sync"]
 # Managed client distribution. This is a policy flavor, not just a collection
 # of optional capabilities: capture and both sync channels are compile-time on.
 enterprise-client = ["cloud-sync", "official-build"]
+capture-profiling = ["dystil-capture/debug-capture"]
 
 # Keep the application cfg in sync with the dependency features. Without this
 # declaration `#[cfg(feature = "onnx-cpu")]` in capture_session.rs is compiled
