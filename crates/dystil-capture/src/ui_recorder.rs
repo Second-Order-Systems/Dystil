@@ -10,6 +10,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::linker::DystilLinkerSender;
+use crate::ui_event_store::enrich_persisted_physical_click;
 use crate::{
     insert_ui_event_batch, CaptureContext, CaptureTrigger, CaptureTriggerMessage,
     DystilUiRecorderConfig, ScreenPoint, UiEventRecord,
@@ -98,14 +99,46 @@ async fn run_consumer(
     let mut typing_pending = false;
     let mut typing_context = CaptureContext::default();
     let mut typing_correlations = Vec::new();
-    let mut last_scroll: Option<(Instant, u64)> = None;
+    let mut last_scroll: Option<(Instant, Vec<u64>, CaptureContext, i64, i64)> = None;
     loop {
         tokio::select! {
             event = event_rx.recv() => match event {
                 Some(event) => {
+                    let is_enrichment = is_element_enrichment(&event);
+                    if config.merge_click_enrichment && is_enrichment {
+                        if merge_pending_click_enrichment(&mut batch, &event) {
+                            #[cfg(feature = "debug-capture")]
+                            crate::debug_capture::record_ui_event(&event, false, false);
+                            continue;
+                        }
+                        match enrich_persisted_physical_click(&pool, &session_id, &event).await {
+                            Ok(true) => {
+                                #[cfg(feature = "debug-capture")]
+                                crate::debug_capture::record_ui_event(&event, false, false);
+                                continue;
+                            }
+                            Ok(false) => {
+                                // Keep a visible fallback rather than silently dropping an
+                                // enrichment whose physical click was unavailable.
+                                warn!("click enrichment had no matching physical click; retaining fallback event");
+                            }
+                            Err(error) => {
+                                warn!(%error, "could not merge persisted click enrichment; retaining fallback event");
+                            }
+                        }
+                    }
                     let persist = should_persist(&event, &config);
                     let keyboard_activity = matches!(event.data, EventData::Key { .. } | EventData::Text { .. });
-                    let trigger = immediate_trigger(&event);
+                    if config.settled_state_scheduler && matches!(event.data, EventData::Key { .. }) {
+                        let _ = trigger_tx.send(CaptureTriggerMessage::new(CaptureTrigger::KeyPress, event_context(&event)));
+                    }
+                    let trigger = immediate_trigger(&event, config.merge_click_enrichment);
+                    #[cfg(feature = "debug-capture")]
+                    crate::debug_capture::record_ui_event(
+                        &event,
+                        persist,
+                        trigger.is_some() || keyboard_activity,
+                    );
                     let mut correlation = if persist && (trigger.is_some() || keyboard_activity) && trigger_tx.receiver_count() > 0 {
                         Some(linker.next_correlation_id())
                     } else { None };
@@ -124,11 +157,39 @@ async fn run_consumer(
                         if trigger_tx.send(message).is_err() { correlation = None; }
                     }
                     if persist {
-                        let is_scroll = matches!(event.data, EventData::Scroll { .. });
+                        let scroll = match &event.data {
+                            EventData::Scroll { delta_x, delta_y, .. } => {
+                                Some((i64::from(*delta_x), i64::from(*delta_y)))
+                            }
+                            _ => None,
+                        };
                         let record = UiEventRecord::from_native(event, session_id.clone());
-                        if is_scroll {
+                        if let Some((delta_x, delta_y)) = scroll {
                             let id = correlation.unwrap_or_else(|| linker.next_correlation_id());
-                            last_scroll = Some((Instant::now(), id));
+                            let context = CaptureContext {
+                                application: record.app_name.clone(),
+                                window: record.window_title.clone(),
+                                browser_url: record.browser_url.clone(),
+                                ..CaptureContext::default()
+                            };
+                            match &mut last_scroll {
+                                Some((at, ids, previous_context, total_x, total_y)) => {
+                                    *at = Instant::now();
+                                    ids.push(id);
+                                    *previous_context = context.with_fallback(previous_context);
+                                    *total_x += delta_x;
+                                    *total_y += delta_y;
+                                }
+                                None => {
+                                    last_scroll = Some((
+                                        Instant::now(),
+                                        vec![id],
+                                        context,
+                                        delta_x,
+                                        delta_y,
+                                    ));
+                                }
+                            }
                             batch.push((record, Some(id)));
                         } else {
                             batch.push((record, correlation));
@@ -162,12 +223,16 @@ async fn run_consumer(
             }
             _ = tick.tick() => {
                 flush(&pool, &linker, &mut batch).await;
-                if let Some((at, correlation_id)) = last_scroll {
-                    if at.elapsed() >= Duration::from_millis(300) {
-                        let _ = trigger_tx.send(CaptureTriggerMessage::with_correlation(
-                            CaptureTrigger::ScrollStop, CaptureContext::default(), correlation_id));
-                        last_scroll = None;
+                if let Some((at, correlation_ids, context, delta_x, delta_y)) = last_scroll.take() {
+                    if at.elapsed() >= Duration::from_millis(config.scroll_stop_delay_ms) {
+                        let mut message = CaptureTriggerMessage::new(CaptureTrigger::ScrollStop, context);
+                        message.correlation_id = correlation_ids.first().copied();
+                        message.additional_correlation_ids = correlation_ids.into_iter().skip(1).collect();
+                        message.activity_delta_x = delta_x;
+                        message.activity_delta_y = delta_y;
+                        let _ = trigger_tx.send(message);
                     }
+                    else { last_scroll = Some((at, correlation_ids, context, delta_x, delta_y)); }
                 }
                 if stop.load(Ordering::Relaxed) && event_rx.is_empty() { break; }
             }
@@ -208,10 +273,18 @@ fn should_persist(event: &UiEvent, config: &DystilUiRecorderConfig) -> bool {
     }
 }
 
-fn immediate_trigger(event: &UiEvent) -> Option<CaptureTriggerMessage> {
+fn immediate_trigger(
+    event: &UiEvent,
+    merge_click_enrichment: bool,
+) -> Option<CaptureTriggerMessage> {
     let mut context = event_context(event);
     let trigger = match &event.data {
-        EventData::Click { x, y, .. } => {
+        EventData::Click {
+            x, y, click_count, ..
+        } => {
+            if merge_click_enrichment && *click_count == 0 {
+                return None;
+            }
             context.target = Some(ScreenPoint { x: *x, y: *y });
             CaptureTrigger::Click
         }
@@ -233,6 +306,40 @@ fn immediate_trigger(event: &UiEvent) -> Option<CaptureTriggerMessage> {
     Some(CaptureTriggerMessage::new(trigger, context))
 }
 
+fn is_element_enrichment(event: &UiEvent) -> bool {
+    matches!(event.data, EventData::Click { click_count: 0, .. }) && event.element.is_some()
+}
+
+fn merge_pending_click_enrichment(
+    batch: &mut [(UiEventRecord, Option<u64>)],
+    enrichment: &UiEvent,
+) -> bool {
+    let (x, y, element) = match (&enrichment.data, enrichment.element.as_ref()) {
+        (
+            EventData::Click {
+                x,
+                y,
+                click_count: 0,
+                ..
+            },
+            Some(element),
+        ) => (*x, *y, element),
+        _ => return false,
+    };
+    if let Some((record, _)) = batch.iter_mut().rev().find(|(record, _)| {
+        record.event_type == "click"
+            && record.click_count.is_some_and(|count| count > 0)
+            && record.timestamp == enrichment.timestamp
+            && record.x == Some(x)
+            && record.y == Some(y)
+    }) {
+        record.apply_element_context(element);
+        true
+    } else {
+        false
+    }
+}
+
 fn event_context(event: &UiEvent) -> CaptureContext {
     CaptureContext {
         application: event.app_name.clone(),
@@ -245,6 +352,7 @@ fn event_context(event: &UiEvent) -> CaptureContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::a11y::ElementContext;
     use chrono::Utc;
 
     fn config() -> DystilUiRecorderConfig {
@@ -265,6 +373,11 @@ mod tests {
             prioritize_input_latency: false,
             extraction_thread_priority: Default::default(),
             pause_extraction_on_input_ms: 150,
+            merge_click_enrichment: false,
+            settled_state_scheduler: false,
+            scroll_stop_delay_ms: 300,
+            capture_background_trees: true,
+            precise_click_window_context: false,
         }
     }
 
@@ -272,7 +385,7 @@ mod tests {
     fn private_text_is_not_persisted_and_does_not_trigger_immediate_capture() {
         let event = UiEvent::text(Utc::now(), 1, "person@example.com".to_string());
         assert!(!should_persist(&event, &config()));
-        assert!(immediate_trigger(&event).is_none());
+        assert!(immediate_trigger(&event, false).is_none());
     }
 
     #[test]
@@ -293,8 +406,88 @@ mod tests {
         };
         assert!(!should_persist(&event, &config()));
         assert_eq!(
-            immediate_trigger(&event).unwrap().trigger,
+            immediate_trigger(&event, false).unwrap().trigger,
             CaptureTrigger::Clipboard
         );
+    }
+
+    #[test]
+    fn candidate_merges_precise_target_into_pending_physical_click() {
+        let timestamp = Utc::now();
+        let physical = UiEvent::click(timestamp, 12, 44, 55, 0, 1, 0);
+        let mut batch = vec![(
+            UiEventRecord::from_native(physical, "session".into()),
+            Some(7),
+        )];
+        let enrichment = UiEvent {
+            id: None,
+            timestamp,
+            relative_ms: 0,
+            data: EventData::Click {
+                x: 44,
+                y: 55,
+                button: 0,
+                click_count: 0,
+                modifiers: 0,
+            },
+            app_name: None,
+            window_title: None,
+            browser_url: None,
+            element: Some(ElementContext {
+                role: "Button".into(),
+                name: Some("Send".into()),
+                value: None,
+                description: None,
+                automation_id: Some("send-button".into()),
+                bounds: None,
+            }),
+            frame_id: None,
+        };
+
+        assert!(merge_pending_click_enrichment(&mut batch, &enrichment));
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].0.element_role.as_deref(), Some("Button"));
+        assert_eq!(
+            batch[0].0.element_automation_id.as_deref(),
+            Some("send-button")
+        );
+        assert!(immediate_trigger(&enrichment, true).is_none());
+    }
+
+    #[test]
+    fn unmatched_enrichment_is_not_merged_with_another_click() {
+        let timestamp = Utc::now();
+        let physical = UiEvent::click(timestamp, 12, 44, 55, 0, 1, 0);
+        let mut batch = vec![(
+            UiEventRecord::from_native(physical, "session".into()),
+            Some(7),
+        )];
+        let enrichment = UiEvent {
+            id: None,
+            timestamp,
+            relative_ms: 0,
+            data: EventData::Click {
+                x: 45,
+                y: 55,
+                button: 0,
+                click_count: 0,
+                modifiers: 0,
+            },
+            app_name: None,
+            window_title: None,
+            browser_url: None,
+            element: Some(ElementContext {
+                role: "Button".into(),
+                name: None,
+                value: None,
+                description: None,
+                automation_id: None,
+                bounds: None,
+            }),
+            frame_id: None,
+        };
+
+        assert!(!merge_pending_click_enrichment(&mut batch, &enrichment));
+        assert_eq!(batch.len(), 1);
     }
 }

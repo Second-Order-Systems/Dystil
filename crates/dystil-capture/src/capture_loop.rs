@@ -1,10 +1,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use sqlx::SqlitePool;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
+use crate::settled_state::{ActivityKind, AppCadenceGuard, SettledStatePolicy};
 use crate::{CaptureContext, CaptureCoordinator, CaptureTrigger, CaptureTriggerMessage};
 
 use crate::linker::{DystilLinkDropReason, DystilLinkerSender};
@@ -14,6 +16,13 @@ pub struct DystilAxCaptureConfig {
     pub debounce: Duration,
     pub ordinary_min_interval: Duration,
     pub heartbeat: Duration,
+    pub settled_state: bool,
+    /// Candidate-only scheduling guard. It can defer/coalesce a settled
+    /// demand after an expensive walk, but never changes a real walk's UIA
+    /// limits or drops a checkpoint.
+    pub app_cadence_guard: bool,
+    pub activity_span_pool: Option<SqlitePool>,
+    pub activity_span_session_id: Option<String>,
 }
 
 impl Default for DystilAxCaptureConfig {
@@ -22,6 +31,10 @@ impl Default for DystilAxCaptureConfig {
             debounce: Duration::from_millis(250),
             ordinary_min_interval: Duration::from_millis(1_500),
             heartbeat: Duration::from_secs(60),
+            settled_state: false,
+            app_cadence_guard: false,
+            activity_span_pool: None,
+            activity_span_session_id: None,
         }
     }
 }
@@ -86,6 +99,16 @@ async fn run_ax_capture(
 
     let mut activity_since_heartbeat = false;
     let mut last_ordinary_capture = None;
+    let mut settled_policy = config.settled_state.then(SettledStatePolicy::default);
+    let mut app_cadence_guard = config.app_cadence_guard.then(AppCadenceGuard::default);
+    if let Some(pool) = config.activity_span_pool.as_ref() {
+        if let Err(error) = crate::activity_spans::ensure_activity_span_schema(pool).await {
+            warn!(%error, "could not create candidate activity span schema");
+        }
+    }
+    let mut settled_tick = tokio::time::interval(Duration::from_millis(50));
+    settled_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    settled_tick.tick().await;
     loop {
         tokio::select! {
             changed = shutdown_rx.changed() => {
@@ -97,6 +120,14 @@ async fn run_ax_capture(
                 match message {
                     Ok(message) => {
                         activity_since_heartbeat = true;
+                        if let Some(policy) = settled_policy.as_mut() {
+                            if let Some(kind) = settled_activity_kind(&message.trigger) {
+                                let mut correlation_ids = message.correlation_id.into_iter().collect::<Vec<_>>();
+                                correlation_ids.extend(message.additional_correlation_ids);
+                                policy.observe(kind, message.context, correlation_ids, message.activity_delta_x, message.activity_delta_y, std::time::Instant::now());
+                                continue;
+                            }
+                        }
                         if !capture_trigger_batch(
                             message,
                             &mut trigger_rx,
@@ -117,18 +148,107 @@ async fn run_ax_capture(
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
+            _ = settled_tick.tick(), if settled_policy.is_some() => {
+                let now = std::time::Instant::now();
+                let due = settled_policy.as_mut().expect("checked").take_due(now);
+                for demand in due {
+                    if let Some(deadline) = app_cadence_guard
+                        .as_ref()
+                        .and_then(|guard| guard.defer_until(&demand, now))
+                    {
+                        settled_policy
+                            .as_mut()
+                            .expect("checked")
+                            .defer(demand, deadline, now);
+                        continue;
+                    }
+                    let correlation_ids = demand.correlation_ids;
+                    let span_id = match (&config.activity_span_pool, &config.activity_span_session_id) {
+                        (Some(pool), Some(session_id)) => crate::activity_spans::insert_activity_span(
+                            pool, session_id, activity_kind_name(demand.kind), demand.duration_ms,
+                            demand.event_count, &demand.app_sequence, &demand.context,
+                            demand.scroll_delta_x, demand.scroll_delta_y,
+                        ).await.ok(),
+                        _ => None,
+                    };
+                    let first = CaptureTriggerMessage {
+                        trigger: demand.trigger,
+                        context: demand.context,
+                        correlation_id: correlation_ids.first().copied(),
+                        additional_correlation_ids: correlation_ids.iter().skip(1).copied().collect(),
+                        activity_span_id: span_id,
+                        activity_delta_x: demand.scroll_delta_x,
+                        activity_delta_y: demand.scroll_delta_y,
+                    };
+                    if let Some(reason) = capture_pause_reason() {
+                        linker_tx.trigger_dropped(correlation_ids, reason);
+                        continue;
+                    }
+                    #[cfg(feature = "debug-capture")]
+                    let diagnostic_started = std::time::Instant::now();
+                    #[cfg(feature = "debug-capture")]
+                    let diagnostic_id = crate::debug_capture::record_capture_request(
+                        &first.trigger, &first.context, correlation_ids.len(), false,
+                    );
+                    let capture_started = std::time::Instant::now();
+                    let capture_context = first.context.clone();
+                    let result = coordinator.capture(first.trigger, first.context).await;
+                    if let Some(guard) = app_cadence_guard.as_mut() {
+                        guard.record_capture(&capture_context, capture_started.elapsed(), std::time::Instant::now());
+                    }
+                    #[cfg(feature = "debug-capture")]
+                    match &result {
+                        Ok(stored) => crate::debug_capture::record_capture_result(
+                            diagnostic_id, diagnostic_started, Some(stored.frame_id), None, None),
+                        Err(error) => crate::debug_capture::record_capture_result(
+                            diagnostic_id, diagnostic_started, None, Some("error"), Some(&error.to_string())),
+                    }
+                    match result {
+                        Ok(stored) => {
+                            if !correlation_ids.is_empty() { linker_tx.frame_captured(stored.frame_id, correlation_ids); }
+                            if let (Some(pool), Some(span_id)) = (&config.activity_span_pool, first.activity_span_id) {
+                                if let Err(error) = crate::activity_spans::link_activity_span_frame(pool, span_id, stored.frame_id).await {
+                                    warn!(%error, span_id, "could not link activity span to settled frame");
+                                }
+                            }
+                        }
+                        Err(error) => warn!(%error, "settled activity capture failed"),
+                    }
+                }
+            }
             _ = heartbeat.tick() => {
+                if config.settled_state {
+                    continue;
+                }
                 if !activity_since_heartbeat || capture_pause_reason().is_some() {
                     continue;
                 }
                 activity_since_heartbeat = false;
-                match coordinator
+                #[cfg(feature = "debug-capture")]
+                let diagnostic_started = std::time::Instant::now();
+                #[cfg(feature = "debug-capture")]
+                let diagnostic_id = crate::debug_capture::record_capture_request(
+                    &CaptureTrigger::Idle,
+                    &CaptureContext::default(),
+                    0,
+                    true,
+                );
+                let result = coordinator
                     .capture_accessibility_if_changed(
                         CaptureTrigger::Idle,
                         CaptureContext::default(),
                     )
-                    .await
-                {
+                    .await;
+                #[cfg(feature = "debug-capture")]
+                match &result {
+                    Ok(Some(stored)) => crate::debug_capture::record_capture_result(
+                        diagnostic_id, diagnostic_started, Some(stored.frame_id), Some("persisted"), None),
+                    Ok(None) => crate::debug_capture::record_capture_result(
+                        diagnostic_id, diagnostic_started, None, Some("unchanged"), None),
+                    Err(error) => crate::debug_capture::record_capture_result(
+                        diagnostic_id, diagnostic_started, None, Some("error"), Some(&error.to_string())),
+                }
+                match result {
                     Ok(Some(stored)) => debug!(
                         frame_id = stored.frame_id,
                         "AX heartbeat persisted changed accessibility content"
@@ -142,6 +262,25 @@ async fn run_ax_capture(
 
     if let Err(error) = coordinator.stop_visual().await {
         warn!(%error, "failed to release FullCapture visual resources during shutdown");
+    }
+}
+
+fn activity_kind_name(kind: ActivityKind) -> &'static str {
+    match kind {
+        ActivityKind::Click => "click_burst",
+        ActivityKind::AppSwitch => "app_switch_burst",
+        ActivityKind::Scroll => "scroll_burst",
+        ActivityKind::Typing => "typing_burst",
+    }
+}
+
+fn settled_activity_kind(trigger: &CaptureTrigger) -> Option<ActivityKind> {
+    match trigger {
+        CaptureTrigger::Click => Some(ActivityKind::Click),
+        CaptureTrigger::AppSwitch | CaptureTrigger::WindowFocus => Some(ActivityKind::AppSwitch),
+        CaptureTrigger::ScrollStop => Some(ActivityKind::Scroll),
+        CaptureTrigger::TypingPause | CaptureTrigger::KeyPress => Some(ActivityKind::Typing),
+        _ => None,
     }
 }
 
@@ -227,7 +366,34 @@ async fn capture_trigger_batch(
         return true;
     }
 
-    match coordinator.capture(trigger, context).await {
+    #[cfg(feature = "debug-capture")]
+    let diagnostic_started = std::time::Instant::now();
+    #[cfg(feature = "debug-capture")]
+    let diagnostic_id = crate::debug_capture::record_capture_request(
+        &trigger,
+        &context,
+        correlation_ids.len(),
+        false,
+    );
+    let result = coordinator.capture(trigger, context).await;
+    #[cfg(feature = "debug-capture")]
+    match &result {
+        Ok(stored) => crate::debug_capture::record_capture_result(
+            diagnostic_id,
+            diagnostic_started,
+            Some(stored.frame_id),
+            None,
+            None,
+        ),
+        Err(error) => crate::debug_capture::record_capture_result(
+            diagnostic_id,
+            diagnostic_started,
+            None,
+            Some("error"),
+            Some(&error.to_string()),
+        ),
+    }
+    match result {
         Ok(stored) => {
             if ordinary_trigger {
                 *last_ordinary_capture = Some(std::time::Instant::now());

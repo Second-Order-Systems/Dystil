@@ -10,6 +10,7 @@ native = [
     "dep:zbus",
     "dep:libwayshot-xcap",
 ]
+debug-capture = ["dep:sysinfo"]
 # Forward ONNX feature flags to dystil-redact
 onnx-cpu      = ["dystil-redact/onnx-cpu"]
 onnx-coreml   = ["dystil-redact/onnx-coreml"]
@@ -42,6 +43,7 @@ dirs.workspace = true
 rusqlite = { version = "0.29", features = ["bundled"] }
 zstd = "0.13"
 url.workspace = true
+sysinfo = { workspace = true, optional = true }
 
 tracing.workspace = true
 

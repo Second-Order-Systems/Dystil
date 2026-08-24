@@ -8,11 +8,15 @@ pub mod a11y;
 #[cfg(feature = "native")]
 pub mod accessibility_provider;
 #[cfg(feature = "native")]
+pub mod activity_spans;
+#[cfg(feature = "native")]
 pub mod capture_loop;
 #[cfg(feature = "native")]
 pub mod capture_store;
 mod config;
 mod coordinator;
+#[cfg(feature = "debug-capture")]
+pub mod debug_capture;
 mod error;
 #[cfg(feature = "native")]
 pub mod linker;
@@ -33,6 +37,8 @@ pub mod screen;
 #[cfg(feature = "native")]
 pub mod screen_lock;
 pub mod semantic_tree;
+#[cfg(feature = "native")]
+pub mod settled_state;
 mod trigger;
 mod trigger_bus;
 #[cfg(feature = "native")]

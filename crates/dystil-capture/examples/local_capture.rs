@@ -26,6 +26,9 @@ use sqlx::{Row, SqlitePool};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
+#[cfg(feature = "debug-capture")]
+use sysinfo::{ProcessExt, System, SystemExt};
+
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use dystil_capture::non_macos_visual_capture::DystilFullCaptureVisualProvider;
 #[cfg(target_os = "macos")]
@@ -35,6 +38,12 @@ use dystil_capture::visual_capture::DystilMacosOneShotVisualProvider;
 struct Args {
     data_dir: PathBuf,
     text_only: bool,
+    capture_scroll: bool,
+    diagnostics: bool,
+    policy: String,
+    measurement_mode: String,
+    duration_seconds: Option<u64>,
+    stop_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -66,11 +75,53 @@ fn init_logging() {
 fn parse_args() -> Result<Args> {
     let mut data_dir = None;
     let mut text_only = false;
+    let mut capture_scroll = false;
+    let mut diagnostics = false;
+    let mut policy = "baseline".to_string();
+    let mut measurement_mode = "baseline".to_string();
+    let mut duration_seconds = None;
+    let mut stop_file = None;
     let mut args = env::args_os().skip(1);
 
     while let Some(argument) = args.next() {
         match argument.to_string_lossy().as_ref() {
             "--text-only" => text_only = true,
+            "--capture-scroll" => capture_scroll = true,
+            "--diagnostics" | "--compare" => diagnostics = true,
+            "--policy" => {
+                let Some(value) = args.next() else {
+                    bail!("--policy requires a value\n\n{}", usage());
+                };
+                policy = value.to_string_lossy().into_owned();
+            }
+            "--measurement-mode" => {
+                let Some(value) = args.next() else {
+                    bail!("--measurement-mode requires a value\n\n{}", usage());
+                };
+                measurement_mode = value.to_string_lossy().into_owned();
+            }
+            "--duration-seconds" => {
+                let Some(value) = args.next() else {
+                    bail!(
+                        "--duration-seconds requires a positive integer\n\n{}",
+                        usage()
+                    );
+                };
+                let parsed = value
+                    .to_string_lossy()
+                    .parse::<u64>()
+                    .context("--duration-seconds must be a positive integer")?;
+                if parsed == 0 {
+                    bail!("--duration-seconds must be greater than zero");
+                }
+                duration_seconds = Some(parsed);
+            }
+            "--stop-file" => {
+                let Some(value) = args.next() else {
+                    bail!("--stop-file requires a path\n\n{}", usage());
+                };
+                stop_file = Some(PathBuf::from(value));
+            }
             "--data-dir" => {
                 if data_dir.is_some() {
                     bail!("--data-dir may only be supplied once\n\n{}", usage());
@@ -91,15 +142,37 @@ fn parse_args() -> Result<Args> {
         }
     }
 
+    if !matches!(
+        policy.as_str(),
+        "baseline"
+            | "stage1_no_background_trees"
+            | "stage2_click_coalesce"
+            | "stage3_settled_state"
+            | "stage4_visible_relevant"
+    ) {
+        bail!("unknown policy '{policy}'; expected baseline, stage1_no_background_trees, stage2_click_coalesce, stage3_settled_state, or stage4_visible_relevant");
+    }
+    if measurement_mode != "baseline" && measurement_mode != "matched_ab" {
+        bail!("unknown measurement mode '{measurement_mode}'; expected baseline or matched_ab");
+    }
+    if duration_seconds.is_some() && stop_file.is_some() {
+        bail!("--duration-seconds and --stop-file cannot be used together");
+    }
     Ok(Args {
         data_dir: data_dir.unwrap_or_else(default_run_directory),
         text_only,
+        capture_scroll,
+        diagnostics,
+        policy,
+        measurement_mode,
+        duration_seconds,
+        stop_file,
     })
 }
 
 fn usage() -> &'static str {
-    "Usage: cargo run -p dystil-capture --example local_capture --features native -- [--text-only] [--data-dir <path>]\n\n\
-     Starts local capture until Ctrl-C. Without --data-dir, the run is stored in a unique directory below the system temp directory."
+    "Usage: cargo run -p dystil-capture --example local_capture --features native,debug-capture -- [--text-only] [--capture-scroll] [--diagnostics|--compare] [--policy baseline|stage1_no_background_trees|stage2_click_coalesce|stage3_settled_state|stage4_visible_relevant] [--measurement-mode baseline|matched_ab] [--duration-seconds <n>|--stop-file <path>] [--data-dir <path>]\n\n\
+     Starts local capture until Ctrl-C. Without --data-dir, the run is stored in a unique directory below the system temp directory. Diagnostics are local-only and require the debug-capture feature."
 }
 
 fn default_run_directory() -> PathBuf {
@@ -129,6 +202,8 @@ async fn run(args: Args) -> Result<()> {
         "  mode: {}",
         if args.text_only { "text-only" } else { "full" }
     );
+    println!("  policy: {}", args.policy);
+    println!("  measurement: {}", args.measurement_mode);
     println!("  database: {}", database_path.display());
     println!("  snapshots: {}", snapshot_root.display());
 
@@ -137,31 +212,98 @@ async fn run(args: Args) -> Result<()> {
         .with_context(|| format!("failed to open {}", database_path.display()))?;
     let baseline = read_baseline(&pool).await?;
 
+    #[cfg(not(feature = "debug-capture"))]
+    if args.diagnostics {
+        bail!("--diagnostics requires --features native,debug-capture");
+    }
+
+    #[cfg(feature = "debug-capture")]
+    let diagnostic_session = if args.diagnostics {
+        let run_id = data_dir
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("capture-debug")
+            .to_string();
+        Some(
+            dystil_capture::debug_capture::DebugCaptureSession::start(
+                dystil_capture::debug_capture::DebugCaptureConfig {
+                    run_dir: data_dir.clone(),
+                    run_id,
+                    policy: args.policy.clone(),
+                    measurement_mode: args.measurement_mode.clone(),
+                    baseline_frame_id: baseline.frame_id,
+                    baseline_event_id: baseline.event_id,
+                },
+            )
+            .map_err(anyhow::Error::msg)?,
+        )
+    } else {
+        None
+    };
+
+    #[cfg(feature = "debug-capture")]
+    let (process_stop_tx, process_sampler) = if args.diagnostics {
+        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+        (
+            Some(stop_tx),
+            Some(tokio::spawn(sample_process_resources(
+                database_path.clone(),
+                stop_rx,
+            ))),
+        )
+    } else {
+        (None, None)
+    };
+
     let trigger_bus = TriggerBus::<CaptureTriggerMessage>::new(TRIGGER_CHANNEL_BUFFER);
     let linker = DystilLinkerRuntime::start(pool.clone());
-    let accessibility = Arc::new(DystilAccessibilityProvider::new(TreeWalkerConfig::default()));
+    let accessibility = DystilAccessibilityProvider::new(tree_walker_config(&args.policy));
+    let accessibility = if args.policy == "stage4_visible_relevant" {
+        accessibility.with_visible_relevant_projection()
+    } else {
+        accessibility
+    };
+    let accessibility = Arc::new(accessibility);
     let store = Arc::new(DystilCaptureStore::new(
         pool.clone(),
         &snapshot_root,
         "capture-debug",
         false,
     ));
-    let coordinator = Arc::new(CaptureCoordinator::new(
+    let coordinator = CaptureCoordinator::new(
         CaptureConfig { capture_mode },
         accessibility,
         visual_provider(args.text_only),
         store,
-    ));
+    );
+    let coordinator = if args.policy == "stage4_visible_relevant" {
+        coordinator.with_exact_surface_reuse()
+    } else {
+        coordinator
+    };
+    let coordinator = Arc::new(coordinator);
+    let mut capture_loop_config = DystilAxCaptureConfig::default();
+    capture_loop_config.settled_state = matches!(
+        args.policy.as_str(),
+        "stage3_settled_state" | "stage4_visible_relevant"
+    );
+    capture_loop_config.app_cadence_guard =
+        matches!(args.policy.as_str(), "stage4_visible_relevant");
+    if capture_loop_config.settled_state {
+        capture_loop_config.activity_span_pool = Some(pool.clone());
+        capture_loop_config.activity_span_session_id =
+            Some(format!("stage3-{}", uuid::Uuid::new_v4()));
+    }
     let capture_handle = DystilAxCaptureHandle::start(
         trigger_bus.subscribe(),
         linker.sender(),
         coordinator.clone(),
-        DystilAxCaptureConfig::default(),
+        capture_loop_config,
     );
 
     let ui_recorder = match start_dystil_ui_recording(
         pool.clone(),
-        ui_recorder_config(),
+        ui_recorder_config(&args.policy, args.capture_scroll),
         trigger_bus.sender(),
         linker.sender(),
     ) {
@@ -177,10 +319,23 @@ async fn run(args: Args) -> Result<()> {
 
     verify_manual_capture(&pool, &coordinator, args.text_only).await;
 
-    println!("Capture running. Press Ctrl-C to stop.");
-    tokio::signal::ctrl_c()
-        .await
-        .context("failed to wait for Ctrl-C")?;
+    if let Some(seconds) = args.duration_seconds {
+        println!("Capture running for {seconds} seconds.");
+        tokio::time::sleep(Duration::from_secs(seconds)).await;
+    } else if let Some(stop_file) = args.stop_file {
+        println!(
+            "Capture running until stop file exists: {}",
+            stop_file.display()
+        );
+        while !stop_file.is_file() {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    } else {
+        println!("Capture running. Press Ctrl-C to stop.");
+        tokio::signal::ctrl_c()
+            .await
+            .context("failed to wait for Ctrl-C")?;
+    }
 
     if let Some(handle) = ui_recorder {
         handle.stop();
@@ -193,11 +348,75 @@ async fn run(args: Args) -> Result<()> {
     }
     capture_handle.shutdown().await;
     linker.shutdown().await;
+    #[cfg(feature = "debug-capture")]
+    {
+        if let Some(stop_tx) = process_stop_tx {
+            let _ = stop_tx.send(true);
+        }
+        if let Some(task) = process_sampler {
+            let _ = task.await;
+        }
+    }
     print_run_summary(&pool, baseline).await?;
     pool.close().await;
     println!("  database retained at: {}", database_path.display());
     println!("  snapshots retained at: {}", snapshot_root.display());
+    #[cfg(feature = "debug-capture")]
+    if diagnostic_session.is_some() {
+        println!("  diagnostics retained at: {}", data_dir.display());
+        drop(diagnostic_session);
+    }
     Ok(())
+}
+
+#[cfg(feature = "debug-capture")]
+async fn sample_process_resources(
+    database_path: PathBuf,
+    mut stop_rx: tokio::sync::watch::Receiver<bool>,
+) {
+    let Some(pid) = sysinfo::get_current_pid().ok() else {
+        return;
+    };
+    let mut system = System::new();
+    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            changed = stop_rx.changed() => {
+                if changed.is_err() || *stop_rx.borrow() {
+                    break;
+                }
+            }
+            _ = tick.tick() => {
+                system.refresh_process(pid);
+                if let Some(process) = system.process(pid) {
+                    dystil_capture::debug_capture::record_process_sample(
+                        process.cpu_usage(),
+                        process.memory(),
+                        sqlite_bytes(&database_path),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "debug-capture")]
+fn sqlite_bytes(database_path: &Path) -> u64 {
+    let mut total = database_path
+        .metadata()
+        .map(|value| value.len())
+        .unwrap_or(0);
+    let path = database_path.to_string_lossy();
+    for suffix in ["-wal", "-shm"] {
+        total = total.saturating_add(
+            PathBuf::from(format!("{path}{suffix}"))
+                .metadata()
+                .map(|value| value.len())
+                .unwrap_or(0),
+        );
+    }
+    total
 }
 
 fn visual_provider(text_only: bool) -> Option<Arc<dyn VisualProvider>> {
@@ -220,10 +439,10 @@ fn visual_provider(text_only: bool) -> Option<Arc<dyn VisualProvider>> {
     }
 }
 
-fn ui_recorder_config() -> DystilUiRecorderConfig {
+fn ui_recorder_config(policy: &str, capture_scroll: bool) -> DystilUiRecorderConfig {
     DystilUiRecorderConfig {
         capture_clicks: true,
-        capture_scroll: false,
+        capture_scroll,
         capture_clipboard: true,
         capture_clipboard_content: false,
         capture_text: false,
@@ -238,7 +457,35 @@ fn ui_recorder_config() -> DystilUiRecorderConfig {
         prioritize_input_latency: false,
         extraction_thread_priority: ExtractionThreadPriority::default(),
         pause_extraction_on_input_ms: 0,
+        merge_click_enrichment: matches!(
+            policy,
+            "stage2_click_coalesce" | "stage3_settled_state" | "stage4_visible_relevant"
+        ),
+        settled_state_scheduler: matches!(
+            policy,
+            "stage3_settled_state" | "stage4_visible_relevant"
+        ),
+        scroll_stop_delay_ms: if matches!(
+            policy,
+            "stage3_settled_state" | "stage4_visible_relevant"
+        ) {
+            // The Stage 3 scheduler owns the full 2.5-second quiet period.
+            // Emit the recorder's aggregate promptly so it is not added twice.
+            0
+        } else {
+            300
+        },
+        capture_background_trees: policy == "baseline",
+        precise_click_window_context: policy == "stage4_visible_relevant",
     }
+}
+
+fn tree_walker_config(policy: &str) -> TreeWalkerConfig {
+    let mut config = TreeWalkerConfig::default();
+    if policy == "stage4_visible_relevant" {
+        config.prefer_incremental_chromium_walk = true;
+    }
+    config
 }
 
 async fn verify_manual_capture(
@@ -247,10 +494,36 @@ async fn verify_manual_capture(
     text_only: bool,
 ) {
     println!("Manual capture:");
-    let stored = match coordinator
+    #[cfg(feature = "debug-capture")]
+    let diagnostic_started = std::time::Instant::now();
+    #[cfg(feature = "debug-capture")]
+    let diagnostic_id = dystil_capture::debug_capture::record_capture_request(
+        &CaptureTrigger::Manual,
+        &CaptureContext::default(),
+        0,
+        false,
+    );
+    let result = coordinator
         .capture(CaptureTrigger::Manual, CaptureContext::default())
-        .await
-    {
+        .await;
+    #[cfg(feature = "debug-capture")]
+    match &result {
+        Ok(stored) => dystil_capture::debug_capture::record_capture_result(
+            diagnostic_id,
+            diagnostic_started,
+            Some(stored.frame_id),
+            None,
+            None,
+        ),
+        Err(error) => dystil_capture::debug_capture::record_capture_result(
+            diagnostic_id,
+            diagnostic_started,
+            None,
+            Some("error"),
+            Some(&error.to_string()),
+        ),
+    }
+    let stored = match result {
         Ok(stored) => stored,
         Err(error) => {
             println!("  result: failed ({error})");
