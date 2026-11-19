@@ -170,7 +170,7 @@ For an Ask-for-Fix origin, resolve the session through
 
 Citations for the existing Ask provenance path:
 `crates/dystil-insights/src/store.rs` — `ask_sessions.artifact_kept_id`, and
-`crates/dystil-insights/src/ask_for_fix.rs :: keep_ask_artifact()`.
+`crates/dystil-insights/src/ask_for_fix.rs :: keep_ask_for_fix_artifact()`.
 
 If neither origin provides evidence anchors, reconstruction still runs using the
 approved intent as its initial search query. It must report only what retrieval
