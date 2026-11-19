@@ -28,7 +28,7 @@ REPO = Path(__file__).resolve().parent.parent
 DOCS = REPO / "agent_docs"
 
 SKIP_DIRS = {"target", "node_modules", ".git", "out", "dist", ".next"}
-CODE_EXT = {".rs", ".ts", ".tsx", ".js", ".jsx", ".toml", ".json", ".yml", ".yaml", ".sh", ".md"}
+CODE_EXT = {".rs", ".ts", ".tsx", ".js", ".jsx", ".toml", ".json", ".yml", ".yaml", ".sh", ".md",".css"}
 
 # `foo.rs :: symbol` or `path/foo.rs :: symbol`
 CITE_SYMBOL = re.compile(r"`([\w./-]+\.\w+)\s*::\s*([\w:<>]+)\(?\)?`")
@@ -99,7 +99,8 @@ def main() -> int:
             if not matches:
                 failures.append(f"{rel}: no such file `{ref}` (cited with :: {symbol})")
                 continue
-            if not any(symbol in m.read_text(encoding="utf-8", errors="ignore") for m in matches):
+            needle = symbol.split("::")[-1]
+            if not any(needle in m.read_text(encoding="utf-8", errors="ignore") for m in matches):
                 where = matches[0].relative_to(REPO) if len(matches) == 1 else f"{len(matches)} candidates"
                 failures.append(f"{rel}: `{symbol}` not found in {where} — code moved or was renamed")
 
