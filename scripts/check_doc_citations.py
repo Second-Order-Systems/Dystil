@@ -55,7 +55,7 @@ def resolve(ref: str, by_name: dict[str, list[Path]]) -> list[Path]:
         return [direct]
     # try suffix match on repo-relative paths, else basename
     if "/" in ref:
-        return [p for p in by_name.get(Path(ref).name, []) if str(p).endswith(ref)]
+        return [p for p in by_name.get(Path(ref).name, []) if p.as_posix().endswith(ref)]
     return by_name.get(ref, [])
 
 
